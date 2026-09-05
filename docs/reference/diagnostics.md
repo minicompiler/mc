@@ -507,6 +507,7 @@ environment is not ready" -- a transfer that failed, a checksum that did not mat
 | `mc: no such package in the registry: geo` | 1 | a DIRECTORY registry with no `index/geo.toml` | the name, or the registry |
 | `mc: mathx: 1.0.0 and 2.0.0: different majors: no solver` | 1 | two requirements of one name whose majors differ. No lock is written | drop one of them, or wait for the dependency to move |
 | `mc: mathx 2.0.1: is yanked: pick another version` | 1 | `mc pkg add name@version` named a row the registry retracted | pick another version; without `@` the newest non-yanked one is chosen for you |
+| `mc: mathx: only pre-release versions are registered: name one, NAME@VERSION` | 1 | `mc pkg add NAME` or `mc update` with nothing but pre-release rows to choose from | `mc pkg add mathx@2.1.0-rc1`: a candidate is never chosen for you ([packages.md](packages.md#versions-and-pre-releases)) |
 | `mc: geo: not a dependency of this project` | 1 | `mc update NAME` for a name that is not in `[deps]` | `mc pkg add` it first |
 | `mc: mc pkg add cannot edit this file: [deps] is written more than once` | 1 | the scan that inserts one key found a shape it will not rewrite | edit `[deps]` by hand |
 | `mc: geo 1.2.0: the archive's mc.toml names another package` | 1 | `mc pkg check`: the row and the tree disagree about the name | the index row, or the tag |

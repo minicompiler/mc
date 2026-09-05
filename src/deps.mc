@@ -84,9 +84,25 @@ void dep_check_name(uptr section, uptr name) {
 }
 
 // ---- semver (§ 3) ----
-// X.Y.Z, and a `-suffix` is ignored for ordering -- `0.0.0-dev` compares as
-// 0.0.0, so every release is newer than a dev build (C4). Same arithmetic as
-// scripts/next-version.sh --gt.
+// X.Y.Z, and -- since the ops patch of 0.15.1 -- the OPTIONAL pre-release
+// suffix SemVer 2.0 § 9 and § 11 describe. The rule, in full:
+//
+//   * the three numeric fields decide first, as they always did;
+//   * a version WITH a pre-release suffix is LOWER than the same X.Y.Z without
+//     one -- `1.2.0-rc1 < 1.2.0`, which is what makes a release candidate a
+//     candidate and not a release;
+//   * two suffixes compare identifier by identifier, dot separated: an
+//     all-digit identifier ranks below an alphanumeric one and compares by
+//     value, anything else compares byte for byte, and when everything so far
+//     is equal the shorter list is the lower one (`1.0.0-rc < 1.0.0-rc.1`);
+//   * `+build` metadata is ignored, as the specification requires.
+//
+// C4 survives and is sharper than before: `0.0.0-dev`, what scripts/set-version.sh
+// writes into an unreleased tree, used to compare EQUAL to 0.0.0 and merely
+// below 0.0.1; it now compares below 0.0.0 as well, so every release is newer
+// than a dev build for the same reason SemVer says so.
+// scripts/next-version.sh --gt still compares the numeric core only: it is fed
+// git tags, which are releases.
 i64 ver_field(uptr s, uptr pi) {
     i64 i = ld64(pi);
     i64 v = 0;
@@ -101,6 +117,109 @@ i64 ver_field(uptr s, uptr pi) {
     return v;
 }
 
+// The pre-release of a version: the bytes after the first `-`, or 0 when there
+// is none. A `+` before any `-` means the version carries build metadata and no
+// pre-release (`1.2.0+abc-1` is a build, not a candidate).
+uptr ver_pre(uptr s) {
+    i64 i = 0;
+    loop {
+        i64 c = ld8(s + i);
+        if (c == 0 || c == '+') return 0;
+        if (c == '-') return s + i + 1;
+        i = i + 1;
+    }
+}
+
+// its length: up to the `+` that opens build metadata, or to the end
+i64 ver_pre_len(uptr p) {
+    i64 i = 0;
+    loop {
+        i64 c = ld8(p + i);
+        if (c == 0 || c == '+') break;
+        i = i + 1;
+    }
+    return i;
+}
+
+// 1 when this version is a pre-release. This is the whole gate `mc pkg add` and
+// `mc update` consult (src/pkg.mc, pkg_newest): a candidate is never chosen for
+// you, only asked for by name.
+i64 ver_is_pre(uptr s) { return ver_pre(s) != 0; }
+
+// one dot-separated identifier of a suffix, bounded by n
+i64 ver_id_len(uptr p, i64 n) {
+    i64 i = 0;
+    while (i < n) {
+        if (ld8(p + i) == '.') break;
+        i = i + 1;
+    }
+    return i;
+}
+
+// 1 when every byte of the identifier is a digit (an empty one is not)
+i64 ver_id_num(uptr p, i64 n) {
+    if (n == 0) return 0;
+    i64 i = 0;
+    while (i < n) {
+        i64 c = ld8(p + i);
+        if (c < '0' || c > '9') return 0;
+        i = i + 1;
+    }
+    return 1;
+}
+
+i64 ver_id_cmp(uptr a, i64 na, uptr b, i64 nb) {
+    i64 da = ver_id_num(a, na);
+    i64 db = ver_id_num(b, nb);
+    if (da && !db) return -1;             // numeric ranks below alphanumeric
+    if (!da && db) return 1;
+    uptr pa = a;
+    uptr pb = b;
+    i64 la = na;
+    i64 lb = nb;
+    if (da && db) {                       // by value: SemVer forbids leading
+        while (la > 1 && ld8(pa) == '0') {  // zeros, so strip them and compare
+            pa = pa + 1;                    // length first, then bytes
+            la = la - 1;
+        }
+        while (lb > 1 && ld8(pb) == '0') {
+            pb = pb + 1;
+            lb = lb - 1;
+        }
+        if (la < lb) return -1;
+        if (la > lb) return 1;
+    }
+    i64 n = la;
+    if (lb < n) n = lb;
+    i64 i = 0;
+    while (i < n) {
+        i64 x = ld8(pa + i);
+        i64 y = ld8(pb + i);
+        if (x < y) return -1;
+        if (x > y) return 1;
+        i = i + 1;
+    }
+    if (la < lb) return -1;               // a prefix is lower than what extends it
+    if (la > lb) return 1;
+    return 0;
+}
+
+i64 ver_pre_cmp(uptr a, i64 na, uptr b, i64 nb) {
+    i64 ia = 0;
+    i64 ib = 0;
+    loop {
+        if (ia >= na && ib >= nb) return 0;
+        if (ia >= na) return -1;          // fewer identifiers is lower
+        if (ib >= nb) return 1;
+        i64 la = ver_id_len(a + ia, na - ia);
+        i64 lb = ver_id_len(b + ib, nb - ib);
+        i64 c = ver_id_cmp(a + ia, la, b + ib, lb);
+        if (c != 0) return c;
+        ia = ia + la + 1;
+        ib = ib + lb + 1;
+    }
+}
+
 i64 ver_cmp(uptr a, uptr b) {
     i64 ia = 0;
     i64 ib = 0;
@@ -112,7 +231,12 @@ i64 ver_cmp(uptr a, uptr b) {
         if (x > y) return 1;
         k = k + 1;
     }
-    return 0;
+    uptr pa = ver_pre(a);
+    uptr pb = ver_pre(b);
+    if (pa == 0 && pb == 0) return 0;
+    if (pa == 0) return 1;                // a release outranks its candidates
+    if (pb == 0) return -1;
+    return ver_pre_cmp(pa, ver_pre_len(pa), pb, ver_pre_len(pb));
 }
 
 i64 ver_major(uptr a) {

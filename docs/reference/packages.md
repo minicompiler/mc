@@ -370,6 +370,47 @@ already pins one keeps working — a published build never breaks retroactively.
 stays inside the current major: raising a minimum across a major is not an update, it is the case
 above.
 
+### Versions, and pre-releases
+
+A version is `X.Y.Z` with the optional `-pre.release` and `+build` parts of
+[SemVer 2.0](https://semver.org). Comparison is the specification's, § 11:
+
+1. the three numeric fields decide first, each compared as a number;
+2. a version **with** a pre-release suffix is **lower** than the same `X.Y.Z` without one, so
+   `1.2.0-rc1 < 1.2.0`;
+3. two suffixes compare identifier by identifier, `.` separated: an all-digit identifier ranks
+   below an alphanumeric one and compares by value, anything else compares byte for byte, and
+   when everything so far is equal the shorter list is the lower one;
+4. `+build` metadata is ignored.
+
+So the specification's own chain holds:
+
+```text
+1.0.0-alpha < 1.0.0-alpha.1 < 1.0.0-alpha.beta < 1.0.0-beta < 1.0.0-beta.2
+            < 1.0.0-beta.11 < 1.0.0-rc.1 < 1.0.0
+```
+
+**A pre-release is never chosen for you.** `mc pkg add NAME` with no `@` and `mc update` skip
+every pre-release row, exactly as `go get` does; a candidate enters a project in one of two ways
+only:
+
+* `mc pkg add NAME@1.2.0-rc1` — asked for by name;
+* `mc update NAME` when the minimum already written in `[deps]` is itself a pre-release, which is
+  the reader saying they are on that train. Even then a released version wins whenever there is
+  one, because `2.1.0-rc1 < 2.1.0`.
+
+Minimal version selection never picks "newest" at all, so it can only reach a candidate that some
+`[deps]` or index row names outright.
+
+A registry that has published nothing but candidates says so instead of guessing:
+
+```text
+mc: only pre-release versions are registered: name one, NAME@VERSION: mathx
+```
+
+`mc.lock`, `<libs>/<pack>/v<version>/` and the index carry the suffix **verbatim** — `v2.1.0-rc1/`
+is a directory name like any other.
+
 ### The fetch
 
 In `mc sysroot fetch`'s order of operations, and for the same reasons:

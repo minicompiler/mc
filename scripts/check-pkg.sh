@@ -426,6 +426,8 @@ index_row mathx 1.0.0 tests/pkg/src/mathx-1.0.0 ""
 index_row mathx 1.1.0 tests/pkg/src/mathx-1.1.0 ""
 index_row mathx 2.0.0 tests/pkg/src/mathx-2.0.0 ""
 index_row mathx 2.0.1 tests/pkg/src/mathx-2.0.1 "" yanked
+index_row mathx 2.1.0-rc1 tests/pkg/src/mathx-2.1.0-rc1 ""
+index_row mathx 2.1.0 tests/pkg/src/mathx-2.1.0 ""
 index_open plot
 index_row plot 1.0.0 tests/pkg/src/plot-1.0.0 '"mathx 1.1.0"'
 index_open heavy
@@ -629,13 +631,69 @@ pkg add mathx tests/pkg/add --config tests/pkg/add/add.toml \
         --registry "$reg" --libs-dir "$tmp/c1" --yes
 if [ "$rc" != 0 ]; then
     fail "pkg add, no version" "exit $rc: $(cat "$tmp/o")"
-elif ! grep -q 'mathx = "2.0.0"' tests/pkg/add/add.toml; then
+elif ! grep -q 'mathx = "2.1.0"' tests/pkg/add/add.toml; then
     fail "pkg add, no version" "$(grep mathx tests/pkg/add/add.toml)"
 else
-    ok "mc pkg add mathx: the newest NON-YANKED row, 2.0.0, never the yanked 2.0.1"
+    ok "mc pkg add mathx: the newest RELEASED non-yanked row, 2.1.0 -- never the yanked 2.0.1, never the candidate 2.1.0-rc1"
 fi
 cp "$tmp/out/add.toml.orig" tests/pkg/add/add.toml
 rm -f tests/pkg/add/mc.lock
+
+# ---- 25b. pre-releases order below their release and are never chosen ------
+# SemVer 2.0 § 11 in the registry: mathx 2.1.0-rc1 sits between the yanked 2.0.1
+# and 2.1.0. Four things follow, and each of them is a different half of the rule.
+pkg add mathx@2.1.0-rc1 tests/pkg/add --config tests/pkg/add/add.toml \
+        --registry "$reg" --libs-dir "$tmp/c1" --yes
+if [ "$rc" != 0 ]; then
+    fail "pkg add @rc" "exit $rc: $(cat "$tmp/o")"
+elif ! grep -q 'mathx = "2.1.0-rc1"' tests/pkg/add/add.toml; then
+    fail "pkg add @rc" "$(grep mathx tests/pkg/add/add.toml)"
+elif ! grep -q '^version = "2.1.0-rc1"$' tests/pkg/add/mc.lock; then
+    fail "pkg add @rc" "the lock does not carry the suffix: $(cat tests/pkg/add/mc.lock)"
+else
+    ok "mc pkg add mathx@2.1.0-rc1: asked for by name, and mc.lock carries the suffix verbatim"
+fi
+pkg list tests/pkg/add --config tests/pkg/add/add.toml --libs-dir "$tmp/c1"
+if [ "$rc" = 0 ] && grep -q '^mathx *2.1.0-rc1' "$tmp/o"; then
+    ok "mc pkg list: $(grep mathx "$tmp/o")"
+else
+    fail "pkg list @rc" "exit $rc: $(cat "$tmp/o")"
+fi
+upd mathx tests/pkg/add --config tests/pkg/add/add.toml \
+        --registry "$reg" --libs-dir "$tmp/c1" --yes
+if [ "$rc" != 0 ]; then
+    fail "update off a candidate" "exit $rc: $(cat "$tmp/o")"
+elif ! grep -q 'mathx = "2.1.0"' tests/pkg/add/add.toml; then
+    fail "update off a candidate" "$(grep mathx tests/pkg/add/add.toml)"
+else
+    ok "mc update from 2.1.0-rc1: raised to 2.1.0 -- the release outranks the candidate"
+fi
+cp "$tmp/out/add.toml.orig" tests/pkg/add/add.toml
+rm -f tests/pkg/add/mc.lock
+
+pkg add mathx@2.0.0 tests/pkg/add --config tests/pkg/add/add.toml \
+        --registry "$reg" --libs-dir "$tmp/c1" --yes
+if [ "$rc" != 0 ]; then
+    fail "sync at a released minimum" "exit $rc: $(cat "$tmp/o")"
+elif ! grep -q '^version = "2.0.0"$' tests/pkg/add/mc.lock; then
+    fail "sync at a released minimum" "$(cat tests/pkg/add/mc.lock)"
+elif grep -q 'rc1' tests/pkg/add/mc.lock; then
+    fail "sync at a released minimum" "the candidate reached the lock"
+else
+    ok "sync with the minimum 2.0.0: MVS locks 2.0.0, never the newer 2.1.0-rc1"
+fi
+upd mathx tests/pkg/add --config tests/pkg/add/add.toml \
+        --registry "$reg" --libs-dir "$tmp/c1" --yes
+if [ "$rc" != 0 ]; then
+    fail "update past a candidate" "exit $rc: $(cat "$tmp/o")"
+elif ! grep -q 'mathx = "2.1.0"' tests/pkg/add/add.toml; then
+    fail "update past a candidate" "$(grep mathx tests/pkg/add/add.toml)"
+else
+    ok "mc update from 2.0.0: 2.1.0, stepping OVER 2.1.0-rc1"
+fi
+cp "$tmp/out/add.toml.orig" tests/pkg/add/add.toml
+rm -f tests/pkg/add/mc.lock
+rm -rf tests/pkg/add/deps
 
 # ---- 26. `mc update` raises a minimum, inside its own major ----
 pkg sync tests/pkg/sync --registry "$reg" --libs-dir "$tmp/c1" --yes
