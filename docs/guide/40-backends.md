@@ -99,7 +99,7 @@ L1:
   ret
 ```
 
-This is exactly how `<sys_svc>` and `<sys_linux>` are written.
+This is exactly how `<sys_svc>` and `<sys_linux_aarch64>` are written.
 
 ## `emit()` and `reloc()` — what `#opcode` cannot reach
 

@@ -132,7 +132,7 @@ mc.toml:9:8: link must be dynamic or static: target.link
 ```
 
 `link = "static"` is an **assertion**, not a switch. The executable writer takes the static path by
-counting imports — a program on `<sys_linux>` imports nothing and gets an image with no
+counting imports — a program on `<sys_linux_aarch64>` imports nothing and gets an image with no
 `PT_INTERP`, no `PT_DYNAMIC` and no PLT — and the key makes that a requirement: with an import in
 the set the build stops rather than quietly producing a dynamic binary.
 

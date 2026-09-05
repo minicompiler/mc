@@ -551,7 +551,8 @@ i64 main(i64 argc, uptr argv) {
 
 There is no runtime and no `libc` unless you include one: `<sys>` declares libSystem's
 `open/creat/read/write/close/exit` and adds `strlen`/`puts`/`putnum` written in the language;
-`<sys_svc>` is the same interface through `svc #0x80` with no libSystem at all; `<sys_linux>` is
+`<sys_svc>` is the same interface through `svc #0x80` with no libSystem at all;
+`<sys_linux_aarch64>` / `<sys_linux_x86_64>` are
 the Linux syscall layer plus a `_start`. See [bundle.md](bundle.md).
 
 Memory is a global array plus a bump pointer — that is what `src/arena.mc` is. There is no

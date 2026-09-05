@@ -52,7 +52,9 @@ accepts.
 |---|---|---|
 | `<sys>` | `lib/sys.mc` | `open creat read write close exit` as libSystem `extern`s, plus `mmap`/`munmap`, `posix_spawnp`/`waitpid`/`_NSGetEnviron`, plus `<io>` |
 | `<sys_svc>` | `lib/sys_svc.mc` | the same five calls through `#opcode svc #0x80`, with **no libSystem at all**, plus `<io>` |
-| `<sys_linux>` | `lib/sys_linux.mc` | the Linux syscall layer (`svc #0`, number in `x8`) and a `_start`, for `-nostdlib` |
+| `<sys_linux>` | `lib/sys_linux.mc` | the operating-system half of the Linux layer: the four `O_*` flags, no code |
+| `<sys_linux_aarch64>` | `lib/sys_linux_aarch64.mc` | the Linux syscall layer on AArch64 (`svc #0`, number in `x8`) and a `_start`, for `-nostdlib` |
+| `<sys_linux_x86_64>` | `lib/sys_linux_x86_64.mc` | the same seven calls on x86-64 (`syscall`, number in `rax`) and a `_start` |
 | `<sys_windows>` | `lib/sys_windows.mc` | the Windows layer: the same five calls over seven kernel32 `extern`s, plus `win_setup`/`win_argv`, for `/nodefaultlib`. It is the one layer that does **not** pull in `<io>` — add `#include <io>` after it (see [../build.md](../build.md) § Windows targets) |
 | `<sys_windows_start>` | `lib/sys_windows_start.mc` | the Windows entry point, `mc_start`, on its own: it is compiled alone into `winstart.obj` and linked next to every Windows program, never included. It is where `main` is named as an `extern`, which is why it cannot live in the layer a program includes |
 | `<sys_windows_host>` | `lib/sys_windows_host.mc` | `<sys_windows>` **plus** the nine POSIX names only a compiler needs — `_exit`, `chmod`, `mkdir`, `unlink`, `mmap`, `posix_spawnp`, `waitpid` and the three `posix_spawn_file_actions_*` — over kernel32. It is compiled alone into `mcrt.obj` and linked next to a Windows-hosted `mc` (M38, [../guide/95-windows-host.md](../guide/95-windows-host.md) § 3); a program may include it to spawn a process |

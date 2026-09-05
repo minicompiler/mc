@@ -47,7 +47,7 @@ The seed has to be a compiler *for this host*, not merely one that runs here —
 $ mc --host
 os linux
 arch aarch64
-sys sys_linux
+sys sys_linux_aarch64
 ```
 
 and refuses anything whose answer is not `linux/<this machine>`.
@@ -73,7 +73,7 @@ The two Linux files are three lines each; the operating-system half they share i
 | `host_os()` | `"macos"` | `"linux"` |
 | `host_arch()` | `"aarch64"` | `"aarch64"` / `"x86_64"` |
 | `host_machine()` | `"arm64"` | `"arm64"` / `"x86_64"` |
-| `host_sys()` | `"sys"` | `"sys_linux"` |
+| `host_sys()` | `"sys"` | `"sys_linux_aarch64"` / `"sys_linux_x86_64"` |
 | `host_include()` | `"mc/host_macos"` | `"mc/host_linux_aarch64"` / `…_x86_64` |
 | `host_environ()` | `ld64(_NSGetEnviron())` | the `envp` `main` was called with |
 | `host_has_sdk()` | 1 (`xcrun` exists) | 0 |
@@ -216,7 +216,7 @@ object then travels to a Linux machine, which links it with its own musl:
 MC_SYSROOT=/usr/lib/aarch64-linux-musl \
     scripts/link-linux.sh build/mc-linux-arm64 build/mc-linux-arm64.o
 chmod 755 build/mc-linux-arm64
-build/mc-linux-arm64 --host          # os linux / arch aarch64 / sys sys_linux
+build/mc-linux-arm64 --host          # os linux / arch aarch64 / sys sys_linux_aarch64
 ```
 
 With the four files already in `MC_SYSROOT`, `scripts/link-linux.sh` runs `ld.lld` and nothing

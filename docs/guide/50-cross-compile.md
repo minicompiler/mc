@@ -70,7 +70,8 @@ to name its libc:
 $ mc --exe --libc=gnu hello.mc -o hello
 ```
 
-A program that imports nothing — anything on `<sys_linux>`, which is raw `svc #0` syscalls —
+A program that imports nothing — anything on `<sys_linux_aarch64>` or `<sys_linux_x86_64>`, which
+are raw system calls —
 comes out **static**, with no `PT_INTERP` and no `PT_DYNAMIC` at all. That is not a switch: the
 writer counts imports. `link = "static"` does not create that case, it *requires* it — a program
 that does import anything is refused (`static link with imports needs [linker]: see
@@ -81,7 +82,7 @@ The object backend is also reachable from the single-file CLI, which is useful w
 to look at what came out:
 
 ```mc backend=elf-obj
-#include <sys_linux>
+#include <sys_linux_aarch64>
 
 i64 main() {
     write(1, "hello\n", 6);
@@ -140,14 +141,14 @@ What does **not** port is anything that writes instructions by hand — `#opcode
 29/29 tests passed on linux/x86_64
 skipped (not portable to this target):
   031-opcode — the #opcode templates are AArch64 words (movz/add); the x86-64 machine emits its own instruction set
-  032-svc — lib/sys_svc.mc has the Darwin syscall numbers in x16 and svc #0x80; the Linux equivalent is lib/sys_linux.mc
+  032-svc — lib/sys_svc.mc has the Darwin syscall numbers in x16 and svc #0x80; the Linux equivalent is lib/sys_linux_aarch64.mc
   033-reloc — the raw word is an AArch64 `bl` and BRANCH26 is a Mach-O/AArch64 relocation; x86-64 calls are R_X86_64_PLT32
-  070-nolibc — lib/sys_linux.mc encodes the syscalls and _start as AArch64 `svc #0` words; the x86-64 equivalent would be `syscall`
 ```
 
-`<sys_linux>` is in that list: its syscalls are AArch64 `svc #0` words, so an x86-64 Linux program
-links against musl (`<sys>`) rather than going libc-free. To look at what the x86-64 machine
-selects without producing a file:
+The three that are skipped are the three that write instructions by hand. The system layer used to
+be a fourth — `<sys_linux>` was AArch64 `svc #0` words and nothing else — and since 0.15.1 it is
+two layers, `<sys_linux_aarch64>` and `<sys_linux_x86_64>`, so `070-nolibc` runs on both legs. To
+look at what the x86-64 machine selects without producing a file:
 
 ```
 $ mc --dump-asm --machine=x86_64 hello.mc | head
@@ -280,9 +281,12 @@ frameworks, symbols from third-party objects `mc` never saw — is listed in
 
 ## No libc at all
 
-`<sys_linux>` is `<sys_svc>`'s Linux sibling: `open`/`creat`/`read`/`write`/`close`/`fchmod`/
-`exit` as raw `svc #0` with the call number in `x8` (openat 56, close 57, read 63, write 64,
-fchmod 52, exit_group 94; `AT_FDCWD` is `-100`, written as `movn x0, #99`). It also supplies
+`<sys_svc>`'s Linux sibling, one layer per architecture: `<sys_linux_aarch64>` is
+`open`/`creat`/`read`/`write`/`close`/`fchmod`/`exit` as raw `svc #0` with the call number in `x8`
+(openat 56, close 57, read 63, write 64, fchmod 52, exit_group 94; `AT_FDCWD` is `-100`, written
+as `movn x0, #99`), and `<sys_linux_x86_64>` is the same seven over `syscall` with the number in
+`rax` (read 0, write 1, open 2, close 3, creat 85, fchmod 91, exit_group 231). `<sys_linux>`
+itself is the operating-system half both include and carries no code at all. Each layer supplies
 `_start`, which reads `argc`/`argv` off the entry stack, calls `main` and exits — so the link
 needs no crt objects and no libc:
 
@@ -448,7 +452,7 @@ source by a relative path.
 ```
 32/32 tests passed on linux/arm64
 skipped (macOS only):
-  032-svc — lib/sys_svc.mc has the Darwin syscall numbers in x16 and svc #0x80; the Linux equivalent is lib/sys_linux.mc
+  032-svc — lib/sys_svc.mc has the Darwin syscall numbers in x16 and svc #0x80; the Linux equivalent is lib/sys_linux_aarch64.mc
 ```
 
 Exactly one test carries a `// skip-linux:` header. Everything else is portable as written,
@@ -462,7 +466,7 @@ not running, it prints `test-linux: SKIPPED (...)` and the build stays green.
 ## Portability checklist for your own code
 
 - **Pick the system layer per target.** `<sys>` (libSystem) and `<sys_svc>` (Darwin syscalls) are
-  macOS; `<sys_linux>` is Linux; `<sys_windows>` is Windows. `<io>`'s `strlen`/`puts`/`putnum` are
+  macOS; `<sys_linux_aarch64>` and `<sys_linux_x86_64>` are Linux; `<sys_windows>` is Windows. `<io>`'s `strlen`/`puts`/`putnum` are
   written in the language and work on all three — but `<sys_windows>` is the one that does not
   include them for you.
 - **`#opcode` is architecture-specific by nature.** A source full of hand-encoded AArch64 words is
@@ -476,9 +480,14 @@ not running, it prints `test-linux: SKIPPED (...)` and the build stays green.
   [../core-language.md](../core-language.md) § "Division by zero, and `INT64_MIN / -1`".
 - **`#dylib` is a Mach-O mechanism.** On Linux and Windows, name libraries in `[linker].args`
   instead.
-- **Syscall numbers differ**, which is the entire reason `<sys_svc>`, `<sys_linux>` and
-  `<sys_windows>` are three files rather than one with an `#ifdef` — there is no `#ifdef`, and
-  there is not going to be one. Windows does not even have numbers: its boundary is a DLL.
+- **Syscall numbers differ**, which is the entire reason `<sys_svc>`, `<sys_linux_aarch64>`,
+  `<sys_linux_x86_64>` and `<sys_windows>` are four files rather than one with an `#ifdef` — there
+  is no `#ifdef`, and there is not going to be one. They differ by ARCHITECTURE too, not only by
+  operating system: `write` is 64 on Linux/AArch64 and 1 on Linux/x86-64, which is why the Linux
+  layer itself is split. Windows does not even have numbers: its boundary is a DLL.
+- **Pick the Linux layer from outside the source.** The lexer cannot switch on an architecture, so
+  a program that builds for both puts `#include "sys_arch.mc"` in the source and lets
+  `[include].paths` name `lib/linux/aarch64` or `lib/linux/x86_64`.
 
 ## Next
 

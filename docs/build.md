@@ -466,7 +466,7 @@ prog.mc:1: unknown bundled include: no/such/module
 
 | names | files |
 |---|---|
-| `sys`, `sys_svc`, `sys_linux`, `io`, `prelude`, `lz`, `backend_arm64`, `pass_demo`, `user_default`, … | every `lib/*.mc`, plus `src/lz.mc` (a library, not only a compiler module) |
+| `sys`, `sys_svc`, `sys_linux`, `sys_linux_aarch64`, `sys_linux_x86_64`, `io`, `prelude`, `lz`, `backend_arm64`, `pass_demo`, `user_default`, … | every `lib/*.mc`, plus `src/lz.mc` (a library, not only a compiler module) |
 | `mc/core`, `mc/arena`, `mc/lex`, `mc/parse`, `mc/gen_resolve`, `mc/gen_walk`, `mc/machine_arm64`, `mc/backend_exe`, `mc/backend_elf`, `mc/backend_elf_exe`, … | every module `src/core.mc` includes |
 
 Everything a taught compiler needs is there, which is what makes `<mc/core>` complete.
@@ -747,7 +747,7 @@ The six cells, and the road to each:
 |---|---|---|
 | `libc = "gnu"` | **`mc --exe` / `mc build`.** `PT_INTERP` `/lib/ld-linux-<arch>.so.1`, `DT_NEEDED` `libc.so.6` | **`[linker]` only.** Without one: `static link with imports needs [linker]: see docs/build.md -- static linking (M46)`, exit 1 |
 | `libc = "musl"` | **`mc --exe` / `mc build`.** `PT_INTERP` `/lib/ld-musl-<arch>.so.1`, `DT_NEEDED` `libc.so` | **`[linker]` only**, against the `libc.a` of a sysroot — same message without one |
-| no libc (the program imports nothing: `<sys_linux>`, raw `svc`) | **`mc --exe`**, and there is nothing dynamic about it: no `PT_INTERP`, no `PT_DYNAMIC`, no PLT | **`mc --exe`** — the same image. `link = "static"` here is an assertion that is checked, not a switch |
+| no libc (the program imports nothing: `<sys_linux_aarch64>`/`<sys_linux_x86_64>`, raw system calls) | **`mc --exe`**, and there is nothing dynamic about it: no `PT_INTERP`, no `PT_DYNAMIC`, no PLT | **`mc --exe`** — the same image. `link = "static"` here is an assertion that is checked, not a switch |
 
 Two things follow from that table and are worth saying plainly.
 
@@ -924,12 +924,20 @@ Sections, symbol names and the symbol partition are unchanged: `.text`/`.rodata`
 `_main` → `main`, `l_str0` → `.Lstr0`. Functions are aligned to 4, so up to three zero bytes sit
 between them; they are never executed, but a disassembler decodes them as `add %al, (%rax)`.
 
-### No libc at all: `<sys_linux>`
+### No libc at all: `<sys_linux_aarch64>` and `<sys_linux_x86_64>`
 
-`lib/sys_linux.mc` is `lib/sys_svc.mc`'s Linux sibling: `open`/`creat`/`read`/`write`/`close`/
-`fchmod`/`exit` as raw `svc #0` with the call number in `x8` (openat 56, close 57, read 63,
-write 64, fchmod 52, exit_group 94; `AT_FDCWD` is `-100`, written as `movn x0, #99`). It also
-provides `_start`, which reads `argc`/`argv` off the entry stack, calls `main` and exits — so the
+`lib/sys_svc.mc`'s Linux sibling, and since 0.15.1 it is **three files**, split the way
+`src/host_linux.mc` is split from `src/host_linux_aarch64.mc` and `src/host_linux_x86_64.mc`:
+
+| file | bundled as | what is in it |
+|---|---|---|
+| `lib/sys_linux.mc` | `<sys_linux>` | the operating-system half: `O_RDONLY`/`O_WRONLY`/`O_CREAT`/`O_TRUNC` and nothing else. **No code**, not includable on its own |
+| `lib/sys_linux_aarch64.mc` | `<sys_linux_aarch64>` | `svc #0` with the call number in `x8` (openat 56, close 57, read 63, write 64, fchmod 52, exit_group 94; `AT_FDCWD` is `-100`, written as `movn x0, #99`) |
+| `lib/sys_linux_x86_64.mc` | `<sys_linux_x86_64>` | `syscall` with the number in `rax` (read 0, write 1, open 2, close 3, creat 85, fchmod 91, exit_group 231) |
+
+The split is not tidiness: until it, `<sys_linux>` assembled AArch64 words into an x86-64 program
+that included it, and the program segfaulted on its first system call. Each layer includes the OS
+half, then its own numbers, its own wrappers and `lib/io.mc`, and each provides `_start` — so the
 link needs no crt objects at all:
 
 ```toml
@@ -938,9 +946,35 @@ cmd  = "ld.lld"
 args = ["-nostdlib", "-e", "_start", "-o", "{out}", "{obj}"]
 ```
 
-`tests/linux/070-nolibc.mc` is that case, inside `scripts/test-linux.sh`. It is AArch64-only —
-the syscall words and `_start` are hand-encoded instructions — so it carries a `// skip-x86_64:`
-header, and `--arch x86_64` lists it as skipped instead of running it.
+`mc --exe` needs no link at all; a program that defines no `_start` gets the one
+`src/backend_elf_exe.mc` synthesizes instead (M42).
+
+**Where the x86-64 layer differs, and why.** The first three parameters of a C call and the first
+three arguments of a Linux system call are the same three registers, and not one of the seven
+wrappers needs a fourth, so every wrapper is `nop; mov eax, <number>; syscall` — eight bytes, two
+`#opcode` words. `_start` cannot copy the AArch64 file's trick of reaching `main` through
+`reloc(BRANCH26, "_main")` + `emit()`: `emit()` writes exactly four bytes, a pending `reloc()` is
+pinned to the START of that word, `gen_word` accepts only the four Mach-O kinds, and an x86 `call
+rel32` is five bytes with its field one byte in — the wall M20 hit on Windows. It names `main`
+with a **prototype** instead, which a definition later in the same unit satisfies, so the call is
+an ordinary `R_X86_PLT32`. Compiled on its own the file is therefore `prototype with no
+definition`, identically from the seed and from `mc`, which is exactly what
+`scripts/check-asm.sh` was written to compare.
+
+**Choosing a layer.** The lexer cannot switch on an architecture, so the choice is made from
+outside the source: `lib/linux/aarch64/sys_arch.mc` and `lib/linux/x86_64/sys_arch.mc` are one
+line each, and `[include].paths` (or `--include=DIR`) names one of the two directories — the same
+shape `examples/conc` uses to pick its thread layer.
+
+```text
+#include "sys_arch.mc"
+```
+
+`tests/linux/070-nolibc.mc` is that case, inside `scripts/test-linux.sh`, which points the include
+root at `lib/linux/<arch>` in every config it generates. It runs on **both** Linux legs; it used
+to carry a `// skip-x86_64:` header and no longer does. On the x86-64 leg the script also runs an
+`llvm-mc` sweep over the object: every instruction the layer encoded by hand is fed back through
+the assembler and has to come out byte for byte (12 distinct instructions).
 
 The `O_RDONLY`/`O_WRONLY`/`O_CREAT`/`O_TRUNC` constants moved out of `lib/io.mc` and into each
 system layer at M16, because they are per-system: `O_CREAT` is `0x200` on macOS and `0x40` on
@@ -963,16 +997,15 @@ instruction set only.
 ```
 32/32 tests passed on linux/aarch64
 skipped (not portable to this target):
-  032-svc — lib/sys_svc.mc has the Darwin syscall numbers in x16 and svc #0x80; the Linux equivalent is lib/sys_linux.mc
+  032-svc — lib/sys_svc.mc has the Darwin syscall numbers in x16 and svc #0x80; the Linux equivalent is lib/sys_linux_aarch64.mc
 ```
 
 ```
 29/29 tests passed on linux/x86_64
 skipped (not portable to this target):
   031-opcode — the #opcode templates are AArch64 words (movz/add); the x86-64 machine emits its own instruction set
-  032-svc — lib/sys_svc.mc has the Darwin syscall numbers in x16 and svc #0x80; the Linux equivalent is lib/sys_linux.mc
+  032-svc — lib/sys_svc.mc has the Darwin syscall numbers in x16 and svc #0x80; the Linux equivalent is lib/sys_linux_aarch64.mc
   033-reloc — the raw word is an AArch64 `bl` and BRANCH26 is a Mach-O/AArch64 relocation; x86-64 calls are R_X86_64_PLT32
-  070-nolibc — lib/sys_linux.mc encodes the syscalls and _start as AArch64 `svc #0` words; the x86-64 equivalent would be `syscall`
 ```
 
 Everything else is portable as written on both, including `030-section` (custom `#section`s, which
@@ -1190,7 +1223,7 @@ accepted gap, with the consequences spelled out in
 
 ### No C runtime at all: `<sys_windows>`
 
-`lib/sys_windows.mc` is `lib/sys_linux.mc`'s Windows sibling, with one difference of substance:
+`lib/sys_windows.mc` is `lib/sys_linux_aarch64.mc`'s Windows sibling, with one difference of substance:
 there is no syscall instruction. Windows has no stable system-call numbers, and the documented
 boundary is `kernel32.dll` — so the layer is ordinary mc code over seven `extern`s
 (`GetStdHandle`, `WriteFile`, `ReadFile`, `CreateFileA`, `CloseHandle`, `ExitProcess`,
@@ -1232,7 +1265,7 @@ an ordinary call: `BRANCH26` on arm64 and `IMAGE_REL_AMD64_REL32` on x64, both a
 the layer is genuinely architecture-neutral.
 
 **It deliberately does not include `io.mc`**, and that is the one place it differs from
-`lib/sys_linux.mc`. On Linux the wrappers come out of `libc.a`, an archive the linker takes
+the two Linux layers. On Linux the wrappers come out of `libc.a`, an archive the linker takes
 members from; here they come out of an ordinary object linked *next to* the program, and an object
 carries everything it holds. If this file also carried `strlen`/`puts`/`putnum`, every program
 that already has them — anything that includes `lib/sys.mc`, which ends in `io.mc` — would fail

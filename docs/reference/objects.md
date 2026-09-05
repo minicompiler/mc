@@ -699,7 +699,8 @@ alignment (a file up to 64 KiB bigger) and x86-64, which has no such configurati
 ### The static case is the degenerate case
 
 It is decided by **counting imports**, never by a flag. A program whose undefined-symbol set is
-empty — anything built on `lib/sys_linux.mc`, including `tests/linux/070-nolibc.mc` — gets no
+empty — anything built on `lib/sys_linux_aarch64.mc` or `lib/sys_linux_x86_64.mc`, including
+`tests/linux/070-nolibc.mc` — gets no
 `PT_INTERP`, no `PT_DYNAMIC`, no `.dynsym`/`.dynstr`/`.hash`/`.rela.plt`, no PLT and no GOT, and
 what comes out is a static executable the kernel runs with no loader involved.
 
@@ -708,7 +709,7 @@ what comes out is a static executable the kernel runs with no loader involved.
 The kernel enters `_start`, not `main`, and there is no `crt1.o` here.
 
 * A program that defines `_start` itself keeps it: `e_entry` is that symbol and nothing is
-  synthesized. `#include <sys_linux>` is that case.
+  synthesized. `#include <sys_linux_aarch64>` and `<sys_linux_x86_64>` are that case.
 * Otherwise the writer emits `.text.mcstart`, seven AArch64 instructions or 34 x86-64 bytes:
   `argc` from `[sp]`, `argv` = `sp + 8`, `envp` = `sp + 16 + 8*argc`, a direct `bl`/`call` to
   `main`, and `exit_group` by **raw syscall** — so the stub costs no import and works in the static

@@ -692,7 +692,8 @@ Every system call the sandbox issues goes through one host-layer function
 i64 host_syscall6(i64 n, i64 a, i64 b, i64 c, i64 d, i64 e, i64 f);
 ```
 
-with the kernel's own result — a small negative value is `-errno`, exactly as `lib/sys_linux.mc`
+with the kernel's own result — a small negative value is `-errno`, exactly as the two Linux
+system layers
 documents. No libc wrapper is used, for two reasons: `prctl`, `syscall` and `clone` are variadic
 in musl and in glibc and this project refuses a variadic `extern`, and `seccomp`, `landlock_*`,
 `pidfd_*` and `close_range` have no wrapper at all.
@@ -708,7 +709,7 @@ is `host_os()`.
 
 The shim itself is fourteen words in total.
 
-**AArch64** — eight `#opcode` words, `lib/sys_linux.mc`'s style. Linux takes the number in `x8`
+**AArch64** — eight `#opcode` words, `lib/sys_linux_aarch64.mc`'s style. Linux takes the number in `x8`
 and the arguments in `x0..x5`; the seven parameters arrive in `x0..x6`, so the number is already
 in `x0` and every argument is one register too high. The moves run in *ascending* order after
 `x8` is taken, because `x8 <- x0` must read the number before `x0` is overwritten and each
