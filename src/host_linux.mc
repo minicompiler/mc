@@ -41,7 +41,11 @@ void host_init(uptr envp) { host_envp = envp; }
 uptr host_environ() { return host_envp; }
 
 uptr host_os()  { return "linux"; }
-uptr host_sys() { return "sys_linux"; }
+
+// host_sys() is NOT here: the system layer a Linux program includes is
+// architecture-specific since 0.15.1 -- `svc #0` with the call number in x8 on
+// AArch64, `syscall` with it in rax on x86-64 -- so each of the two files that
+// include this one answers it (lib/sys_linux.mc says why the split exists).
 
 // `xcrun` is a macOS program: a Linux mc.toml that writes `{sdk}` is an error,
 // not a spawn that fails with "cannot run xcrun" (src/driver.mc, drv_sdk).

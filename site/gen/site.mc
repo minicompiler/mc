@@ -27,6 +27,14 @@ uptr sg_edit = 0;                     // prefix of a link to the source in the r
 uptr sg_home_src = 0;
 i64  sg_search = 1;
 
+// [site].nav_extra: header links this generator does NOT render a page for.
+// They are routes of the registry server that serves the same domain
+// (/packages, /login), so on a static preview they lead nowhere -- which is why
+// they are configuration and not markup, and why --check is told about them by
+// name instead of guessing from the shape of the URL.
+uptr sg_extra_url;                    // the URLs, for ck_link
+uptr sg_extra_html = 0;               // the <a> elements, for {{nav_extra}}
+
 uptr sg_t_base;                       // the four templates, read once
 uptr sg_t_page;
 uptr sg_t_home;
@@ -245,6 +253,7 @@ void sg_config(uptr dir) {
     sg_repo = sg_path(sg_str("site.repo", ".."));
     uptr home = toml_get("site.home");
     if (home != 0) sg_home_src = u_join(sg_docs, home);
+    sg_load_nav_extra();                          // needs sg_base
 }
 
 // ---- templates and required assets ----
@@ -270,6 +279,35 @@ void sg_load_templates() {
     sg_need_asset("icon-32.png");
     sg_need_asset("icon-180.png");
     sg_need_asset("social.png");
+    if (sg_search) sg_need_asset("search.js");
+}
+
+// The header links named by [site].nav_extra, in that order. Each name is a
+// [navlink.<name>] table with `title` and `url`; with no nav_extra the
+// {{nav_extra}} placeholder is empty and the header is exactly what it was.
+// A url with a refused scheme is a hard error here, because unlike a Markdown
+// link this one was written by whoever configured the site.
+void sg_load_nav_extra() {
+    sg_extra_url = sl_new();
+    u8 b[BUF_SIZE];
+    buf_init(b);
+    i64 n = toml_count("site.nav_extra");
+    i64 i = 0;
+    loop {
+        if (i >= n) break;
+        uptr id = toml_get_array("site.nav_extra", i);
+        uptr title = sg_str(u_cat3("navlink.", id, ".title"), u_title_from_slug(id));
+        uptr url = sg_str(u_cat3("navlink.", id, ".url"), u_cat2(sg_base, id));
+        if (u_scheme(url) == U_SCHEME_BAD) die2("refused link scheme in site.toml", url);
+        sl_add(sg_extra_url, url);
+        u_put(b, "    <a href=\"");
+        u_esc(b, url);
+        u_put(b, "\">");
+        u_esc_text(b, title);
+        u_put(b, "</a>\n");
+        i = i + 1;
+    }
+    sg_extra_html = u_take(b);
 }
 
 // ---- discovery ----
@@ -546,11 +584,21 @@ i64 sg_next(i64 p) {
     return 0 - 1;
 }
 
-// ---- the search form and its script ----
-// One placeholder, {{search}}: the form and the code that makes it work. The
-// form starts hidden and the script reveals it, so a reader with no JavaScript
-// is never shown a box that cannot search. The index is fetched on the first
-// keystroke, never on load.
+// ---- the search form and the tag that loads its script ----
+// One placeholder, {{search}}: the form, and a <script src=...> for the code
+// that makes it work. The code itself is site/static/search.js, copied verbatim
+// into site/public like every other static file.
+//
+// It is NOT inline, and that is a hard requirement rather than a preference:
+// the site is served with `Content-Security-Policy: default-src 'self';
+// script-src 'self'`, which refuses an inline <script>, an inline style and
+// every on*= attribute. site/tools/checkhtml.py asserts all three over every
+// rendered page, so a template that grows one fails the build.
+//
+// base_url reaches the script through a data attribute, because a static file
+// never goes through tmpl.mc. The form starts hidden and the script reveals it,
+// so a reader with no JavaScript is never shown a box that cannot search; the
+// index is fetched on the first keystroke, never on load.
 uptr sg_search_html() {
     if (!sg_search) return u_dup("");
     u8 b[BUF_SIZE];
@@ -560,63 +608,11 @@ uptr sg_search_html() {
     u_put(b, "  <input id=\"site-search-input\" type=\"search\" autocomplete=\"off\" placeholder=\"Search\">\n");
     u_put(b, "  <ul class=\"search-results\" hidden></ul>\n");
     u_put(b, "</form>\n");
-    u_put(b, "<script>\n");
-    u_put(b, "(function () {\n");
-    u_put(b, "  var form = document.querySelector('.site-search');\n");
-    u_put(b, "  var input = document.getElementById('site-search-input');\n");
-    u_put(b, "  var list = document.querySelector('.search-results');\n");
-    u_put(b, "  if (!form || !input || !list) return;\n");
-    u_put(b, "  form.hidden = false;\n");
-    u_put(b, "  form.addEventListener('submit', function (e) { e.preventDefault(); });\n");
-    u_put(b, "  var index = null;\n");
-    u_put(b, "  var base = ");
-    u_put(b, "'");
-    u_put(b, sg_base);
-    u_put(b, "';\n");
-    u_put(b, "  function load() {\n");
-    u_put(b, "    if (index) return Promise.resolve(index);\n");
-    u_put(b, "    return fetch(base + 'search.json').then(function (r) { return r.json(); })\n");
-    u_put(b, "      .then(function (data) { index = data; return index; });\n");
-    u_put(b, "  }\n");
-    u_put(b, "  function hits(data, q) {\n");
-    u_put(b, "    var out = [];\n");
-    u_put(b, "    for (var i = 0; i < data.length && out.length < 8; i++) {\n");
-    u_put(b, "      var p = data[i];\n");
-    u_put(b, "      var hay = (p.t + ' ' + p.s + ' ' + p.d + ' ' + p.h.map(function (h) { return h.t; }).join(' ')).toLowerCase();\n");
-    u_put(b, "      if (hay.indexOf(q) === -1) continue;\n");
-    u_put(b, "      var url = p.u, label = p.t;\n");
-    u_put(b, "      for (var j = 0; j < p.h.length; j++) {\n");
-    u_put(b, "        if (p.h[j].t.toLowerCase().indexOf(q) !== -1) { url = p.u + '#' + p.h[j].i; label = p.t + ' / ' + p.h[j].t; break; }\n");
-    u_put(b, "      }\n");
-    u_put(b, "      out.push({ u: url, l: label, s: p.s });\n");
-    u_put(b, "    }\n");
-    u_put(b, "    return out;\n");
-    u_put(b, "  }\n");
-    u_put(b, "  function render(items) {\n");
-    u_put(b, "    list.textContent = '';\n");
-    u_put(b, "    for (var i = 0; i < items.length; i++) {\n");
-    u_put(b, "      var li = document.createElement('li');\n");
-    u_put(b, "      var a = document.createElement('a');\n");
-    u_put(b, "      a.href = items[i].u;\n");
-    u_put(b, "      a.textContent = items[i].l;\n");
-    u_put(b, "      var span = document.createElement('span');\n");
-    u_put(b, "      span.className = 'search-section';\n");
-    u_put(b, "      span.textContent = items[i].s;\n");
-    u_put(b, "      a.appendChild(span);\n");
-    u_put(b, "      li.appendChild(a);\n");
-    u_put(b, "      list.appendChild(li);\n");
-    u_put(b, "    }\n");
-    u_put(b, "    list.hidden = items.length === 0;\n");
-    u_put(b, "  }\n");
-    u_put(b, "  input.addEventListener('input', function () {\n");
-    u_put(b, "    var q = input.value.trim().toLowerCase();\n");
-    u_put(b, "    if (q.length < 2) { render([]); return; }\n");
-    u_put(b, "    load().then(function (data) { render(hits(data, q)); });\n");
-    u_put(b, "  });\n");
-    u_put(b, "  input.addEventListener('keydown', function (e) { if (e.key === 'Escape') { input.value = ''; render([]); } });\n");
-    u_put(b, "  document.addEventListener('click', function (e) { if (!form.contains(e.target)) render([]); });\n");
-    u_put(b, "})();\n");
-    u_put(b, "</script>\n");
+    u_put(b, "<script src=\"");
+    u_esc(b, sg_base);
+    u_put(b, "static/search.js\" data-search-base=\"");
+    u_esc(b, sg_base);
+    u_put(b, "\" defer></script>\n");
     return u_take(b);
 }
 
@@ -648,6 +644,7 @@ void sg_write_page(i64 p) {
     tp_set(c, "page_url", u_escaped(sg_page_url(p)));
     tp_set(c, "year", u_escaped(sg_year));
     tp_set(c, "search", sg_search_html());
+    tp_set(c, "nav_extra", sg_extra_html);
     tp_set(c, "content", pg_body(p));
     tp_set(c, "nav", "");
     tp_set(c, "toc", "");

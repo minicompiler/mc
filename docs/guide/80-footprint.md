@@ -115,14 +115,14 @@ information which `ld.lld` copies through: `strip` takes this exact binary from 
 
 ## Linux, no libc: 1 888 bytes, and that is the floor
 
-`#include <sys_linux>` ([50-cross-compile.md](50-cross-compile.md)) is the kernel interface
+`#include <sys_linux_aarch64>` / `<sys_linux_x86_64>` ([50-cross-compile.md](50-cross-compile.md)) is the kernel interface
 written in this language: `svc #0` with the call number in `x8`, taught to the compiler with
 `#opcode`, plus a `_start` that reads `argc`/`argv` off the entry stack, calls `main` and hands
 `x0` to `exit_group`. The link is then `ld.lld -nostdlib -e _start` — no crt objects, no
 `libc.a`, nothing to relocate, two `PT_LOAD` segments and 8 KiB mapped.
 
 Most of even those 756 bytes of `.text` is dead code: `mc` emits every function it parses, and
-`<sys_linux>` defines `open`/`creat`/`read`/`write`/`close`/`fchmod`/`exit` plus `lib/io.mc`'s
+Each Linux layer defines `open`/`creat`/`read`/`write`/`close`/`fchmod`/`exit` plus `lib/io.mc`'s
 `strlen`/`puts`/`putnum`, none of which this program calls. `strip` takes the file to 1 360
 bytes; the remainder is the ELF header, the program headers and the section table.
 

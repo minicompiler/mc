@@ -1,0 +1,25 @@
+# mc.linux.toml - mcsite built by `mc build` ON A LINUX HOST:
+#
+#   mc build site --config site/mc.linux.toml     # from the repository root
+#
+# It is site/mc.toml with one line changed: the [include] root that picks
+# mcsite's host layer, gen/linux instead of gen/macos (the `struct dirent`
+# offsets, site/gen/linux/site_host.mc). Neither file carries a [target]
+# section, so both take the host pair and neither needs a linker or a sysroot.
+#
+# `make site` picks the config by `uname -s`; examples/conc/mc.linux.toml is the
+# same idea one directory over.
+#
+# One step: site/gen/main.mc compiled by the running compiler into an ELF
+# executable (the built-in elf-exe backend, M42). There is no [compiler] section
+# because mcsite teaches the compiler nothing - it USES the compiler's own
+# lexer, through `#include <mc/lex>` from the bundle inside the binary.
+
+[project]
+name  = "mcsite"
+entry = "gen/main.mc"
+out   = "../build/mcsite"
+kind  = "exe"
+
+[include]
+paths = ["gen/linux"]

@@ -223,6 +223,40 @@ findtool() {
 readobj=$(findtool llvm-readobj)
 readelf=$(findtool llvm-readelf)
 [ -n "$readelf" ] || readelf=$(command -v readelf 2>/dev/null)
+objdump=$(findtool llvm-objdump)
+llvmmc=$(findtool llvm-mc)
+
+# The M17/M43 sweep, for the raw words lib/sys_linux_x86_64.mc writes by hand:
+# every instruction of the no-libc object that this repository ENCODED itself --
+# the `nop; mov eax, N; syscall` pair of each wrapper, and the three words of
+# sysl_entry and _start -- fed back through the assembler. It is the only thing
+# that can catch a byte typed wrong in a #opcode template or an emit(): the
+# program still links, still runs, and does the wrong system call.
+LAYER_RE='(syscall|nop$|movl[[:space:]]+\$0x[0-9a-f]+, %eax|movq[[:space:]]+\(%rbp\), %rax|addq[[:space:]]+\$0x8, %rax|subq[[:space:]]+\$0x8, %rsp)'
+sweep_layer() {                          # sweep_layer OBJECT
+    [ "$arch" = x86_64 ] || return 0
+    [ -f "$1" ] || return 0
+    if [ -z "$objdump" ] || [ -z "$llvmmc" ]; then
+        echo "skip sweep: llvm-objdump/llvm-mc not found"; return 0
+    fi
+    "$objdump" -d --triple=x86_64-linux-musl "$1" 2>/dev/null \
+        | sed -n 's|^ *[0-9a-f]*: *\([0-9a-f ]*[0-9a-f]\)  *\(.*\)$|\1\t\2|p' \
+        | grep -E "	$LAYER_RE" | sort -u > "$tmp/ins"
+    n=0; bad=0
+    while IFS='	' read -r bytes text; do
+        [ -n "$text" ] || continue
+        enc=$(printf '%s\n' "$text" | "$llvmmc" -triple=x86_64-linux-musl --show-encoding 2>/dev/null \
+              | sed -n 's|.*encoding: \[\(.*\)\].*|\1|p' | tr -d ' ' | tr ',' '\n' \
+              | sed 's|^0x||' | tr '\n' ' ' | sed 's| *$||')
+        want=$(echo "$bytes" | tr -s ' ')
+        if [ "$enc" != "$want" ]; then
+            echo "FAIL sweep: '$text' -> $enc, mc emitted $want"; bad=$((bad + 1)); continue
+        fi
+        n=$((n + 1))
+    done < "$tmp/ins"
+    if [ "$bad" != 0 ]; then fails=$((fails + bad)); return 0; fi
+    echo "ok sweep <sys_linux_x86_64>: $n distinct hand-encoded instructions re-assemble byte for byte"
+}
 notes=0                                  # objects whose .note.GNU-stack is right
 stacks=0                                 # binaries whose PT_GNU_STACK is not X
 
@@ -315,6 +349,20 @@ stack_is_rw() {
     [ "$flags" = "RW" ]
 }
 
+# The one [include] root every generated config carries: lib/linux/<arch>, which
+# is where `#include "sys_arch.mc"` finds the system layer of the architecture
+# being built for (lib/linux/aarch64/sys_arch.mc and lib/linux/x86_64/sys_arch.mc,
+# each one line naming a bundled layer). It is absolute because a path in
+# mc.toml is resolved against the CONFIG's directory and the config lives in a
+# temporary directory. An extra root costs nothing to a test that does not use
+# it: src/lex.mc only consults the roots after the includer's own directory has
+# failed.
+gen_include() {
+    echo
+    echo '[include]'
+    echo "paths = [\"$root/lib/linux/$arch\"]"
+}
+
 # writes $tmp/mc.toml for one test. $1 = entry, $2 = out, $3 = the [linker] args
 gen_toml() {
     {
@@ -332,6 +380,7 @@ gen_toml() {
         echo '[linker]'
         echo 'cmd  = "ld.lld"'
         echo "args = [$3]"
+        gen_include
     } > "$tmp/mc.toml"
 }
 
@@ -347,6 +396,7 @@ gen_toml_obj() {
         echo '[target]'
         echo 'os   = "linux"'
         echo "arch = \"$arch\""
+        gen_include
     } > "$tmp/mc.toml"
 }
 
@@ -365,6 +415,7 @@ gen_toml_exe() {
         # musl is the writer's own default, so --libc musl writes NO key at all
         # and the default is what gets exercised
         [ -n "$libckey" ] && echo "libc = \"$libckey\""
+        gen_include
     } > "$tmp/mc.toml"
 }
 
@@ -650,8 +701,13 @@ else
         [ "$mode" = "build" ] && echo "070-nolibc — $why" >> "$split/skipped"
     elif [ "$mode" = "build" ]; then
         build_one tests/linux/070-nolibc.mc 070-nolibc nolibc
+        sweep_layer "$split/070-nolibc.o"
     else
         run_one tests/linux/070-nolibc.mc 070-nolibc "$NOLIBC_ARGS"
+        # in --exe mode the binary IS the artefact; either way the layer's own
+        # words are in it and the sweep reads whichever one this mode wrote
+        if [ "$exe" = "1" ]; then sweep_layer "$outdir/070-nolibc"
+        else                      sweep_layer "$outdir/070-nolibc.o"; fi
     fi
 fi
 

@@ -3215,10 +3215,119 @@ agents (`.claude/agents/`): `stage0-dev` (C23), `mc-dev` (`.mc` code), `reviewer
   RC 0, `check-inert` identical everywhere. Goldens rewritten once: `mc2.sha256`
   `8e5e127dd96e0d125fd8757b662e6bca61b661d415cdd7349afc9791be14e544`, Linux `6002790c…344380` /
   `1ca2ea58…b15516`, Windows `478e2f28…a50520` / `6d49bfc6…3e70f05`.
-- Next: **M44** (packages, `docs/specs/M44.md`), then **M42 step 2** (PE `--exe`, CI-gated on the
-  Windows runners). **M46** only on the owner's request; **M43 Layer 2** after 1.0.0. M13 and M18
-  stay in the backlog (`docs/specs/M13.md`: sizing a program's memory at compile time -- the fixed
-  4 MiB arena in `examples/api/lib/rt.mc` is one more motivating case; M18 is Linux x86 32-bit).
+- Coop/ops patch (0.15.1, six items; the mc site is served on Linux by a server written in mc,
+  `schivei/mc-registry`, and that is what found the first four).
+  1. **mcsite runs on Linux.** `site/gen/check.mc` declared `extern uptr _NSGetEnviron()`, which
+     musl does not have, so an mcsite linked against musl failed to LOAD (`Error relocating
+     build/mcsite: _NSGetEnviron`); the environment is now `main`'s third parameter, kept in
+     `ms_envp` and handed to `posix_spawnp` -- no host file needed for it. `site/gen/util.mc` read
+     `struct dirent` at the macOS offsets and the Linux record is one field shorter (no
+     `d_namlen`), so every listing came out truncated or empty and an unpatched mcsite rendered
+     **7 pages instead of 87** with no error anywhere: the three fields now come from a host layer,
+     `site/gen/macos/site_host.mc` and `site/gen/linux/site_host.mc` (four lines each), picked by
+     an `[include]` root the way `examples/conc` picks its thread layer. `site/mc.toml` dropped
+     `[target]` (M37: the host pair) and `site/mc.linux.toml` is the same file with `gen/linux`;
+     `make site` picks by `uname -s` (`SITECFG`). `scripts/check-site-linux.sh` /
+     `make check-site-linux` (inside `make check`, self-skipping without Docker) cross-builds the
+     Linux compiler from this tree and runs `mc build site`, the render and `--check` inside
+     `alpine:3` on both architectures, asserting that `site/public` comes out **byte for byte the
+     macOS render** -- 11/11, 89 pages, 101 files, `diff -r` empty. Beyond the gate, the same
+     equality under glibc **with python3 present**, so `checkhtml.py` and `contrast.py` really are
+     spawned through the new `ms_envp`: Ubuntu 26.04 aarch64 in Lima and `ubuntu:latest` x86_64 in
+     Docker.
+  2. **No inline `<script>`**: the server's policy is `default-src 'self'; script-src 'self'`. The
+     search code moved verbatim into `site/static/search.js`, loaded with
+     `<script src="/static/search.js" data-search-base="/" defer>` -- a data attribute and not a
+     template substitution, because a file in `static/` is copied verbatim and never goes through
+     `tmpl.mc`. `site/tools/checkhtml.py` now fails a page carrying an inline `<script>`, a
+     `style=` attribute or an `on*=` handler (verified to fail on one carrying each); the site had
+     no style and no handler to begin with and had 89 inline scripts. Search was then driven
+     against the real `search.json` in a DOM stub: the form is revealed, the index is fetched from
+     `base + 'search.json'`, `relocation` gives three hits with their heading anchors, Escape
+     clears them.
+  3. **The header gains `Packages` (`/packages`) and `Sign in` (`/login`)**, after `Examples` and
+     before the search box. They are routes of the registry server, not pages this generator
+     renders, so they are `[site].nav_extra` plus one `[navlink.<name>]` table each and
+     `{{nav_extra}}` is empty without them; `mcsite --check` is told their URLs BY NAME and skips
+     exactly those, so every other unrendered URL is still a broken link.
+  4. **`<sys_linux>` splits by architecture.** Its wrappers and `_start` were AArch64 `svc #0`
+     words, so on x86-64 the same file assembled them into the program and it segfaulted on its
+     first system call (`tests/linux/070-nolibc.mc` carried `// skip-x86_64:`). Now
+     `lib/sys_linux.mc` is the OS half (the four `O_*` flags, no code), `lib/sys_linux_aarch64.mc`
+     is every previous line unchanged -- **the object it compiles to is byte for byte the one the
+     old name produced**, checked mach-o and elf -- and `lib/sys_linux_x86_64.mc` is the same seven
+     calls over `syscall` (read 0, write 1, open 2, close 3, creat 85, fchmod 91, exit_group 231).
+     x86-64 needs no register shuffling at all: the first three parameters of a C call and the
+     first three arguments of a system call are the same registers, so each wrapper is `nop; mov
+     eax, N; syscall`, two `#opcode` words. `_start` could not copy the AArch64 trick of reaching
+     `main` through `reloc(BRANCH26, "_main")` + `emit()` -- `emit()` writes exactly four bytes, a
+     pending `reloc()` is pinned to the START of that word, `gen_word` accepts only the four
+     Mach-O kinds, and an x86 `call rel32` is five bytes with its field one byte in (M20's wall) --
+     so it names `main` with a **prototype**, which a definition later in the same unit satisfies,
+     and the call is an ordinary `R_X86_PLT32`. Compiled alone the file is `prototype with no
+     definition`, identically from the seed and from `mc`, which is what `scripts/check-asm.sh`
+     was written to compare. `sysl_entry()` is two hand-encoded words answering `&argc` on the
+     entry stack from the caller's saved `rbp`, and one more puts the stack parity back.
+     The layer is chosen from outside the source (`lib/linux/{aarch64,x86_64}/sys_arch.mc`, one
+     line each, through `[include].paths`, which `scripts/test-linux.sh` writes into every config
+     it generates). `host_sys()` moved into the two architecture host files
+     (`sys_linux_aarch64` / `sys_linux_x86_64`). **070-nolibc now runs on both legs**, and the
+     x86-64 leg also runs an `llvm-mc` sweep: 12 distinct hand-encoded instructions, byte for byte.
+  5. **Semver pre-releases** (`src/deps.mc`, `src/pkg.mc`). `ver_cmp` ignored the `-suffix`, so
+     `1.2.0-rc1` compared EQUAL to `1.2.0`. SemVer 2.0 § 11 is now implemented in full -- numeric
+     fields first, a pre-release below the same X.Y.Z without one, then identifier by identifier
+     (numeric below alphanumeric, numeric by value, else ASCII, a prefix below what extends it),
+     `+build` ignored -- and the specification's own chain holds
+     (`1.0.0-alpha < 1.0.0-alpha.1 < 1.0.0-alpha.beta < 1.0.0-beta < 1.0.0-beta.2 <
+     1.0.0-beta.11 < 1.0.0-rc.1 < 1.0.0`). C4 is sharper: `0.0.0-dev` now compares below `0.0.0`
+     as well as below `0.0.1`. Go's rule for CHOOSING: `pkg_newest`/`pkg_pick` take a `pre` flag
+     that is 0 for `mc pkg add NAME` and for a plain `mc update`, so a candidate is never chosen
+     for you -- it enters only when named (`mc pkg add mathx@2.1.0-rc1`, which does not reach
+     `pkg_newest`) or when the `[deps]` minimum is already one; MVS never picks "newest" so it can
+     only reach a candidate some row names outright; a registry with nothing but candidates says
+     `only pre-release versions are registered: name one, NAME@VERSION`. Fixtures
+     `mathx-2.1.0-rc1` and `mathx-2.1.0` plus five cases in `scripts/check-pkg.sh` (85/85).
+  -- `stage0/` untouched, 2848/3000. `make bundle` re-run before bootstrapping (93 files, raw
+  1167060 -> lz 546631, blob 547793 B; `tools/bundle.list` gained `sys_linux_aarch64` and
+  `sys_linux_x86_64`). `make check` green end to end (**RC 0, zero FAIL**): `test` 32/32,
+  `check-lex` 145/145 (3 skipped), `check-ast` 146/146, `check-asm` 146/146, `check-obj`
+  **32/32 identical to the frozen seed**, `check-bundle`, `bootstrap` at a fixed point
+  (`mc2.o == mc3.o`, 1260760 B; the `--dump-asm` diff between `mc1` and `mc2` is **empty**),
+  `check-surface` 32/32 + inert, `test-exe` 32/32, `check-mc` 15/15, `check-standalone`,
+  `check-parts`, `check-toml` 10/10, `check-build` 53/53, `check-pkg` **85/85**, `check-sysroots`,
+  `check-stubs` 9/9, `check-limits` **17/17 under 90%** (the tightest is `globals` **444/512 =
+  86%**, 16 under the 460 budget; `funcs` 1642/2048 = 80%), `check-minimal`, `test-linux` 41/41 on
+  linux/aarch64 and **39/39 on linux/x86_64 with 070-nolibc among them**, `test-windows` 42/42 +
+  `test-windows-x86_64` 40/40 objects, `check-examples`, `check-lang`, `check-conc`,
+  `check-desktop`, `check-float`, `check-wide`, `check-kernel`, `check-avr`, `check-docs`
+  (197 symbols, 36 flags, 27 TOML keys, 10 directives, 51 samples, 361 links), `site` 89 pages +
+  `check-site` (0 link problems, 89 files 0 problems, 50 contrast pairs 0 below the minimum),
+  **`check-site-linux` 11/11**, `test-linux-exe` 44/44 musl + 44/44 gnu, `test-linux-x86_64-exe`
+  42/42 musl + 42/42 gnu, `test-sandbox` 55 ok.
+  `scripts/check-inert.sh build/mc1.pre build/mc1` (pre = a `mc1` built from `main` a3303fd):
+  **33 objects identical** (`tests/*.mc` and `src/mc.mc`) and byte-identical artefacts for
+  `examples/api`, `examples/lang`, `examples/conc`, `examples/desktop` and `examples/kernel`
+  through the taught compiler each side builds. `make check-linux-host` green over all four cells
+  (musl and glibc x aarch64 and x86_64), each after its own `mc2l.o == mc3l.o` and with the cross
+  proof against the macOS `build/mc2.o`.
+  The five goldens rewritten **once**, each only after its own criterion: `mc2.sha256`
+  `5d2db5f9...67ae55` -> `e6359eb6f3a2c7f7a4511859f2dfb2dd629494860e2d85fa0e49df1c8594dfb5`
+  (after the empty `--dump-asm` diff and `cmp build/mc2.o build/mc3.o`); the Linux pair deleted and
+  re-recorded by `make check-linux-host` -- `mc2-linux-arm64.sha256`
+  `51b5c5dda382bb7127e26c7f9b1747a6ad354ab95f152c967a11e0835a6da9ab`,
+  `mc2-linux-x86_64.sha256`
+  `5c8702e1379410d8c9753d9621daa45092c4f1a7b3d15220a7203377e87ba140` (each confirmed a second
+  time by the glibc cell of its architecture); the Windows pair cross-computed per
+  `tests/golden/README.md` -- `mc2-windows-arm64.sha256`
+  `7b7059ba6145ec0836ff97f938294eb861898e9ea66c4a12ad0daf9c1c97a1ba` (1287028 B),
+  `mc2-windows-x86_64.sha256`
+  `67a23742efc58941dc9bfa4b3b1203d70b7183603e7ac18601e5ec210a4a4845` (1322720 B), both also
+  produced byte for byte by `build/mc2`.
+- Next: the **site + registry server, M47 S4-S6**, in `schivei/mc-registry`; then **M44 steps 4-5**
+  (slim / install / upgrade), then **M42 step 2** (PE `--exe`, CI-gated on the Windows runners).
+  **M46** only on the owner's request; **M43 Layer 2** after 1.0.0. M13 and M18 stay in the backlog
+  (`docs/specs/M13.md`: sizing a program's memory at compile time -- the fixed 4 MiB arena in
+  `examples/api/lib/rt.mc` is one more motivating case; M18 is Linux x86 32-bit).
   Update this section when each milestone closes.
 - i18n done (2026-09-03): the repository is fully in English — diagnostics, program/script
   output, identifiers, comments, and docs (`docs/*.md`, `docs/specs/*.md`, `CLAUDE.md`,

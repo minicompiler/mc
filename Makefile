@@ -37,6 +37,15 @@ REF = build/mc0
 MC  = build/mc1
 endif
 
+# 0.15.1: which config `mc build` is given for mcsite. The two differ by one
+# [include] root -- the host layer that carries the `struct dirent` offsets
+# (site/gen/{macos,linux}/site_host.mc) -- and neither carries a [target].
+ifeq ($(HOST),Linux)
+SITECFG = site --config site/mc.linux.toml
+else
+SITECFG = site
+endif
+
 all: stage0
 
 stage0: build/mc0
@@ -407,9 +416,12 @@ check-docs: build/mc1
 	scripts/check-docs.sh build/mc1
 
 # M27: the documentation site. `mc build site` compiles site/gen/*.mc into
-# build/mcsite; running it renders docs/ into site/public.
+# build/mcsite; running it renders docs/ into site/public. Since 0.15.1 mcsite
+# is host-neutral: site/mc.toml carries no [target] and picks its host layer
+# with an [include] root, so a Linux host builds the same thing from
+# site/mc.linux.toml (site/gen/{macos,linux}/site_host.mc).
 site: build/mc1
-	build/mc1 build site
+	build/mc1 build $(SITECFG)
 	build/mcsite site
 
 # M27: the site plus its own gate -- every internal link resolved in mc, then
@@ -417,6 +429,14 @@ site: build/mc1
 # failed, when it is not).
 check-site: site
 	build/mcsite site --check
+
+# 0.15.1: mcsite cross-checked on Linux. The Linux compiler is cross-built from
+# this tree (M42: no linker, no sysroot) and the whole chain -- `mc build site`,
+# the render, `--check` -- runs inside alpine:3 on both architectures; what is
+# asserted is that site/public comes out byte for byte the macOS render.
+# Self-skipping without Docker.
+check-site-linux: build/mc1 site
+	scripts/check-site-linux.sh build/mc1
 
 # M37: the Linux chain. There is no mc0 here, so `check` starts from
 # scripts/bootstrap-linux.sh -- seed -> mc1l -> mc2l -> mc3l, cmp, golden, and
@@ -574,7 +594,7 @@ else ifneq (,$(WINHOST))
 # Docker or python3 -- and `check-skipped` prints the reason for each one.
 check: budget bootstrap-windows check-lex check-ast check-asm check-obj check-bundle check-mc check-toml check-sysroots check-limits check-skipped
 else
-check: budget test check-lex check-ast check-bundle check-asm check-obj bootstrap check-surface test-exe check-mc check-standalone check-parts check-toml check-build check-pkg check-sysroots check-stubs check-limits check-minimal test-linux test-linux-x86_64 test-windows test-windows-x86_64 check-examples check-lang check-conc check-desktop check-float check-wide check-kernel check-avr check-docs site check-site test-linux-exe test-linux-x86_64-exe test-sandbox
+check: budget test check-lex check-ast check-bundle check-asm check-obj bootstrap check-surface test-exe check-mc check-standalone check-parts check-toml check-build check-pkg check-sysroots check-stubs check-limits check-minimal test-linux test-linux-x86_64 test-windows test-windows-x86_64 check-examples check-lang check-conc check-desktop check-float check-wide check-kernel check-avr check-docs site check-site check-site-linux test-linux-exe test-linux-x86_64-exe test-sandbox
 endif
 
 budget:
@@ -584,6 +604,7 @@ clean:
 	rm -rf build
 
 .PHONY: bootstrap-linux mc-linux mc-linux-x86_64 mc-linux-obj mc-linux-x86_64-obj
+.PHONY: check-site-linux
 .PHONY: check-linux-host check-skipped check-shim test-sandbox sandbox-trace sandbox-trace-check mc-linux-gnu mc-linux-x86_64-gnu
 .PHONY: bootstrap-windows mc-windows mc-windows-x86_64 mc-windows-obj mc-windows-x86_64-obj
 .PHONY: all stage0 stage0-san test check-lex check-ast check-asm check-obj mc1 bootstrap check-surface test-exe bundle check-bundle check-mc check-standalone check-parts check-toml check-build check-pkg check-sysroots check-stubs check-limits sysroot-linux sysroot-linux-x86_64 sysroot-windows sysroot-windows-x86_64 test-linux test-linux-x86_64 test-windows test-windows-x86_64 check-examples check-lang check-conc check-docs site check-site check budget clean check-desktop check-minimal mcrt-windows mcrt-windows-x86_64 check-float check-wide check-kernel check-avr test-linux-exe test-linux-x86_64-exe

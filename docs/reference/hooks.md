@@ -1138,7 +1138,7 @@ A taught compiler gets one from the bundle: `mc build` writes `#include <mc/host
 | `host_os()` | the operating system this binary runs on, in `[target].os` vocabulary: `"macos"`, `"linux"` or `"windows"` |
 | `host_arch()` | its architecture, in `[target].arch` vocabulary: `"aarch64"` or `"x86_64"` |
 | `host_machine()` | the machine name the walker drives for it (`machine_use`): `"arm64"`, `"x86_64"` or `"x86_64-win"` |
-| `host_sys()` | the bundled system layer a program on this host includes for its I/O: `"sys"`, `"sys_linux"` or `"sys_windows"` |
+| `host_sys()` | the bundled system layer a program on this host includes for its I/O: `"sys"`, `"sys_linux_aarch64"`, `"sys_linux_x86_64"` or `"sys_windows"`. On Linux it is answered by the ARCHITECTURE file, not the OS one, because the layer is a table of system-call numbers and raw instruction words |
 | `host_include()` | the bundle name `<mc/host>` resolves to for this host |
 | `host_environ()` | the environment block, ready for `posix_spawnp` — `ld64(_NSGetEnviron())` on macOS, the `envp` `main` was called with on Linux, `0` on Windows (a null `lpEnvironment` makes `CreateProcessA` give the child this process's own) |
 | `host_init(envp)` | called by `main` before anything else, with the third argument the C runtime passed. macOS and Windows ignore it; Linux stores it |

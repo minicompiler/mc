@@ -6,12 +6,10 @@
 // discipline src/*.mc has followed since M6.
 //
 // The only externs this file adds are the directory ones: opendir/readdir/closedir
-// (macOS arm64 has no $INODE64 suffix, so `readdir` already is the 64-bit-inode
-// entry point) and mkdir. The dirent fields used are the two the layout of
-// <sys/dirent.h> puts right after d_ino/d_seekoff/d_reclen:
-//
-//   0  d_ino (u64)   8  d_seekoff (u64)   16 d_reclen (u16)
-//   18 d_namlen (u16)  20 d_type (u8)     21 d_name (bytes, d_namlen long)
+// and mkdir, which have the same names and signatures in libSystem and in musl.
+// `struct dirent` does NOT have the same shape in the two, so the three fields
+// this file reads come from the host layer site/gen/{macos,linux}/site_host.mc
+// -- host_dirent_type/_name/_namlen -- and not from a #define here.
 //
 // Directory order is whatever the filesystem hands back, so every listing is
 // sorted before it is used (docs/determinism.md, rule 1: nothing iterated but an
@@ -24,9 +22,7 @@ extern i64  mkdir(uptr path, i64 mode);
 extern i64  rmdir(uptr path);
 extern i64  unlink(uptr path);
 
-#define DIRENT_NAMLEN 18
-#define DIRENT_TYPE   20
-#define DIRENT_NAME   21
+// DT_* are the same numbers on both systems; only the offsets above them differ.
 #define DT_DIR   4
 #define DT_REG   8
 #define DT_LNK  10
@@ -35,6 +31,14 @@ extern i64  unlink(uptr path);
 // <mc/arena>, which this file already has through site/gen/main.mc. It was
 // defined here until M41 moved it into the arena, and a second #define of the
 // same name is an error.
+
+// The environment `main` was given, which is what site/gen/check.mc hands to
+// posix_spawnp. It is a parameter and not `_NSGetEnviron()` -- that symbol is
+// libSystem's alone, and an mcsite linked against musl fails to LOAD with
+// `Error relocating build/mcsite: _NSGetEnviron`. Both C runtimes call
+// `main(argc, argv, envp)`, so the portable answer is simply to read the third
+// parameter (src/host_linux.mc says the same thing about the compiler).
+uptr ms_envp = 0;
 
 // ---- growable block (the shape of arena.mc's grow(), without the registry) ----
 // The registry ids in arena.mc name the compiler's own tables; mcsite is not the
@@ -374,16 +378,17 @@ uptr u_listdir(uptr dir, i64 want) {
     loop {
         uptr e = readdir(d);
         if (e == 0) break;
-        i64 nl = ld16(e + DIRENT_NAMLEN);
-        i64 ty = ld8(e + DIRENT_TYPE);
+        uptr nm = host_dirent_name(e);
+        i64 nl = host_dirent_namlen(e);
+        i64 ty = host_dirent_type(e);
         if (nl == 0) continue;
-        if (ld8(e + DIRENT_NAME) == '.') continue;       // "." ".." and dotfiles
+        if (ld8(nm) == '.') continue;                    // "." ".." and dotfiles
         if (want != 0) {
             // a symlink is followed by asking the filesystem, which mcsite does
             // not need: the tree it renders has none.
             if (ty != want) continue;
         }
-        sl_add(l, xstrdup(e + DIRENT_NAME, nl));
+        sl_add(l, xstrdup(nm, nl));
     }
     closedir(d);
     sl_sort(l);

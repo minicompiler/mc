@@ -154,7 +154,8 @@ that an unknown `[target]` is now reported after your entry source has been open
 `compile x -> y` step line comes out first.)*
 
 **A source cannot name your relocation kinds.** `reloc(TYPE, "sym")` accepts four hard-coded
-values. If your entry shim needs to name a call the way `lib/sys_linux.mc` names `BRANCH26`, you
+values. If your entry shim needs to name a call the way `lib/sys_linux_aarch64.mc` names
+`BRANCH26`, you
 need a registry that does not exist yet; `examples/kernel` sidesteps it by having the image writer
 synthesize the reset stub and by calling `kmain` as an ordinary call.
 

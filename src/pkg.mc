@@ -358,14 +358,23 @@ i64 pkg_row(uptr name, uptr ver) {
 // the minimum already written down, because raising a minimum across a major is
 // not an update -- it is the case D6 refuses to solve, and `go get -u` does not
 // cross a major either.
-uptr pkg_newest(uptr name, i64 major) {
+//
+// `pre` is Go's rule for a release candidate: 0 -- what `mc pkg add NAME` and a
+// plain `mc update` pass -- skips every pre-release row, so a candidate is
+// never chosen FOR you. It is 1 only when the version already written down is
+// itself a pre-release, which is the reader saying they are on that train and
+// want the next carriage. Naming one by hand, `mc pkg add NAME@1.2.0-rc1`, does
+// not come through here at all: pkg_pick takes the explicit version as given.
+uptr pkg_newest(uptr name, i64 major, i64 pre) {
     uptr best = 0;
     i64 i = 0;
     while (i < pk_nvr()) {
         uptr e = pk_vr(i);
+        uptr v = ld64(e + VR_VER);
         if (str_eq(ld64(e + VR_NAME), name) && !ld64(e + VR_YANK)
-            && (major < 0 || ver_major(ld64(e + VR_VER)) == major)) {
-            if (best == 0 || ver_cmp(ld64(e + VR_VER), best) > 0) best = ld64(e + VR_VER);
+            && (pre || !ver_is_pre(v))
+            && (major < 0 || ver_major(v) == major)) {
+            if (best == 0 || ver_cmp(v, best) > 0) best = v;
         }
         i = i + 1;
     }
@@ -1055,7 +1064,7 @@ uptr pkg_at_ver(uptr s) {
 
 // the version `add`/`update` picks for a name: the one that was asked for, or
 // the newest that is not yanked (within `major`, or any major when it is -1)
-uptr pkg_pick(uptr name, uptr want, i64 major) {
+uptr pkg_pick(uptr name, uptr want, i64 major, i64 pre) {
     if (!pkg_index_load(name)) {
         pkg_print_plan();
         out_str(1, "nothing was downloaded: re-run with --yes\n");
@@ -1066,9 +1075,13 @@ uptr pkg_pick(uptr name, uptr want, i64 major) {
         if (r < 0) pkg_die1(tm_cat(tm_cat(name, " "), want), "no such version in the registry");
         if (ld64(pk_vr(r) + VR_YANK))
             pkg_die1(tm_cat(tm_cat(name, " "), want), "is yanked: pick another version");
-        return want;
+        return want;                      // asked for by name: a candidate is fine
     }
-    uptr v = pkg_newest(name, major);
+    uptr v = pkg_newest(name, major, pre);
+    // A registry that has published nothing but candidates is not an error in
+    // the registry: it is a choice the reader has to make, so say which one.
+    if (v == 0 && !pre && pkg_newest(name, major, 1) != 0)
+        pkg_die1(name, "only pre-release versions are registered: name one, NAME@VERSION");
     if (v == 0) pkg_die1(name, "every registered version is yanked");
     return v;
 }
@@ -1078,7 +1091,7 @@ i64 pkg_add(uptr arg) {
     uptr name = pkg_at_name(arg);
     if (dep_reserved(name)) pkg_die1("reserved package name", name);
     if (!dep_name_ok(name)) pkg_die1("invalid package name", name);
-    uptr ver = pkg_pick(name, pkg_at_ver(arg), -1);
+    uptr ver = pkg_pick(name, pkg_at_ver(arg), -1, 0);
     pkg_add_write(cfg_file, name, ver);
     drv_step("add", pkg_what(name, ver), cfg_file);
     // the config changed under the table we parsed: read it again, so that
@@ -1108,7 +1121,8 @@ i64 pkg_update(uptr only) {
     while (i < n) {
         uptr name = ld64(names + i * 8);
         uptr cur = toml_get(tm_cat("deps.", name));
-        uptr v = pkg_pick(name, 0, ver_major(cur));
+        // a minimum that already names a candidate keeps looking at them
+        uptr v = pkg_pick(name, 0, ver_major(cur), ver_is_pre(cur));
         if (ver_cmp(v, cur) > 0) {
             pkg_add_write(cfg_file, name, v);
             drv_step("update", name, tm_cat(tm_cat(cur, " -> "), v));

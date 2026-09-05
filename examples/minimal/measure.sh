@@ -10,7 +10,7 @@
 #   macos-exe      mc --exe          -> a signed Mach-O executable, no ld       (mc.toml)
 #   macos-ld       mc -o x.o + ld    -> the same program through the system linker
 #   linux-musl     mc + ld.lld       -> ELF, statically linked against musl     (mc.linux.toml)
-#   linux-nolibc   mc + ld.lld       -> ELF, -nostdlib -e _start, <sys_linux>   (mc.nolibc.toml)
+#   linux-nolibc   mc + ld.lld       -> ELF, -nostdlib -e _start, <sys_linux> + lib/linux/aarch64/sys_arch.mc (mc.nolibc.toml)
 #
 # What it needs: `mc` (build/mc1, or $MC) for everything; `ld.lld` and a running
 # Docker for the two Linux rows, which are cross-compiled here and measured

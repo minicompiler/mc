@@ -47,11 +47,14 @@
     Menu
   </label>
   <!--endif-->
+  <!-- The three sections this generator renders, then whatever [site].nav_extra
+       names: routes of the server that serves the same domain (/packages,
+       /login), which mcsite links to and does not render. -->
   <nav class="header-nav" aria-label="Site sections">
     <a href="{{base_url}}guide/">Guide</a>
     <a href="{{base_url}}reference/">Reference</a>
     <a href="{{base_url}}examples/">Examples</a>
-  </nav>
+{{nav_extra}}  </nav>
   <!-- The search form and the script that fills it. Empty when search is off in
        site.toml; the form itself is hidden until the script reveals it, so a
        reader without JavaScript is never given a box that cannot search. -->

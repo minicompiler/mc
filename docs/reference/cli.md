@@ -50,8 +50,9 @@ sys sys
 
 `os` and `arch` are the `[target]` pair an `mc.toml` with no `[target]` gets, and the pair that
 picks the default backend (`macho` on macOS, `elf-obj` / `elf-obj-x86_64` on Linux); `sys` is the
-bundled system layer a program on this host includes for its I/O (`<sys>` or `<sys_linux>`). The
-same binary built for a Linux host answers `linux`, its architecture, and `sys_linux` — see [../guide/90-linux-host.md](../guide/90-linux-host.md).
+bundled system layer a program on this host includes for its I/O (`<sys>` or one of the two
+Linux layers). The same binary built for a Linux host answers `linux`, its architecture, and
+`sys_linux_aarch64` or `sys_linux_x86_64` — see [../guide/90-linux-host.md](../guide/90-linux-host.md).
 
 ```
 $ mc --version

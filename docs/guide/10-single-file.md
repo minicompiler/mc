@@ -209,7 +209,7 @@ Exactly one of these, and never `<io>` on its own:
 |---|---|
 | `<sys>` | libSystem `extern`s — the normal choice |
 | `<sys_svc>` | the same five calls through `svc #0x80`, taught with `#opcode`; **no libc at all** |
-| `<sys_linux>` | the Linux syscall layer plus a `_start`, for `-nostdlib` builds |
+| `<sys_linux_aarch64>`, `<sys_linux_x86_64>` | the Linux syscall layer of that architecture plus a `_start`, for `-nostdlib` builds |
 
 ```mc
 // expect-exit: 0

@@ -14,6 +14,12 @@ entry = "gen/main.mc"
 out   = "../build/mcsite"
 kind  = "exe"
 
-[target]
-os   = "macos"
-arch = "aarch64"
+# No [target]: with the section absent `mc build` takes the pair of the HOST it
+# is running on (M37), so this one file builds a Mach-O executable on macOS and
+# an ELF one on Linux -- since M42 with no linker and no sysroot on either.
+#
+# The [include] root is what picks mcsite's host layer, gen/macos/site_host.mc
+# or gen/linux/site_host.mc: the `struct dirent` offsets are the one thing the
+# two systems do not share. site/mc.linux.toml is this file with gen/linux.
+[include]
+paths = ["gen/macos"]

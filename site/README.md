@@ -10,6 +10,13 @@ build/mcsite site --check    # the same, then validates links, structure and con
 cd site/public && python3 -m http.server 8000
 ```
 
+On a Linux host the first line is `mc build site --config site/mc.linux.toml`, and `make site`
+picks the config by `uname -s`. The two configs differ by one `[include]` root, which is what
+selects mcsite's host layer — `site/gen/macos/site_host.mc` or `site/gen/linux/site_host.mc`,
+the `struct dirent` offsets and nothing else. Neither carries a `[target]` section, so each takes
+the pair of the host it runs on (M37) and neither needs a linker or a sysroot (M42).
+`make check-site-linux` proves the two renders are byte for byte the same.
+
 Two consecutive runs write byte-identical files: nothing in the output comes from a clock, a
 directory order or an address (`docs/determinism.md`). The generator rebuilds `site/public` from
 scratch on every run, so a page deleted from `docs/` cannot survive there.
@@ -19,11 +26,14 @@ responsive decisions) is in [`DESIGN.md`](DESIGN.md).
 
 ```
 site/
-  site.toml    the site: title, base URL, sections, search              (M27)
-  mc.toml      how `mc build` turns site/gen into build/mcsite          (M27)
-  gen/         mcsite, written in mc: util md hl tmpl site check main   (M27)
-  templates/   base.html  page.html  home.html  404.html
-  static/      site.css  icon.svg  favicon.svg  social.svg  icon-*.png  social.png
+  site.toml       the site: title, base URL, sections, search, nav_extra  (M27)
+  mc.toml         how `mc build` turns site/gen into build/mcsite         (M27)
+  mc.linux.toml   the same, on a Linux host                           (0.15.1)
+  gen/            mcsite, written in mc: util md hl tmpl site check main  (M27)
+  gen/macos/      site_host.mc: the macOS `struct dirent`            (0.15.1)
+  gen/linux/      site_host.mc: the Linux one                        (0.15.1)
+  templates/      base.html  page.html  home.html  404.html
+  static/         site.css  search.js  icon.svg  favicon.svg  social.svg  icon-*.png  social.png
   tools/       contrast.py  checkhtml.py  preview.py   (checks, not the generator)
   public/      the built site                          (generated, not committed)
 ```
@@ -44,11 +54,12 @@ the same rule `mc.toml` follows in `mc build` (`docs/build.md`).
 | `title_separator` | between a page title and the site title: `Getting started - mc` |
 | `year` | the footer's year. **Data, not the system clock** — a build must not depend on the day it runs |
 | `edit_url` | prefix of "Edit this page"; the page's path in the repository is appended |
-| `search` | `true` writes `search.json` and fills `{{search}}` with the header form and its script |
+| `search` | `true` writes `search.json` and fills `{{search}}` with the header form and a `<script src>` for `static/search.js` |
 | `docs`, `out`, `templates`, `static`, `repo` | the four directories and the repository root |
 | `home` | optional Markdown rendered into the home page's `.home-extra` (its `# ` headings are demoted: `home.html` already has the `h1`) |
 | `highlight` | fence languages that go through the bundled lexer. Default `["mc"]` |
 | `nav` | the section ids, in sidebar and reading order |
+| `nav_extra` | header links this generator does **not** render a page for, in order after the sections. Each name is a `[navlink.<name>]` table with `title` and `url` |
 
 A section is `[section.<id>]` with `title`, `dir` (under `docs`, `.` for the root), `url` (under
 `base_url`) and an optional `order` — the file names or slugs that come first, everything else
@@ -97,7 +108,8 @@ first would be wrong.
 | `{{next_url}}`, `{{next_title}}` | the next page in reading order, or empty | `page.html` |
 | `{{edit_url}}` | link to this page's Markdown source in the repository, empty for a generated page | `page.html` |
 | `{{page_description}}` | the page's first paragraph as plain text, for `<meta name=description>` and `og:description` | `base.html` |
-| `{{search}}` | the header search form and its inline script; empty when `[site] search` is off | `base.html` |
+| `{{search}}` | the header search form and the `<script src>` that loads `static/search.js`; empty when `[site] search` is off | `base.html` |
+| `{{nav_extra}}` | the `[site].nav_extra` links, one `<a>` per line; empty when the key is absent | `base.html` |
 | `{{year}}` | four digits, from `[site] year` — never from the clock | `base.html` |
 
 Values are substituted into HTML, so the generator escapes `&`, `<` and `>` in every value that
@@ -223,6 +235,21 @@ what keeps a documentation site from dying on a documented diagnostic.
 
 ### What the generator must copy
 
+### No inline script, no inline style
+
+The site is served with `Content-Security-Policy: default-src 'self'; script-src 'self'`, which
+refuses an inline `<script>`, a `style=` attribute and every `on*=` handler with no exception
+short of a nonce. So the search code is `static/search.js` and the page carries only
+
+```html
+<script src="/static/search.js" data-search-base="/" defer></script>
+```
+
+`base_url` reaches the script as a **data attribute**, because a file in `static/` is copied
+verbatim and never goes through `tmpl.mc`. `site/tools/checkhtml.py` asserts all three rules over
+every rendered page, so a template that grows one fails the build instead of failing in a browser
+nobody is watching.
+
 Everything in `static/` goes to `public/static/` byte for byte. The templates reference
 `{{base_url}}static/site.css`, `favicon.svg`, `icon-32.png`, `icon-180.png` and `social.png`; the
 run should fail loudly if any of them is missing.
@@ -250,7 +277,7 @@ public/
   static/...                 site/static copied byte for byte
 ```
 
-`search.json` is fetched by the header form's script on the first keystroke, never on load, and the
+`search.json` is fetched by `static/search.js` on the first keystroke, never on load, and the
 form stays hidden until that script runs — a reader without JavaScript is not shown a box that
 cannot search. The whole search feature disappears from every page when `[site] search` is off.
 
@@ -325,8 +352,9 @@ python3 site/tools/checkhtml.py site/public/index.html
 
 `checkhtml.py` verifies tag balance and nesting, unique ids, exactly one `h1`, no skipped heading
 levels, the four landmarks, accessible names on every link, `<label for>` targets, `<img alt>`,
-`aria-current` values, fragment links that have a target, and that every `/static/…` reference
-exists on disk.
+`aria-current` values, fragment links that have a target, that every `/static/…` reference exists
+on disk, and — since 0.15.1 — the three Content-Security-Policy rules: no `<script>` without
+`src=`, no `style=` attribute, no `on*=` handler.
 
 It is **not** a conformance validator, and the machine has none: `/usr/bin/tidy` is the HTML 4.01
 build from 2006 and `xmllint --html` uses libxml2's HTML 4.01 parser, so both reject `<header>`,

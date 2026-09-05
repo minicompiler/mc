@@ -74,6 +74,8 @@ prelude	lib/prelude.mc
 syntax_demo_test	lib/syntax_demo_test.mc
 sys	lib/sys.mc
 sys_linux	lib/sys_linux.mc
+sys_linux_aarch64	lib/sys_linux_aarch64.mc
+sys_linux_x86_64	lib/sys_linux_x86_64.mc
 sys_svc	lib/sys_svc.mc
 sys_windows	lib/sys_windows.mc
 sys_windows_host	lib/sys_windows_host.mc

@@ -132,7 +132,7 @@ mc.toml:9:8: link must be dynamic or static: target.link
 ```
 
 `link = "static"` is an **assertion**, not a switch. The executable writer takes the static path by
-counting imports — a program on `<sys_linux>` imports nothing and gets an image with no
+counting imports — a program on `<sys_linux_aarch64>` imports nothing and gets an image with no
 `PT_INTERP`, no `PT_DYNAMIC` and no PLT — and the key makes that a requirement: with an import in
 the set the build stops rather than quietly producing a dynamic binary.
 
@@ -292,8 +292,9 @@ existed — not even an extra `open` happens.
 `build` are reserved. A name that breaks either rule is refused at the key's own position
 (`reserved package name: deps.mc`, `invalid package name: deps.Geo`), exit 1.
 
-The value is a **minimum**, in Go's sense, not a pin. What is actually compiled is the row
-`mc.lock` carries — beside `mc.toml`, machine-written, one `[[package]]` per package with an exact
+The value is a `X.Y.Z` version, optionally with the `-pre.release` and `+build` parts of SemVer
+2.0 (`mathx = "2.1.0-rc1"`). It is a **minimum**, in Go's sense, not a pin. What is actually
+compiled is the row `mc.lock` carries — beside `mc.toml`, machine-written, one `[[package]]` per package with an exact
 version and a content hash — which `mc build` re-checks on every build. A `[deps]` minimum the
 lock cannot meet is `mc.lock is stale`, exit 2.
 
@@ -308,6 +309,11 @@ the command line wins over it, and with neither the default is
 
 A replaced package is not pinned and not hashed, and the build says so on stdout
 (`replaced geo: ../geo -- not pinned by mc.lock`).
+
+A pre-release minimum is never written for you: `mc pkg add <name>` with no `@` and `mc update`
+skip every pre-release row, so a candidate only lands in this table when it is asked for by name
+(`mc pkg add mathx@2.1.0-rc1`) or when the minimum already there is one. The ordering rule is in
+[packages.md](packages.md#versions-and-pre-releases).
 
 Everything else about packages — the resolution order, the lock format, the tree hash, the closure
 rule — is in [packages.md](packages.md).

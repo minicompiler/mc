@@ -82,6 +82,18 @@ class Check(HTMLParser):
             else:
                 self.href_targets.append((a["href"], self.getpos()[0]))
             self.anchor_stack.append([self.getpos()[0], a, ""])
+        # Content-Security-Policy: the site is served with `default-src 'self';
+        # script-src 'self'`, which refuses an inline <script>, an inline style
+        # attribute and every on*= handler. A page that grows one is broken in
+        # production and perfectly fine in a local browser, so it is asserted
+        # here rather than discovered by a reader.
+        if tag == "script" and "src" not in a:
+            self.err("<script> without src= (CSP script-src 'self' forbids inline script)")
+        if "style" in a:
+            self.err("inline style= attribute (CSP default-src 'self' forbids it)")
+        for name in a:
+            if name.startswith("on"):
+                self.err(f"inline event handler {name}= (CSP forbids it)")
         if tag == "aside" and "aria-label" not in a and "aria-labelledby" not in a:
             self.err("<aside> without an accessible name")
         if tag == "nav" and "aria-label" not in a and "aria-labelledby" not in a:

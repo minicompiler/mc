@@ -240,6 +240,24 @@ Two deliberate trade-offs, both visible above:
   menu, and on the home page and the 404 page (where the generator drops the toggle entirely,
   through `<!--if nav-->`) they stay visible. This keeps the header on one line at 320px.
 
+**The header carries links to pages this generator does not render.** `Packages` (`/packages`)
+and `Sign in` (`/login`) are routes of the registry server that serves the same domain, and they
+sit after `Examples` and before the search box — the reading order a visitor expects, from "what
+is this" to "what can I get" to "who am I". They are `[site].nav_extra` in `site.toml`, one
+`[navlink.<name>]` table each, so a static preview of `docs/` alone renders the header with
+exactly the three sections and nothing dangling. They are styled by the same
+`.header-nav a` rule as the sections: same colour, same hover, same focus ring, and the same
+stand-down below 700px. `mcsite --check` is told their URLs by name, so they are not reported as
+broken links and every OTHER unrendered URL still is.
+
+**No inline script, and no inline style.** The site is served under
+`Content-Security-Policy: default-src 'self'; script-src 'self'`. The sidebar toggle was already a
+checkbox rather than script, which is why the menu keeps working; the one piece of JavaScript on
+the site, the documentation search, is `static/search.js` loaded with `<script src>` and given its
+base URL through a `data-` attribute. `site/tools/checkhtml.py` fails a page that carries an
+inline `<script>`, a `style=` attribute or an `on*=` handler, so the rule is enforced and not
+merely intended.
+
 Other layout notes: code blocks scroll horizontally inside themselves and carry `tabindex="0"` so
 a keyboard user can scroll them; tables are wrapped in `.table-wrap` for the same reason; headings
 carry `scroll-margin-top` so a fragment link does not park them under the sticky header; the copy
