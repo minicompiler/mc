@@ -309,19 +309,19 @@ One file per package, at `<registry>/index/<name>.toml`:
 # index/geo.toml
 [package]
 name        = "geo"
-repo        = "https://github.com/schivei/mc-geo"
+repo        = "https://github.com/minicompiler/mc-geo"
 description = "2-D vectors"
 
 [[versions]]
 version = "1.0.0"
-url     = "https://github.com/schivei/mc-geo/archive/refs/tags/v1.0.0.tar.gz"
+url     = "https://github.com/minicompiler/mc-geo/archive/refs/tags/v1.0.0.tar.gz"
 strip   = 1
 sha256  = "<the tree hash of that tag's checkout>"
 deps    = ["mathx 1.0.0"]
 
 [[versions]]
 version = "1.2.0"
-url     = "https://github.com/schivei/mc-geo/archive/refs/tags/v1.2.0.tar.gz"
+url     = "https://github.com/minicompiler/mc-geo/archive/refs/tags/v1.2.0.tar.gz"
 strip   = 1
 sha256  = "..."
 deps    = ["mathx 1.1.0"]

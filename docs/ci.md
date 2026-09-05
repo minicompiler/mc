@@ -13,7 +13,7 @@ is still `macos-15`.
 **Development happens on pull requests, and every merged pull request cuts a version.** There is
 no `VERSION` file and no release day: merging is what creates the tag, and the tag is what builds
 the release. The contributor-facing half of that is
-[CONTRIBUTING.md](https://github.com/schivei/mc/blob/main/CONTRIBUTING.md); the machinery is here.
+[CONTRIBUTING.md](https://github.com/minicompiler/mc/blob/main/CONTRIBUTING.md); the machinery is here.
 
 | workflow | trigger | machine | what it does |
 |---|---|---|---|
@@ -522,7 +522,7 @@ mc v0.1.1
 
 #12 M12: structs, taught from the surface
 
-https://github.com/schivei/mc/pull/12
+https://github.com/minicompiler/mc/pull/12
 ```
 
 That annotation is the release body (`release.yml` reads it back), which is why the pull request's
@@ -676,7 +676,7 @@ Deployment uses `actions/configure-pages`, `actions/upload-pages-artifact` and
 
 ## Repository settings
 
-**These are already applied on `schivei/mc`.** They are written down so that a fork, or a
+**These are already applied on `minicompiler/mc`.** They are written down so that a fork, or a
 re-created repository, knows what the workflows assume.
 
 1. **Pages source = GitHub Actions** — Settings -> Pages -> Build and deployment -> Source:
@@ -696,7 +696,7 @@ re-created repository, knows what the workflows assume.
    about, and the squash subject is the one that carries `(#N)`.
 
    ```sh
-   gh api -X PATCH repos/schivei/mc \
+   gh api -X PATCH repos/minicompiler/mc \
      -F allow_squash_merge=true \
      -F allow_merge_commit=false \
      -F allow_rebase_merge=false \
@@ -742,7 +742,7 @@ design are in that one pair of settings.
 The exact call, for the architect to run:
 
 ```sh
-gh api -X PUT repos/schivei/mc/branches/main/protection --input - <<'JSON'
+gh api -X PUT repos/minicompiler/mc/branches/main/protection --input - <<'JSON'
 {
   "required_status_checks": {
     "strict": false,
@@ -782,7 +782,7 @@ resolve). Add them if the project ever gains outside contributors.
 Verify it took, and read it back later, with:
 
 ```sh
-gh api repos/schivei/mc/branches/main/protection \
+gh api repos/minicompiler/mc/branches/main/protection \
   --jq '{checks: .required_status_checks.contexts, strict: .required_status_checks.strict,
          admins: .enforce_admins.enabled, approvals: .required_pull_request_reviews.required_approving_review_count,
          force: .allow_force_pushes.enabled, deletions: .allow_deletions.enabled}'
@@ -795,7 +795,7 @@ gh api repos/schivei/mc/branches/main/protection \
 There is no procedure. **Merging a pull request is the procedure.**
 
 1. Open the pull request, with the release label if the change is not a patch
-   ([CONTRIBUTING.md](https://github.com/schivei/mc/blob/main/CONTRIBUTING.md)). `ci.yml` runs on
+   ([CONTRIBUTING.md](https://github.com/minicompiler/mc/blob/main/CONTRIBUTING.md)). `ci.yml` runs on
    it.
 2. The owner merges it, by squash.
 3. `autotag.yml` finds the pull request behind the squash commit, reads its labels, computes the

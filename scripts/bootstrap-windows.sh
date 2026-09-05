@@ -26,8 +26,8 @@
 #      with scripts/link-windows.sh when the .exe is not there yet
 #   4. a release asset, downloaded and checksum-verified:
 #
-#        https://github.com/schivei/mc/releases/download/vVER/mc-VER-windows-ARCH.tar.gz
-#        https://github.com/schivei/mc/releases/download/vVER/mc-VER-windows-ARCH.tar.gz.sha256
+#        https://github.com/minicompiler/mc/releases/download/vVER/mc-VER-windows-ARCH.tar.gz
+#        https://github.com/minicompiler/mc/releases/download/vVER/mc-VER-windows-ARCH.tar.gz.sha256
 #
 #      with ARCH = arm64 | x86_64. `gh release download` is used when the GitHub
 #      CLI is on PATH; otherwise `curl -fsSL` fetches both files and the tarball
@@ -43,7 +43,7 @@
 #
 # No "set -e": every step checks its own exit code and says what failed.
 
-repo="${MC_SEED_REPO:-schivei/mc}"
+repo="${MC_SEED_REPO:-minicompiler/mc}"
 harch=""
 while [ $# -gt 0 ]; do
     case "$1" in

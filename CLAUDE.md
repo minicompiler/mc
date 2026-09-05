@@ -1729,7 +1729,7 @@ agents (`.claude/agents/`): `stage0-dev` (C23), `mc-dev` (`.mc` code), `reviewer
   instead of three. `src/pkg.mc` (1387) in the new part `<mc/core_pkg>` (`src/core_pkg.mc`):
   the index reader (`<registry>/index/<name>.toml`, `--registry URL|DIR`, `[registry].url`,
   default `https://minicompiler.dev/registry` -- **the owner decided the same day that a package
-  SERVER at minicompiler.dev, in the private `schivei/mc-registry`, PRODUCES this exact layout
+  SERVER at minicompiler.dev, in the private `minicompiler/mc-registry`, PRODUCES this exact layout
   from public git URLs validated in the sandbox; the compiler gains no client code**), MVS with
   the two-majors refusal and yanked rows skipped, the lock WRITER (sorted, `lib`/`deps` from the
   archive's own `mc.toml`, `sha256` the tree hash), the archive fetch in M25's order (download,

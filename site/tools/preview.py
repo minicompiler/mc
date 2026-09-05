@@ -102,7 +102,7 @@ def main():
         "prev_title": "",
         "next_url": "/preview/404.html",
         "next_title": "One file, one binary",
-        "edit_url": "https://github.com/schivei/mc/edit/main/docs/guide/getting-started.md",
+        "edit_url": "https://github.com/minicompiler/mc/edit/main/docs/guide/getting-started.md",
     }))
 
     (OUT / "404.html").write_text(page("404.html", {

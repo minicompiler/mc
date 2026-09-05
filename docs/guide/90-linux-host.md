@@ -15,7 +15,7 @@ cross-built on macOS, and after one bootstrap the machine is self-sufficient.
 ## 1. In five commands
 
 ```sh
-git clone https://github.com/schivei/mc && cd mc
+git clone https://github.com/minicompiler/mc && cd mc
 sudo apt-get install -y lld musl-dev musl-tools     # or: apk add lld musl-dev
 export MC_SYSROOT=/usr/lib/aarch64-linux-musl       # x86_64-linux-musl on x86-64
 scripts/bootstrap-linux.sh                          # fetches the seed, reaches the fixed point
@@ -26,8 +26,8 @@ make check                                          # the Linux subset
 cross-built compiler, § 4) and otherwise downloads a release asset:
 
 ```
-https://github.com/schivei/mc/releases/download/v<VER>/mc-<VER>-linux-<arch>.tar.gz
-https://github.com/schivei/mc/releases/download/v<VER>/mc-<VER>-linux-<arch>.tar.gz.sha256
+https://github.com/minicompiler/mc/releases/download/v<VER>/mc-<VER>-linux-<arch>.tar.gz
+https://github.com/minicompiler/mc/releases/download/v<VER>/mc-<VER>-linux-<arch>.tar.gz.sha256
 ```
 
 with `<arch>` = `arm64` or `x86_64`. With the GitHub CLI on `PATH` it uses `gh release download`,

@@ -1,7 +1,7 @@
 # mc
 
-[![CI](https://github.com/schivei/mc/actions/workflows/ci.yml/badge.svg)](https://github.com/schivei/mc/actions/workflows/ci.yml)
-[![Site](https://github.com/schivei/mc/actions/workflows/site.yml/badge.svg)](https://github.com/schivei/mc/actions/workflows/site.yml)
+[![CI](https://github.com/minicompiler/mc/actions/workflows/ci.yml/badge.svg)](https://github.com/minicompiler/mc/actions/workflows/ci.yml)
+[![Site](https://github.com/minicompiler/mc/actions/workflows/site.yml/badge.svg)](https://github.com/minicompiler/mc/actions/workflows/site.yml)
 
 **A compiler small enough to read, written in itself.**
 

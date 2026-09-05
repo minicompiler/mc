@@ -22,7 +22,7 @@ is a **minimum**, not a pin — and the usual way to write it is not to write it
 $ mc pkg add geo --yes
 add geo 1.2.0 -> myproject/mc.toml
 fetch  geo 1.2.0
-url    https://github.com/schivei/mc-geo/archive/refs/tags/v1.2.0.tar.gz
+url    https://github.com/minicompiler/mc-geo/archive/refs/tags/v1.2.0.tar.gz
 sha256 ba1924dc0d40b458...
 into   /Users/me/.mc/libs/geo/v1.2.0/
 package geo 1.2.0 -> /Users/me/.mc/libs/geo/v1.2.0/
