@@ -15,7 +15,6 @@
 
 extern i64 posix_spawnp(uptr pid, uptr file, uptr fa, uptr attr, uptr av, uptr envp);
 extern i64 waitpid(i64 pid, uptr status, i64 options);
-extern uptr _NSGetEnviron();
 
 i64 ck_bad = 0;
 uptr ck_files;                        // every html file written, in page order
@@ -71,6 +70,10 @@ void ck_link(uptr page, uptr href) {
     i64 sch = u_scheme(href);
     if (sch == U_SCHEME_BAD) { ck_err(page, "refused link scheme", href); return; }
     if (sch == U_SCHEME_ABS) return;
+    // A [site].nav_extra route: a page of the server that serves this domain,
+    // not of this generator. It is matched by its exact configured URL and by
+    // nothing else, so a typo elsewhere is still a broken link.
+    if (sl_has(sg_extra_url, href)) return;
     if (ld8(href) == '#') {
         if (!sl_has(ck_ids(page), href + 1)) ck_err(page, "fragment with no target", href);
         return;
@@ -116,7 +119,7 @@ void ck_page(uptr path) {
 i64 ck_spawn(uptr av) {
     u8 pid[8];
     st64(pid, 0);
-    if (posix_spawnp(pid, ld64(av), 0, 0, av, ld64(_NSGetEnviron())) != 0) return 0 - 1;
+    if (posix_spawnp(pid, ld64(av), 0, 0, av, ms_envp) != 0) return 0 - 1;
     u8 st[8];
     st64(st, 0);
     waitpid(ld64(pid), st, 0);

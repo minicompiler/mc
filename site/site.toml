@@ -45,6 +45,20 @@ repo      = ".."
 # index page, so the links in the header never land on the 404 page.
 nav = ["guide", "reference", "examples", "internals", "specs"]
 
+# Header links mcsite does NOT render a page for: they are routes of the
+# registry server that serves this domain. Each name below is a [navlink.<name>]
+# table; with this key absent the header is exactly the three sections and
+# `mcsite --check` keeps treating every other unrendered URL as a broken link.
+nav_extra = ["packages", "login"]
+
+[navlink.packages]
+title = "Packages"
+url   = "/packages"
+
+[navlink.login]
+title = "Sign in"
+url   = "/login"
+
 [section.guide]
 title = "Guide"
 dir   = "guide"

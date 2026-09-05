@@ -24,6 +24,13 @@
 #include <mc/toml>
 #include <prelude>
 
+// The host layer: the shape of `struct dirent`, which is all mcsite needs from
+// the system it runs on that is not the same on macOS and on Linux. There is no
+// site_host.mc next to this file -- the choice is made from OUTSIDE, by
+// `[include].paths` in site/mc.toml (gen/macos) or site/mc.linux.toml
+// (gen/linux), the way examples/conc picks its thread layer.
+#include "site_host.mc"
+
 #include "util.mc"
 #include "hl.mc"
 #include "md.mc"
@@ -37,7 +44,11 @@ void ms_usage() {
     out_str(2, "  --check  validate internal links and run site/tools/*.py\n");
 }
 
-i64 main(i64 argc, uptr argv) {
+// envp is the third parameter both C runtimes pass and the only portable way to
+// reach the environment: mcsite hands it to posix_spawnp when --check runs the
+// two Python checkers (site/gen/util.mc, ms_envp).
+i64 main(i64 argc, uptr argv, uptr envp) {
+    ms_envp = envp;
     uptr dir = 0;
     i64 check = 0;
     i64 i = 1;
