@@ -1,0 +1,18 @@
+# written by `mc pkg sync` -- do not edit (docs/reference/packages.md)
+
+[[package]]
+name        = "net"
+version     = "1.0.0"
+lib         = "net.mc"
+sha256      = "9d6edd57c57128e970bd4a2d0c0078cf41800989d748fc5f4a9643df1841ec25"
+deps        = []
+permissions = ["net"]
+
+[[package]]
+name        = "tool"
+version     = "0.1.0"
+kind        = "tool"
+bin         = "hello-tool"
+sha256      = "14d2e51aac436390e4ddb27b793eb44567c4194096f715850d26261a34d58d6b"
+deps        = []
+permissions = ["fs.read workspace", "net"]

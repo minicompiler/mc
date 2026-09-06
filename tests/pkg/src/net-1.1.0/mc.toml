@@ -1,0 +1,16 @@
+# net 1.1.0 -- the same library, one permission WIDER: it now wants to run a
+# shell. That is the case § 4.3's accept rule exists for -- a set that is not a
+# subset of the accepted one stops `mc pkg sync` until it is read and accepted.
+[package]
+name  = "net"
+files = ["net.mc"]
+lib   = "net.mc"
+
+[[permission]]
+kind   = "net"
+reason = "sends what it measured to a collector"
+
+[[permission]]
+kind   = "exec"
+name   = "sh"
+reason = "runs the collector's own uploader"

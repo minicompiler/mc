@@ -130,6 +130,67 @@ answer per platform already is.
 and `mc build`, `mc pkg hash` and `mc pkg sync` behave exactly as they do without it. It does take
 part in the tree hash, like every other byte of `mc.toml`.
 
+### The kind: library or tool
+
+A package's kind is written in exactly one place, `[project]`:
+
+| the package's `mc.toml` | kind |
+|---|---|
+| `[package]` and no `[project]` | library |
+| `[package]` + `[project] kind = "obj"` | library that also builds an object of its own |
+| `[package]` + `[project] kind = "exe"` | **tool**: a program to install and run, not a tree to compile into yours |
+| `[package]` + `[project]` with no `kind` line | refused: `a package's [project] must say kind = "obj" or "exe"` |
+
+The last row is refused because `mc build` defaults `kind` to `exe`, so a library that carries a
+`[project]` for its own tests would silently be classified as a program. A tool also carries
+`[package].bin`, the name it takes in `~/.mc/bin` -- `[a-z][a-z0-9_-]*`, at most 32 bytes, the one
+name in a manifest that may have a hyphen, because it is a file name and not an identifier --
+defaulting to the basename of `[project].out`. `[package].licence` is an SPDX identifier the
+registry shows; the compiler reads it only to compare an index row against the archive it claims
+to describe.
+
+A tool is named under `[tools]`, never under `[deps]`, and a library the other way round; the
+registry publishes the kind and `mc pkg sync` refuses the wrong table by name.
+
+### `[[permission]]` -- what a package asks to be allowed to do
+
+```toml
+[[permission]]
+kind   = "fs.read"
+path   = "workspace"
+reason = "reads the sources it is asked about"
+
+[[permission]]
+kind = "exec"
+name = "mc"
+```
+
+| kind | key | the fixed sentence a developer reads |
+|---|---|---|
+| `fs.read` | `path` | may read files under PATH |
+| `fs.write` | `path` | may create, change and delete files under PATH |
+| `net` | -- | may open network connections to any host and port |
+| `exec` | `name` | may run the program NAME found on your PATH |
+| `env` | `name` | may read the environment variable NAME |
+
+`path` is one of four forms and never an absolute path: `workspace` (the directory the tool is run
+from), `tmp`, `workspace/<rel>` or `home/<rel>`, with `<rel>` under the same containment rule
+`[package].files` entries obey. At most 32 rows; no rows at all means **stdio only**. `reason` is
+at most 120 bytes, is shown and never compared.
+
+Each row becomes one canonical line -- `fs.read workspace`, `net`, `exec mc` -- and the set,
+duplicates collapsed and sorted bytewise, is what the index row carries, what `mc pkg sync` prints
+before it fetches anything and what the lock records (§ 4). A wrong kind, a path on `net`, a name
+on `fs.read`, a path that escapes: each is refused at the offending key's own `file:line:col`, and
+a tree whose manifest is refused during a fetch never gets a cache manifest, so the next build
+says `is not fetched` rather than reading it.
+
+> **What was checked, and what was not.** These permissions were declared by each package's author
+> and checked by the registry where the package runs a test; a library runs inside your program and
+> is held to nothing at run time. `mc` prints that sentence with the table, and it does not say
+> "safe": it says what was checked. What enforces a TOOL's set is the sandbox `mc tool run` puts it
+> in, which is a later milestone.
+
 **A package never defines `user_init`.** It exports `<name>_init()` and the project's own module
 calls it, because a compiler holds exactly one `user_init` and the order of initialisation is the
 project's decision:
@@ -150,21 +211,36 @@ runs of `sync` write the same bytes:
 ```toml
 # written by `mc pkg sync` -- do not edit (docs/reference/packages.md)
 [[package]]
-name    = "geo"
-version = "1.2.0"
-lib     = "geo.mc"
-sha256  = "ba1924dc...9776f"
-deps    = ["mathx"]
+name        = "geo"
+version     = "1.2.0"
+lib         = "geo.mc"
+sha256      = "ba1924dc...9776f"
+deps        = ["mathx"]
+permissions = []
 
 [[package]]
-name    = "mathx"
-version = "1.0.0"
-lib     = "mathx.mc"
-sha256  = "374cae18...f1398"
-deps    = []
+name        = "hello_tool"
+version     = "0.1.0"
+kind        = "tool"
+bin         = "hello-tool"
+sha256      = "14d2e51a...58d6b"
+deps        = []
+permissions = ["fs.read workspace", "net"]
 ```
 
 `deps` is the edge list § 5 reads. `lib` is what a bare `<geo>` means. `sha256` is the tree hash.
+
+`kind` and `bin` are written for a **tool** only, so a row without `kind` is a library -- which is
+what every row of every lock written before tools existed says, and why those locks read exactly as
+they did. A tool's row registers no include root and its tree is never opened by a build.
+
+`permissions` is the set this project has **accepted**, in canonical form and sorted; it is written
+for every row, including as `[]`. Before it rewrites the lock, `mc pkg sync` compares each
+package's set with the old lock's row of the same name, whatever version that row pinned: a set
+that is not a subset of the accepted one has to be read and accepted again, a row the old lock does
+not carry at all was never accepted, and a row with no `permissions` key -- a lock written before
+the key existed -- is an empty accepted set. So a dependency whose new version adds `net` prints
+and stops, and one that drops a permission is silent.
 
 **The lock is checked, not trusted**: `mc build` rehashes every locked package on **every** build
 and refuses on any disagreement. A dependency's source is about to be lexed anyway.
@@ -499,11 +575,44 @@ nothing was downloaded: re-run with --yes
 
 `mc` has no `isatty`, so there is no prompt — the plan is the prompt.
 
+### The install table
+
+After selection and **before a byte is downloaded**, `mc pkg sync|add|update` print what they would
+fetch and, when something in the build list asks for a permission the current lock does not already
+record as accepted (§ 4), the permission table with it:
+
+```
+fetch  hello_tool 0.1.0      tool  bin hello-tool
+url    https://example.invalid/hello_tool-0.1.0.tar.gz
+sha256 14d2e51a...58d6b
+into   /home/me/.mc/libs/hello_tool/v0.1.0/
+
+permissions
+  hello_tool 0.1.0 fs.read workspace     may read files under the directory it is run from
+                   net                   may open network connections to any host and port
+  mathx 1.0.0      (none: stdio only)
+these permissions were declared by each package's author and checked by the registry where the package runs a test; a library runs inside your program and is held to nothing at run time
+tools required by this project
+  hello_tool >= 0.1.0
+nothing was downloaded: re-run with --yes to fetch and to accept the permissions above
+```
+
+The set shown is the **index row's**, so it is on the screen before anything is fetched; the set
+written into the lock is the tree's own, after the fetch, and the two cannot disagree without the
+tree hash disagreeing first. A row that is a library and asks for something carries
+`(declared by the author; a library runs inside your program)` under it, for the reason the trust
+box in § 3 gives.
+
+`--yes` accepts what was printed; there is no second flag, and the lock diff in the project's git
+history is the review record. A `sync` with nothing at all to download but an unaccepted, non-empty
+set stops the same way; a package that asks for nothing never turns a silent `sync` into one that
+needs `--yes`.
+
 ### The lock writer
 
 `mc pkg sync` writes every row from the tree it just resolved, never from the index's claim about
-it: `version` is what selection chose, `lib` and `deps` come out of the package's **own**
-`mc.toml`, and `sha256` is the tree hash of what is on the disk. A `[replace]`d package gets a
+it: `version` is what selection chose, `lib`, `deps`, the kind, `bin` and `permissions` come out of
+the package's **own** `mc.toml`, and `sha256` is the tree hash of what is on the disk. A `[replace]`d package gets a
 `path` line and no hash (§ 7). Rows nothing requires are dropped, because the lock is written from
 the build list and from nothing else.
 
@@ -522,8 +631,12 @@ the pull request. It refuses:
 
 * a `[package].name` outside the name rule (§ 6) or a reserved one — `mc` above all;
 * a row with no `url`, no `sha256`, or a `sha256` that is not 64 hex characters;
-* with `--yes`, a row whose **archive** disagrees with it: the tree hash, the package name, or the
-  set of `[deps]` — `the archive requires a package the row does not list: mathx`;
+* with `--yes`, a row whose **archive** disagrees with it: the tree hash, the package name, the
+  set of `[deps]` — `the archive requires a package the row does not list: mathx` — or any of the
+  five keys a row carries about the manifest: `kind`, `bin`, `licence`, `permissions` and `tools`
+  (`the row's permissions are not the archive's`). A row is what a consumer reads before fetching
+  anything, so a row that under-declares its archive is a row asking for consent to the wrong
+  thing;
 * against the registry's current copy, any edit to a published row except adding `yanked = true`:
   `mc: plot 1.0.0: a published row was edited: only yanked = true may be added`, and
   `a published version was removed` for a row that vanished.

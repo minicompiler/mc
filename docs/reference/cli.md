@@ -315,7 +315,7 @@ HTTP and no TLS in this language — and it and `mc pkg` are the **only** two th
 ```
 mc pkg sync   [DIR] [--config FILE] [--yes] [--registry URL|DIR] [--libs-dir DIR]
 mc pkg add    NAME[@VERSION] [DIR] [--config FILE] [--yes] [--registry URL|DIR] [--libs-dir DIR]
-mc pkg list   [DIR] [--config FILE] [--libs-dir DIR]
+mc pkg list   [DIR] [--config FILE] [--long] [--libs-dir DIR]
 mc pkg vendor [DIR] [--config FILE] [--libs-dir DIR]
 mc pkg verify [DIR] [--config FILE] [--libs-dir DIR]
 mc pkg hash   DIR
@@ -329,9 +329,9 @@ from its `mc.lock` and its `deps/` tree.
 
 | subcommand | Go analogue | what it does |
 |---|---|---|
-| `sync` | `go mod tidy` + `go mod download` | read `[deps]`, read the index rows it needs, run minimal version selection, fetch the trees that are missing, write `mc.lock`. Rows nothing requires are dropped |
+| `sync` | `go mod tidy` + `go mod download` | read `[deps]` and `[tools]`, read the index rows they need, run minimal version selection, print the permissions anything new asks for, fetch the trees that are missing, write `mc.lock`. Rows nothing requires are dropped |
 | `add NAME[@VERSION]` | `go get pkg@v` | write one `[deps]` line — the newest non-yanked version when there is no `@` — then `sync` |
-| `list` | `go list -m all` | one line per lock row: name, version, the first 12 characters of the hash, and `vendored`/`cache`/`path`. No absolute path, so it is a golden |
+| `list` | `go list -m all` | one line per lock row: name, version, the first 12 characters of the hash, `vendored`/`cache`/`path`/`tool`, and the permissions the lock records as accepted (`stdio` when there are none). No absolute path, so it is a golden |
 | `vendor` | `go mod vendor` | copy each locked tree into `deps/<name>/` — `mc.toml` plus `[package].files` — then verify |
 | `verify` | `go mod verify` | rehash every locked tree and check it against `mc.lock`; exit 0 or 2 |
 | `hash DIR` | `dirhash.Hash1` | print the tree hash of a checkout: what a registry row's `sha256` has to carry |
@@ -340,7 +340,8 @@ from its `mc.lock` and its `deps/` tree.
 
 | flag | meaning |
 |---|---|
-| `--yes` | actually download. Without it, anything that would fetch prints the plan — source, expected tree hash, destination — says `nothing was downloaded: re-run with --yes` and exits 0. There is no prompt: `mc` has no `isatty` |
+| `--yes` | actually download, **and accept the permissions printed with the plan**. Without it, anything that would fetch prints the plan — source, expected tree hash, destination — says `nothing was downloaded: re-run with --yes` and exits 0. There is no prompt: `mc` has no `isatty`. When a package in the build list asks for a permission the current `mc.lock` does not already record as accepted, the plan carries the permission table too, the last line becomes `nothing was downloaded: re-run with --yes to fetch and to accept the permissions above`, and `sync` stops there even when there is nothing to download |
+| `--long` | `mc pkg list` only: under each row, the reason each permission was declared for, read out of the package's own tree |
 | `--registry URL\|DIR` | where the index lives, instead of `[registry].url` or the default `https://pkg.minicompiler.dev`. A directory is read in place; a URL is fetched into `<libs>/index/<name>.toml`, the offline snapshot |
 | `--libs-dir DIR` | where installed packages live, instead of `~/.mc/libs`. `mc build` takes it too, so no CI job depends on `HOME` |
 | `--config FILE` | the project file, instead of `DIR/mc.toml` |

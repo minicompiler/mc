@@ -4220,6 +4220,177 @@ agents (`.claude/agents/`): `stage0-dev` (C23), `mc-dev` (`.mc` code), `reviewer
   result before you restore" beside it), `docs/reference/bundle.md` § `<float>` (what the two
   machines map, the four conversions named). No message was added, so
   `docs/reference/diagnostics.md` is untouched.
+- M48 C1 ✔ (`docs/specs/M48.md` § 1, § 4.2, § 4.3, § 1.8 + its § Implementation notes -- C1;
+  acceptance § 9 items 2 and 3): **`[[permission]]`, `[tools]` and the kind, read by the compiler
+  and recorded in the lock.** `stage0/` untouched (2848/3000). Nothing is enforced here and nothing
+  is installed: C1 is the FORMAT -- what a manifest may say, what an index row carries, what
+  `mc pkg sync` shows before it fetches, and what `mc.lock` records as accepted. The sandbox
+  primitives (C2) and `mc tool` (C3) are the milestones that make a permission bite.
+  * **The kind is `[project]`'s and is written nowhere else** (`dep_kind_of`, `src/deps.mc`):
+    no `[project]` -- every package published or fixtured so far, `mc`'s own root manifest
+    included -- or `kind = "obj"` is a library; `kind = "exe"` is a tool; a `[project]` with no
+    `kind` line is refused at its own position with `a package's [project] must say kind = "obj"
+    or "exe"`, because `mc build` defaults that key to `exe` and a library carrying a `[project]`
+    for its tests would otherwise be classified as a program to install. `[package].bin`
+    (`[a-z][a-z0-9_-]*`, <= 32 bytes -- the one name in a manifest that may carry a hyphen,
+    because it is a FILE name) defaults to the basename of `[project].out`.
+  * **`[[permission]]`** (`dep_perm_line`/`dep_read_perms`): five kinds (`fs.read`, `fs.write`,
+    `net`, `exec`, `env`), four path forms (`workspace`, `tmp`, `workspace/<rel>`, `home/<rel>`,
+    with `<rel>` through the existing `dep_rel_ok` -- one containment rule for every path in every
+    manifest), at most 32 rows, `reason` at most 120 bytes. **No absolute path is ever accepted.**
+    Each row becomes one canonical line, duplicates collapse, the set is sorted bytewise
+    (`dep_str_lt`, which `pkg_name_lt` now calls too). Every refusal is at the offending key's own
+    `file:line:col` inside the PACKAGE's mc.toml, and the kind is asked FIRST, so `fs.delete` is
+    an unknown kind and not "a kind that takes no path".
+  * **`[tools]` is `[deps]`' shape and the same MVS graph** -- a tool's own `[deps]` are libraries
+    -- but what it names is a program. `deps_apply` validates the NAME at its position and does
+    nothing else (a project whose only table is `[tools]` reads no lock and opens no file);
+    `pkg_read_deps` turns the rows into requirements with `SL_TOOL` marking which table asked, and
+    that mark is the lock's `kind` and the "tools required by this project" block. A name in both
+    tables, a library under `[tools]` (`net: is a library: name it under [deps]`) and a tool under
+    `[deps]` are each refused.
+  * **A tool registers no include root** (§ 4.3, D24). `dep_read_lock` used to register one root
+    per lock row, index-parallel with the package table; the two stop being parallel and `PK_ROOT`
+    is the map, **-1 for a tool**, edges to a tool dropped, `deps_apply` skipping the row whole --
+    no resolve, no hash, no open. `libs_open` and `pkg_vendor` answer for it the same way.
+  * **The install table** (§ 4.2): after MVS and before any download, the plan carries a
+    `permissions` block with ONE fixed sentence per kind, the `(declared by the author; a library
+    runs inside your program)` caveat on a library row, the trust sentence risk 4 words, the
+    `tools required by this project` block, and
+    `nothing was downloaded: re-run with --yes to fetch and to accept the permissions above`.
+    The set shown is the INDEX ROW's -- on the screen before a byte is fetched -- and the set
+    written into the lock is the fetched TREE's; the two cannot disagree without the tree hash
+    disagreeing first.
+  * **The accept rule** (§ 4.3): before rewriting the lock, each package's set is compared with the
+    OLD lock's row of the same name, whatever version it pinned. Not a subset -> unaccepted; a name
+    the old lock lacks -> unaccepted; a row with no `permissions` key -- every lock written before
+    this milestone -- is an EMPTY ACCEPTED SET, which is what makes `tests/pkg/*/mc.lock` read as
+    they did. A `sync` with nothing to download but an unaccepted set also stops.
+    **Deviation, on record** (§ Implementation notes 4): the block is printed only when at least
+    one unaccepted set is NON-EMPTY, and it then lists every unaccepted row, `(none: stdio only)`
+    included -- read literally, § 4.2 would make the first `sync` of every existing project print
+    "to accept the permissions above" where there is nothing to accept. Measured consequence:
+    `tests/pkg/sync`'s plan is byte for byte what it was.
+  * **The lock** gains `kind` (tools only), `bin` (tools only) and `permissions` (always, sorted,
+    `[]` included), and every key of a row is padded to 11 -- the width of `permissions`.
+    `mc pkg list` gains the permissions column (`stdio` or the canonical set) and `tool` as the
+    road of a row no build opens; `mc pkg list --long` prints the reasons, read out of the TREES
+    and never out of the lock.
+  * **`mc pkg check` re-derives five more keys from the archive** (`kind`, `bin`, `licence`,
+    `permissions`, `tools`): a row is what a consumer reads before fetching, so an under-declared
+    row asks for consent to the wrong thing. Both sets are canonical and sorted, so equality is
+    position by position. A manifest refused DURING a fetch is refused before the tree is blessed
+    (`pkg_read_meta`, called after the hash and before `pkg_write_manifest`), so the next build
+    says `is not fetched` and not "a package that says something impossible".
+  -- cost (`git diff --numstat` on `src/`, the generated `src/bundle_data.mc` excluded):
+  `deps.mc` **+291/-7**, `pkg.mc` **+497/-37** = **788 added lines, 580 of them neither comment nor
+  blank**, against the spec's +90/+170. The excess is named in § Implementation notes 1: the lock
+  writer's re-alignment (~30 changed lines), `pkg_check_archive`'s five new comparisons (~45, not
+  priced at all) and the permission block's five small functions (~90, because "fixed text per
+  kind" means the text lives in one place). **Globals unchanged at 443/512 (86%)**: every new table
+  is a field in `dp` (`PK_KIND`, `PK_NPERM`, `PK_PERMS`, `PK_ROOT`) or in `pk` (`PKS_NACC`,
+  `PKS_ACC`, `PKS_LONG`, seven `VR_*` columns).
+  New: `tests/pkg/src/tool-0.1.0` (`kind = "exe"`, `bin = "hello-tool"`, `licence`, `fs.read
+  workspace` + `net`), `tests/pkg/src/net-1.0.0` (a LIBRARY declaring `net`) and `net-1.1.0` (the
+  same, plus `exec sh` -- the accept rule's case), `tests/pkg/perm` (the project, with `obj.toml`
+  and `notools.toml`, its `mc.lock.expect`); `scripts/check-pkg.sh` +261/-3, section 31, **94/94 ->
+  114/114**.
+  -- `make bundle` re-run BEFORE bootstrapping (`src/deps.mc` and `src/pkg.mc` are bundled as
+  `mc/deps` and `mc/pkg`): 93 files, raw 1229830 -> LZ 571389, blob 572551 B. `make check` green
+  end to end (**RC 0, zero FAIL**): `budget` 2848/3000, `test` 32/32, `check-lex` 163/163
+  (3 skipped), `check-ast`/`check-asm` 164/164, `check-obj` **32/32 identical to the frozen seed**,
+  `check-bundle`, `bootstrap` at a fixed point (`mc2.o == mc3.o`, 1319608 bytes; the `--dump-asm`
+  diff between `mc1` and `mc2` is **empty**), `check-surface` 32/32 + inert, `test-exe` 32/32,
+  `check-mc` 15/15, `check-standalone`, `check-parts`, `check-toml` 10/10, `check-build` 53/53,
+  **`check-pkg` 114/114**, `check-stubs` 9/9, `check-sysroots` (13 rows), **`check-limits` 17/17
+  under 90% (globals 443/512, 86%)**, `check-minimal`, `test-linux` 41/41 and `test-linux-x86_64`
+  39/39, the four `--exe` cells 44/44 + 44/44 + 42/42 + 42/42, `test-windows` 42/42 and
+  `test-windows-x86_64` 40/40 objects cross-compiled and linked, `check-examples`, `check-lang`,
+  `check-conc`, `check-desktop`, `check-float`, `check-wide`, `check-kernel`, `check-avr`,
+  `test-sandbox` 60 ok / 0 failed / 1 skipped, `check-docs` (**199 symbols, 37 flags, 31 TOML keys**,
+  10 directives, 51 samples, 386 links), `site` 92 pages + `check-site` 0 link problems +
+  `check-site-linux` 11/11. `make check-linux-host` RC 0 over all four cells (aarch64 musl 41/41
+  and gnu 42/42, x86_64 musl 39/39 and gnu 40/40), each after its own `mc2l.o == mc3l.o` and with
+  the cross proof against the macOS `build/mc2.o` green.
+  `scripts/check-inert.sh build/mc1.pre build/mc1` (pre = a `mc1` built from `origin/main`
+  900c569): **33 objects identical** (`tests/*.mc` and `src/mc.mc`) plus byte-identical artefacts
+  for `examples/api`, `lang`, `conc`, `desktop` and `kernel` -- nothing in the corpus declares a
+  permission or a tool, so nothing it emits could move.
+  The five goldens rewritten **once**, each only after its own criterion: `mc2.sha256`
+  `38470e10...d6de2a` -> `352aad73b7c55d088db6ab92d478837976507d1d815becdadba9a24fd42d8670`
+  (after the empty `--dump-asm` diff and `cmp build/mc2.o build/mc3.o`); the Linux pair deleted and
+  re-recorded by `make check-linux-host` -- `mc2-linux-arm64.sha256`
+  `b9a6ce760bf977381ddf522db22f25f75d7980de1bd08036a884d94e7688902c`,
+  `mc2-linux-x86_64.sha256`
+  `b4e93acd1bd1427e7394dbe8cf7de75f7989c70d5eb9b4a8f92dfd4293ab98fb`, each recorded in its musl
+  cell and re-verified by the gnu cell of the same architecture; the Windows pair cross-computed
+  per `tests/golden/README.md` -- `mc2-windows-arm64.sha256`
+  `fbaa14ba79f307f39c839d6acc5303755f78107ff84a0940834e4eb093162ad4` (1347580 B),
+  `mc2-windows-x86_64.sha256`
+  `1d16fdb7e6c08c07a9e5882d2ae51eeb0496ffa93312c4375553eb9b050ee590` (1386828 B), both also
+  written byte for byte by `build/mc2`.
+  Two goldens re-recorded once and each line explained (§ Implementation notes 8):
+  `tests/pkg/sync/mc.lock.expect` (every key re-padded 8 -> 11 columns, each row gains
+  `permissions = []`) and `tests/golden/pkg-list.txt` (each line gains one word, `stdio`).
+  The four hand-written `tests/pkg/*/mc.lock` were deliberately NOT re-recorded: they are the
+  compatibility case, and `check-pkg` asserts that they still carry neither key and that the chain
+  builds with them.
+  Docs: `docs/specs/M48.md` (the spec verbatim, both amendments, + § Implementation notes -- C1),
+  `docs/reference/packages.md` (§ 3 the kind, `bin`, `licence` and `[[permission]]` with the trust
+  box; § 4 the lock's three new keys and the accept rule; § 10 the install table and the five keys
+  `mc pkg check` compares), `docs/reference/toml.md` (`[tools]`, `package.bin`, `package.licence`,
+  `[[permission]]`, the kind rule), `docs/reference/cli.md` (`--long`, `--yes`'s second meaning,
+  the `list` and `sync` rows), `docs/reference/diagnostics.md` (ten new rows).
+- M48 C1 rebased onto `origin/main` 0648e1a (PR #43, the typed `callp` cast + `<float>`'s arm64
+  single-precision conversions) and the five goldens re-recorded once. **No source file
+  conflicted**: the two milestones do not overlap in code -- #43 is `src/gen_resolve.mc`,
+  `src/gen_walk.mc` and the two float machines, C1 is `src/deps.mc` and `src/pkg.mc` -- so the
+  only conflicts were `CLAUDE.md` § State (both entries kept, main's callp entry first, then C1's)
+  and the six generated/aggregated files, discarded on both sides and regenerated:
+  `src/bundle_data.mc` (`make bundle` re-run FIRST -- 93 files, raw 1232623 -> LZ 572748, blob
+  573910 B) and the five `tests/golden/*.sha256`. `docs/reference/cli.md` and
+  `docs/reference/diagnostics.md` auto-merged (#43 touched neither: it added no message and its
+  docs are `language.md`/`machine.md`/`bundle.md`).
+  `make check` green end to end on the merged tree (**RC 0, zero FAIL**, 11m07s): `budget`
+  2848/3000, `test` 32/32, `check-lex` 163/163 (3 skipped), `check-ast`/`check-asm` 164/164
+  (2 skipped), `check-obj` **32/32 identical to the frozen seed**, `check-bundle` (reproducible +
+  fresh), `bootstrap` at a fixed point (`mc2.o == mc3.o`, 1321352 bytes; the `--dump-asm` diff
+  between `mc1` and `mc2` is **empty**), `check-surface` 32/32 + 178 ok lines + inert, `test-exe`
+  32/32, `check-mc` **16/16** (#43's `096-callp-i32` among them), `check-standalone`,
+  `check-parts`, `check-toml` 10/10, `check-build` 53/53, **`check-pkg` 114/114**, `check-stubs`
+  9/9, `check-sysroots` (13 rows), **`check-limits` 17/17 under 90% (globals 443/512, 86%)**,
+  `check-minimal`, `test-linux` 42/42 and `test-linux-x86_64` 40/40, the four `--exe` cells 45/45
+  (aarch64 musl) + 45/45 (aarch64 gnu) + 43/43 (x86_64 musl) + 43/43 (x86_64 gnu), `test-windows`
+  43/43 objects and 43 linked, `test-windows-x86_64` 41/41 and 41 linked, `check-examples`,
+  `check-lang` 18, `check-conc` 21, `check-desktop`, **`check-float` ok on all five legs with
+  #43's tests in the tree** (macos/aarch64 16/16, linux/aarch64 16/16, linux/x86_64 16/16,
+  windows/aarch64 14/14 objects, windows/x86_64 14/14, 2 skipped each) and the sweep at
+  **60 (mach-o arm64), 60 (elf aarch64), 249 (elf x86_64), 232 (coff x86_64), 0 mismatches**,
+  `check-wide`, `check-kernel`, `check-avr`, `test-sandbox` 60 ok / 0 failed / 1 skipped,
+  `check-docs` (199 symbols, 37 flags, 31 TOML keys, 10 directives, 52 samples, 388 links),
+  `site` 92 pages + `check-site` + `check-site-linux` 11/11.
+  `make check-linux-host` RC 0 over all four cells (aarch64 musl: suite 42/42, `check-obj` 31/31,
+  `check-mc` 12/12, `test-exe` 31/31 via `--exe --libc=musl`, `check-limits` 17/17; aarch64 gnu
+  43/43 native; x86_64 musl 40/40, 29/29, `check-obj` 29/29; x86_64 gnu 41/41 native), each after
+  its own `mc2l.o == mc3l.o` (1659584 B and 1555936 B) and with the cross proof
+  (`mc2l --backend=macho src/mc.mc` byte for byte the macOS `build/mc2.o`) green.
+  `scripts/check-inert.sh <mc1 from origin/main 0648e1a> build/mc1`: **33 objects identical**
+  (`tests/*.mc` and `src/mc.mc`) plus byte-identical artefacts for `examples/api`, `lang`, `conc`,
+  `desktop` and `kernel` -- C1 declares no permission and no tool in the corpus, so nothing the
+  compiler emits could move.
+  The five goldens rewritten **once**, each only after its own criterion: `mc2.sha256`
+  `831e6eba566c169edf191eb39f841012d1f46e22da6cc1fb2aee686bce0a4cb1` (after the empty
+  `--dump-asm` diff and `cmp build/mc2.o build/mc3.o`); the Linux pair deleted and re-recorded by
+  `make check-linux-host` -- `mc2-linux-arm64.sha256`
+  `275428778d0be9c9006841abe0af5cd3d6e3f533bf8f8f54c5e242c83e32ec3e`,
+  `mc2-linux-x86_64.sha256`
+  `adcdaa39db9f670b3b355416d705f0ad05697a2f3cf866e4be75c1349a342c03`, each recorded in its musl
+  cell and re-verified by the gnu cell of the same architecture; the Windows pair cross-computed
+  per `tests/golden/README.md` -- `mc2-windows-arm64.sha256`
+  `a87935d902824b19f6ff460ec110efbc49b0ddaf6f41f89809fc5fcf52c4a6d6` (1349340 B),
+  `mc2-windows-x86_64.sha256`
+  `b7eee4078bdd1d79da19a4508f7c1825600becd7fff0b171f0a087e6726003af` (1388708 B), both also
+  written byte for byte by `build/mc2`.
 - Next: the **site + registry server, M47 S4-S6**, in `minicompiler/mc-registry`; then **M44 steps 4-5**
   (slim / install / upgrade), then **M42 step 2** (PE `--exe`, CI-gated on the Windows runners).
   **M46** only on the owner's request; **M43 Layer 2** after 1.0.0. M13 and M18 stay in the backlog

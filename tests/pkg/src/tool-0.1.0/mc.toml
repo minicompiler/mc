@@ -1,0 +1,25 @@
+# tool 0.1.0 -- a TOOL: `[project] kind = "exe"` is the whole of the kind rule
+# (M48 § 1.1), and `bin` is the name it would take in ~/.mc/bin (§ 1.2).
+# `mc pkg sync` locks it with `kind = "tool"`, registers no include root for it
+# and never opens its tree at build time; installing and running it is `mc tool`
+# (M48 C3), which does not exist yet.
+[package]
+name    = "tool"
+bin     = "hello-tool"
+licence = "MIT"
+files   = ["main.mc"]
+
+[project]
+name  = "hello-tool"
+entry = "main.mc"
+out   = "build/hello-tool"
+kind  = "exe"
+
+[[permission]]
+kind   = "fs.read"
+path   = "workspace"
+reason = "reads the sources it is asked about"
+
+[[permission]]
+kind   = "net"
+reason = "asks the registry what the newest version is"
