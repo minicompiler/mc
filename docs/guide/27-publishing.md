@@ -259,21 +259,27 @@ $ mc pkg add geo --yes
 $ mc build myproject
 ```
 
-One thing worth knowing while it is true: `mc pkg`'s **compiled-in** default registry is
-`https://minicompiler.dev/registry` (`pkg_default_registry()` in `src/pkg.mc`), a path this
-registry's server does not actually serve — the live layout is `https://pkg.minicompiler.dev`, with
-`/index/<name>.toml` at the root of that host, no `/registry` path segment. Until the compiler's
-default is updated to match, name the registry explicitly:
+No `--registry` is needed: `mc pkg`'s **compiled-in** default is
+`https://pkg.minicompiler.dev` (`pkg_default_registry()` in `src/pkg.mc`), the registry's
+canonical host, and `mc pkg` reads `<registry>/index/<name>.toml` — so `https://pkg.minicompiler.dev/index/geo.toml`.
+
+A compiler older than 0.15.6 has the earlier default, `https://minicompiler.dev/registry`. That
+one keeps working: the site host answers `/registry/index/<name>.toml` with the registry host's
+own bytes — same generator, same `application/toml`, same cache policy, same 404 — so nothing
+pinned to an older toolchain is stranded. It is an alias for the index and nothing else; the
+archives are named by each row's own `url`.
+
+To point `mc pkg` at a different registry — a private tap, a mirror, a directory — name it:
 
 ```console
-$ mc pkg sync --registry https://pkg.minicompiler.dev --yes
+$ mc pkg sync --registry https://pkg.example.com --yes
 ```
 
 or, once, in `mc.toml`:
 
 ```toml
 [registry]
-url = "https://pkg.minicompiler.dev"
+url = "https://pkg.example.com"
 ```
 
 `mc pkg check` — what the registry itself runs to validate an index row — and every other `mc pkg`

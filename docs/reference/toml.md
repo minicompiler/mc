@@ -304,7 +304,7 @@ lock at all and every `<name>` resolves exactly as it did before packages existe
 `[registry].url` is where `mc pkg` looks a name up, and it takes a URL **or a directory**: a
 private registry is a `git clone` of a tap plus one line here, at no cost in code. `--registry` on
 the command line wins over it, and with neither the default is
-`https://minicompiler.dev/registry`. Nothing in `mc build` ever reads it — the network side is
+`https://pkg.minicompiler.dev`. Nothing in `mc build` ever reads it — the network side is
 `mc pkg`'s alone.
 
 A replaced package is not pinned and not hashed, and the build says so on stdout

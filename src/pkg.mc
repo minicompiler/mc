@@ -40,7 +40,13 @@
 // this constant and the reader below: there is no API client here, no JSON and
 // no search. A private registry is a directory or any URL with the same layout,
 // which is why `--registry` and `[registry].url` take either.
-uptr pkg_default_registry() { return "https://minicompiler.dev/registry"; }
+//
+// The host is `pkg.minicompiler.dev`, which is the registry's canonical name:
+// the archive and index URLs the rows themselves carry point there, and the
+// site is a different half of the same server. `minicompiler.dev/registry` --
+// what this constant said until 0.15.5 -- keeps answering the index as an
+// alias, so a project pinned to an older compiler is not stranded.
+uptr pkg_default_registry() { return "https://pkg.minicompiler.dev"; }
 
 // ---- the state: one arena record, so this file costs one global ----
 #define PKS_REG      0                 // the registry, URL or directory
