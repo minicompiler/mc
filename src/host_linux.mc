@@ -76,6 +76,75 @@ uptr host_home() {
 uptr host_downloader()     { return "curl"; }
 uptr host_downloader_alt() { return "wget"; }
 
+// M48 C2: the first executable called `name` on this host's PATH, as an
+// absolute path, or 0 when there is none. It is what `mc sandbox --bin PROG`
+// resolves before the box exists -- once I has unshared and pivoted, the
+// host's PATH names nothing.
+//
+// It is in the host layer and not in src/sandbox.mc for the reason host_home()
+// is: the environment is the host's, and so is the separator that splits this
+// variable (':' here, ';' on Windows). A name that already contains a slash is
+// a path and is answered as one, which is what execvp does.
+//
+// `open`, `close` and c_int are the compiler's own (src/arena.mc), which this
+// file may name because a call is bound after the whole unit is parsed -- the
+// same reason host_home() may call mem_eq(). The test is "can it be opened for
+// reading", which is what the box needs of it: it is about to be bound
+// read-only and executed, and a directory would fail the bind.
+//
+// The c_int() around each open() is not decoration and it was measured (M48 C2,
+// the review): `open` returns a C `int`, and on glibc 2.39/aarch64 a failing one
+// comes back as 0x00000000ffffffff -- the low word is -1 and the high word is
+// zero -- so a raw `fd >= 0` answers TRUE for a file that is not there. Without
+// it this function returned the FIRST entry of PATH with the name appended,
+// existing or not, and the box then died binding it (`cannot bind a --bin
+// program: ENOENT`). glibc 2.43 and musl sign-extend the same result and hide
+// the defect; this is the same class as the `lex_readable` miss of M43 step D
+// (docs/reference/language.md § 6).
+uptr host_which(uptr name) {
+    if (name == 0) return 0;
+    if (ld8(name) == 0) return 0;
+    i64 i = 0;
+    loop {
+        i64 c = ld8(name + i);
+        if (c == 0) break;
+        if (c == '/') {
+            i64 fd = c_int(open(name, 0, 0));
+            if (fd < 0) return 0;
+            close(fd);
+            return name;
+        }
+        i = i + 1;
+    }
+    uptr e = host_environ();
+    if (e == 0) return 0;
+    uptr path = 0;
+    i = 0;
+    loop {
+        uptr s = ld64(e + i * 8);
+        if (s == 0) break;
+        if (mem_eq(s, "PATH=", 5)) { path = s + 5; break; }
+        i = i + 1;
+    }
+    if (path == 0) return 0;
+    i64 n = cstrlen(path);
+    i64 start = 0;
+    i = 0;
+    loop {
+        if (i > n) break;
+        if (i == n || ld8(path + i) == ':') {
+            if (i > start) {
+                uptr cand = tm_cat(tm_cat(xstrdup(path + start, i - start), "/"), name);
+                i64 fd = c_int(open(cand, 0, 0));
+                if (fd >= 0) { close(fd); return cand; }
+            }
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
 // M43: the raw system-call shim. Every system call the sandbox issues goes
 // through here, because `prctl`, `syscall` and `clone` are VARIADIC in musl and
 // this project refuses a variadic extern (M5.6), and because `seccomp`,

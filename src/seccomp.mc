@@ -262,6 +262,12 @@ i64 sb_filter_apply(i64 step) {
         sb_prof_add(sbp_program());
         if (gnu) sb_prof_add(sbp_gnu_program());
     }
+    // M48 C2: two measured deltas, each added only when the flag that needs it
+    // was given (scripts/sandbox-trace.sh writes both). The net one is what a
+    // socket costs; the spawn one is what running another program costs BESIDE
+    // the process-creating calls themselves, which are never in any profile.
+    if (sb_net()) sb_prof_add(sbp_net);
+    if (sb_nbin()) sb_prof_add(sbp_spawn);
     i64 mode = SB_CLONE_PROF;
     if (sb_threads()) {
         sb_prof_add(sbp_threads);
@@ -312,7 +318,17 @@ i64 sb_landlock_apply() {
     mem_zero(sb_llattr(), 24);
     st64(sb_llattr(), fs);
     i64 sz = 8;
-    if (abi >= 4) { st64(sb_llattr() + 8, LL_NET_ALL); sz = 16; }
+    // M48 C2: with --allow=net the box KEPT the host's network namespace, so a
+    // ruleset that handles the network and grants nobody anything would refuse
+    // exactly what the flag was asked for. The field is handled and empty
+    // without the flag, and not handled at all with it -- Landlock restricts
+    // only what a ruleset says it handles.
+    if (abi >= 4) {
+        i64 net = LL_NET_ALL;
+        if (sb_net()) net = 0;
+        st64(sb_llattr() + 8, net);
+        sz = 16;
+    }
     if (abi >= 6) { st64(sb_llattr() + 16, LL_SCOPE_ALL); sz = 24; }
 
     i64 rs = sb_sys(SN_LANDLOCK_CREATE_RULESET, sb_llattr(), sz, 0, 0, 0, 0);
@@ -335,7 +351,23 @@ i64 sb_landlock_apply() {
     if (rc >= 0) rc = sb_ll_rule(rs, "/etc/ld.so.cache", LL_READ_FILE);
     i64 i = 0;
     while (i < sb_nro() && rc >= 0) {
-        rc = sb_ll_rule(rs, tm_cat("/ro", tm_num_str(i)), LL_READ_ONLY);
+        rc = sb_ll_rule(rs, sb_box_ro_at(i), LL_READ_ONLY);
+        i = i + 1;
+    }
+    // M48 C2, and the grant is the mount's own answer in each case: a --rw
+    // directory and a --tmp get the full filesystem mask this kernel knows,
+    // because they are the writable pair's equals; a --bin program gets
+    // EXECUTE|READ_FILE and nothing else, because it is a FILE and a rule on a
+    // file may not carry READ_DIR (the EINVAL that shaped LL_FILE_EXEC).
+    i = 0;
+    while (i < sb_nrw() && rc >= 0) {
+        rc = sb_ll_rule(rs, sb_rw_at(i), fs);
+        i = i + 1;
+    }
+    if (rc >= 0 && sb_tmp()) rc = sb_ll_rule(rs, "/tmp", fs);
+    i = 0;
+    while (i < sb_nbin() && rc >= 0) {
+        rc = sb_ll_rule(rs, sb_box_bin_at(i), LL_FILE_EXEC);
         i = i + 1;
     }
     if (rc < 0) { sb_sys(SN_CLOSE, rs, 0, 0, 0, 0, 0); return rc; }
@@ -512,9 +544,20 @@ i64 sb_path_ok(uptr p) {
     if (sb_under(p, "/usr")) return 1;
     i64 i = 0;
     while (i < sb_nro()) {
-        if (sb_under(p, tm_cat("/ro", tm_num_str(i)))) return 1;
+        if (sb_under(p, sb_box_ro_at(i))) return 1;
         i = i + 1;
     }
+    // M48 C2: the roots the six primitives added. They are the same strings
+    // the mount used and the same ones Landlock granted -- one answer per
+    // root, read here, in sb_landlock_apply and in sb_build_tree, so the
+    // sentence and the walls can never disagree about where the box ends.
+    i = 0;
+    while (i < sb_nrw()) {
+        if (sb_under(p, sb_rw_at(i))) return 1;
+        i = i + 1;
+    }
+    if (sb_tmp() && sb_under(p, "/tmp")) return 1;
+    if (sb_nbin() && sb_under(p, "/bin")) return 1;
     // The dynamic loader's own configuration files. They do not exist in the
     // box -- there is no /etc -- and the loader opens them before a single
     // instruction of the program runs, so refusing them would refuse every

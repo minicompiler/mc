@@ -169,6 +169,22 @@ run_case() {   # run_case NAME FILE OPTS WANT_EXIT WANT_REPORT CHECK_STDOUT
 
 # ---- 2. the isolation cases ------------------------------------------------
 echo "-- isolation"
+# The three things the M48 C2 cases need from the HOST, and they are outside
+# the repository on purpose: `--rw` binds writably, so what the box writes
+# lands on the host's disk and the acceptance rule "nothing under the
+# repository is newer than the marker" has to stay true. /tmp is where a
+# scratch directory belongs, and this script owns these three names.
+# The modes are not decoration: the CI job runs this script twice on the same
+# machine, once as root and once unprivileged, and a directory the root cell
+# left behind would otherwise be one the unprivileged cell cannot write.
+rm -rf /tmp/mc-c2-rw /tmp/mc-c2-ro /tmp/mc-c2-up.txt /tmp/mc-c2.txt 2>/dev/null
+mkdir -p /tmp/mc-c2-rw /tmp/mc-c2-ro
+chmod 0777 /tmp/mc-c2-rw /tmp/mc-c2-ro 2>/dev/null
+echo "ro" > /tmp/mc-c2-ro/hello.txt
+chmod 0666 /tmp/mc-c2-ro/hello.txt 2>/dev/null
+MC_C2_ENV=hello
+export MC_C2_ENV
+
 procs_before=$(ls /proc | grep -c '^[0-9]')
 mem_before=$(awk '/^MemAvailable:/ {print int($2 / 1024)}' /proc/meminfo)
 
@@ -197,11 +213,33 @@ for f in tests/sandbox/*.mc; do
 
     # the same source with other options, when the header asks for it
     if has_hdr sandbox-alt-exit "$f"; then
-        want_out=
+        # the same three lookups the main run makes -- a refusal names a system
+        # call NUMBER, and the alt half of tests/sandbox/nettrip.mc is one
+        alt_rep=$(hdr "sandbox-alt-report-$arch-$libc" "$f")
+        [ -n "$alt_rep" ] || alt_rep=$(hdr "sandbox-alt-report-$arch" "$f")
+        [ -n "$alt_rep" ] || alt_rep=$(hdr sandbox-alt-report "$f")
+        want_out=$(hdr sandbox-alt-stdout "$f")
         run_case "$name (alt)" "$f" "$(hdr sandbox-alt-opts "$f")" \
-                 "$(hdr sandbox-alt-exit "$f")" "$(hdr sandbox-alt-report "$f")" 1
+                 "$(hdr sandbox-alt-exit "$f")" "$alt_rep" 1
     fi
 done
+
+# What `--rw` did OUTSIDE the box, which is the only thing that can prove a
+# writable bind is writable: tests/sandbox/rwtree.mc wrote /tmp/mc-c2-rw/w.txt
+# inside, and that file has to be here, with those bytes -- while
+# /tmp/mc-c2-up.txt, one directory up, must not exist at all.
+if [ "$(cat /tmp/mc-c2-rw/w.txt 2>/dev/null)" = "written by the box" ]; then
+    say_ok "--rw: the box's bytes are on the host"
+else
+    say_fail "--rw: /tmp/mc-c2-rw/w.txt is not what the box wrote"
+    ls -l /tmp/mc-c2-rw 2>&1 | sed 's/^/     /'
+fi
+if [ -e /tmp/mc-c2-up.txt ]; then
+    say_fail "--rw: the box wrote one directory up (/tmp/mc-c2-up.txt exists)"
+else
+    say_ok "--rw: nothing was written one directory up"
+fi
+rm -rf /tmp/mc-c2-rw /tmp/mc-c2-ro /tmp/mc-c2-up.txt /tmp/mc-c2.txt 2>/dev/null
 
 # ---- 2b. a hostile project: the fork bomb in the COMPILE step --------------
 # The reproduction of the post-M43 review's first finding (docs/specs/M43.md
@@ -246,12 +284,12 @@ mem_after=$(awk '/^MemAvailable:/ {print int($2 / 1024)}' /proc/meminfo)
 # (measured on PR #27: 153 -> 166, then 154 -> 177, with nothing of the box's
 # among them). It is printed for the record and no longer judged.
 survivors=$(cat /proc/[0-9]*/comm 2>/dev/null \
-    | grep -c -E '^(forkbomb|sleeper|forever|bomb|nsclone|nsclone3|eightgib|shadow|connect|clean|rocwd|libcuser)$')
+    | grep -c -E '^(forkbomb|sleeper|forever|bomb|nsclone|nsclone3|eightgib|shadow|connect|clean|rocwd|libcuser|rwtree|nettrip|binexec|envread|atpath|tmpwrite)$')
 if [ "$survivors" = 0 ]; then
     say_ok "no process of the box survives on the host (global count $procs_before -> $procs_after, informational)"
 else
     say_fail "$survivors process(es) of the box survive on the host"
-    cat /proc/[0-9]*/comm 2>/dev/null | grep -E '^(forkbomb|sleeper|forever|bomb|nsclone|nsclone3|eightgib|shadow|connect|clean|rocwd|libcuser)$' | sort | uniq -c | sed 's/^/     /'
+    cat /proc/[0-9]*/comm 2>/dev/null | grep -E '^(forkbomb|sleeper|forever|bomb|nsclone|nsclone3|eightgib|shadow|connect|clean|rocwd|libcuser|rwtree|nettrip|binexec|envread|atpath|tmpwrite)$' | sort | uniq -c | sed 's/^/     /'
 fi
 # a 64 MiB window: the machine is doing other things, and 8 GiB is not 64 MiB
 mem_lost=$((mem_before - mem_after))

@@ -1,0 +1,15 @@
+accept
+accept4
+bind
+connect
+getpeername
+getsockname
+getsockopt
+listen
+recvfrom
+recvmsg
+sendmsg
+sendto
+setsockopt
+shutdown
+socket

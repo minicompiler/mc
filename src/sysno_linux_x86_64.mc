@@ -138,7 +138,22 @@ u16 sysno_tab[] = {
      25,        // SN_MREMAP
      19,        // SN_READV
      57,        // SN_FORK
-     58         // SN_VFORK
+     58,        // SN_VFORK
+    // M48 C2: the sockets half. accept4 is 288, far from the block at 41..55.
+     50,        // SN_LISTEN
+     43,        // SN_ACCEPT
+    288,        // SN_ACCEPT4
+     44,        // SN_SENDTO
+     45,        // SN_RECVFROM
+     46,        // SN_SENDMSG
+     47,        // SN_RECVMSG
+     54,        // SN_SETSOCKOPT
+     55,        // SN_GETSOCKOPT
+     51,        // SN_GETSOCKNAME
+     52,        // SN_GETPEERNAME
+     48,        // SN_SHUTDOWN
+     53,        // SN_SOCKETPAIR
+     20         // SN_WRITEV
 };
 
 // the number of SN_*, or -1 when this architecture has no such call

@@ -455,6 +455,24 @@ for the shadow space and the `[rbp+48]` offsets, against a real seven-argument k
 The `callp` pointer, `#opcode`, the `frame too large` bound and the division caveats are all
 exactly as § 4b states them.
 
+### A call frame costs 32 bytes more here than anywhere else
+
+The shadow space is reserved by the CALLER and held across the `call`, so a function that recurses
+pays it once per level on top of its own frame. For a function with a 64-byte frame that is
+8 (the return address) + 8 (the saved `rbp`) + 64 + 32 = **112 bytes per level**, against the
+**80** the same function costs under AAPCS64 (`stp x29, x30` + the frame) and under System V
+(§ 4b, no shadow space) — 40% more.
+
+That is not a bug and nothing in the machine can avoid it; it is written down because it makes
+`windows/x86_64` the host where a deep recursion in the COMPILER runs out of stack first, and the
+compiler is linked with the linker's default 8 MiB reserve on every Windows target. It was measured
+the hard way: `fold` (`src/parse.mc`) used to recurse on the sibling chain, so a global array
+initializer cost one frame per element, and `src/bundle_data.mc` — whose `u64 bundle_blob[] = { … }`
+is one such chain — crossed 74000 elements and overflowed. The ceiling on every other host was
+~104000, so windows/x86_64 saw it first by exactly that 40%. `fold` walks siblings with a loop
+since; `scripts/check-mc.sh` generates a 150000-element chain and compiles it with the host
+compiler, which fails on every host without that change.
+
 ---
 
 ## The division caveat

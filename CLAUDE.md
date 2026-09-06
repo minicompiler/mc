@@ -4391,6 +4391,318 @@ agents (`.claude/agents/`): `stage0-dev` (C23), `mc-dev` (`.mc` code), `reviewer
   `mc2-windows-x86_64.sha256`
   `b7eee4078bdd1d79da19a4508f7c1825600becd7fff0b171f0a087e6726003af` (1388708 B), both also
   written byte for byte by `build/mc2`.
+- M48 C2 ✔ (`docs/specs/M43.md` § Implementation notes -- the C2 primitives; the M48 spec § 3.4,
+  § 6.1): **six sandbox primitives -- `--rw`, `--ro --at-path`, `--tmp`, `--allow=net`, `--bin`,
+  `--env`.** Each is a mount, a namespace, an environment entry or a profile row, and not one of
+  them knows what a permission is; what a package's `[[permission]]` rows map onto them is C3's
+  question. They apply to `mc sandbox run` and to `exec` alike -- they are properties of the box
+  and the box is one box, so for `run` the compile step sees them too -- and only the counters
+  distinguish the steps. `stage0/` untouched (2848/3000).
+  1. **`--rw DIR`**: bound WRITABLE at its own absolute path (`sb_mkdir_p` makes every component
+     on the box tmpfs, then `MS_BIND|MS_REC` and *no* read-only remount), Landlock's full
+     filesystem mask on it, and a root the supervisor counts. **`--rw /` and `--rw $HOME` are
+     refused and there is no flag that lifts it** -- the decision the task left open: the only
+     caller is a derived permission set that can never legitimately hand it either, and a mistake
+     that hands it one is `rm -rf` with a sandbox's name on it. `--ro /` is not refused (reading
+     is what that flag is for).
+  2. **`--at-path`**: every `--ro DIR` at its own absolute path instead of `/ro0`. One flag for
+     the invocation, because a caller that speaks host paths speaks them for all of them.
+     Without it the numbering is byte for byte what it was.
+  3. **`--tmp`**: one `mkdir`. The box's root already IS the tmpfs, so the directory is already
+     writable, already counted against `--out` and already dies with the box; what the flag adds
+     beside it is the Landlock grant and the root.
+  4. **`--allow=net`**: the one `unshare` asks for five namespaces instead of six
+     (`SB_CLONE_BOX_NET`), the Landlock ruleset stops *handling* the network (handling it and
+     granting nothing would refuse exactly what was asked for), and the measured net delta joins
+     the profile.
+  5. **`--bin PROG`**: `host_which(PROG)` walks the host's `PATH` (new, in the host layer, as the
+     task asked -- the environment is the host's and so is the separator; macOS and Windows answer
+     0 and say why, since `mc sandbox` refuses on both before it could ask), the program is bound
+     read-only at `/bin/<basename>`, `PATH=/bin`, Landlock `EXECUTE|READ_FILE` on the file, the
+     spawn delta, and the run step's counters move to **16** processes and **1 + nbin** execve's
+     (`RLIMIT_NPROC` follows at 32, looser than the counted 16, so the named refusal arrives
+     before the kernel's EAGAIN).
+  6. **`--env NAME`**: `NAME=<the host's value>` in the box's environment; a variable the host does
+     not have arrives **empty**, which is not an error -- a `--env` that stopped the box would
+     make every optional setting of a tool mandatory.
+  **Zero new state globals** (the task's constraint): three flags and three lists became fields of
+  `sb_state`, and `SB_ENV` grew from three slots to sixteen, shifting every offset after it by 104
+  bytes. `check-limits` reports **globals 445/512 (86%)** against 443 -- the two are `sbp_net` and
+  `sbp_spawn`, the GENERATED profile tables, the same kind of data `sbp_threads` already was.
+  **One string per root**: `sb_box_ro_at(i)` is read by the mount, by the Landlock rule and by
+  `sb_path_ok`, and `sb_resolve_paths()` rewrites the three lists with absolute answers in P
+  before the fork -- so the two walls and the sentence cannot disagree about where the box ends.
+  **The two deltas are measured, never typed**, and they are ONE file each --
+  `tools/sandbox/net.list` and `tools/sandbox/spawn.list`, shared across (architecture, libc),
+  because that is how `sbp_net`/`sbp_spawn` are consumed and because a shared name answers what
+  `--check` compares against on a host that could never write its own copy. Always unioned, never
+  replaced. Measured: **net 15** (`accept accept4 bind connect getpeername getsockname getsockopt
+  listen recvfrom recvmsg sendmsg sendto setsockopt shutdown socket`), **spawn 6** (`clone clone3
+  getuid pipe2 read wait4`, of which `clone`/`clone3` go into the table as a COMMENT -- no profile
+  allows a call that makes a process; what is left is `wait4` for both libcs plus `getuid`,
+  `pipe2` and `read` for musl, whose `posix_spawn` makes a pipe and reads the child's errno out of
+  it). The net probe is `tests/sandbox/nettrip.mc` ITSELF, so the profile is measured over exactly
+  the program the suite then runs in the box; the spawn probe is a `posix_spawn` program the
+  script writes, because `binexec.mc` forks (below) and `posix_spawn` is the wider measurement.
+  **A defect the new cases found and fixed**: writing a file through stdio was `refused: syscall
+  29 (ioctl)` on **every musl host** -- musl's `__fdopen` asks `ioctl(TIOCGWINSZ)` of a writable
+  stream and its `__stdio_write` is a `writev`, and every `fopen` in the traced corpus was a READ.
+  The `libc.mc` probe gained a write-mode `fopen`/`fwrite`/`fclose` and
+  `tools/sandbox/aarch64-musl-program.list` gained `ioctl` and `writev`. **Not fixed for
+  `x86_64-musl`**: no host reachable from this Mac can trace it (see the cells below), the CI
+  runners are glibc, and one `--union` run on such a host fixes it with the FAIL message already
+  saying so.
+  **`tests/sandbox/binexec.mc` forks rather than `posix_spawn`s, measured**: glibc's `clone3` is
+  refused as `process limit (0)` and musl's `posix_spawn` makes a pipe first and is refused as
+  `syscall 59 (pipe2)`, so the expectation would have needed a line per (arch, libc), one of which
+  is unmeasurable here. A fork is a fork on both.
+  New: `tests/sandbox/rwtree.mc` (ONE run proves both halves -- the file it writes is found ON THE
+  HOST by the script, and one directory up is `refused: open /tmp/mc-c2-up.txt`; a refused call
+  never returns, so `rw ok` is the whole of its stdout), `nettrip.mc`, `binexec.mc`, `envread.mc`,
+  `atpath.mc`, `tmpwrite.mc`, each with an allowed run and a refused one. `scripts/test-sandbox.sh`
+  gained `sandbox-alt-stdout` and the arch/libc lookups for `sandbox-alt-report` that the main run
+  already had, plus the three `/tmp/mc-c2-*` fixtures (outside the repository, because `--rw`
+  writes for real and acceptance 6 says nothing under it may be newer than the marker; `chmod
+  0777`, because CI runs the same script unprivileged and then as root on one machine).
+  -- cost (`git diff --numstat` on `src/`, the generated `src/bundle_data.mc` excluded):
+  `sandbox.mc` +271/175 (about 30 of those the renumbered `#define` offsets), `sandbox_box.mc`
+  +95/52, `host_linux.mc` +59/43, `seccomp.mc` +46/28, `sysno.mc` +33/19,
+  `sysno_linux_aarch64.mc` +17/15, `sysno_linux_x86_64.mc` +16/15, `host_macos.mc` and
+  `host_windows.mc` +9/1 each = **555 added lines, 349 of them neither comment nor blank**; plus
+  `scripts/sandbox-trace.sh` +113, `scripts/test-sandbox.sh` +42 and the generated
+  `sandbox_profiles.mc` +36.
+  **Cells measured** (the x86_64 ones could not be run -- the VPS is production and Docker
+  Desktop's amd64 emulation reports `landlock: absent / seccomp: notif absent / pidfd: absent`,
+  with `strace` decoding nothing): linux/aarch64 **glibc 2.43** on Ubuntu 26.04 / kernel 7.0.0-30
+  (Lima `mc-k7`), **root** and **unprivileged** (`kernel.apparmor_restrict_unprivileged_userns`
+  flipped to 0 and restored to 1) -- `test-sandbox` **73 ok, 0 failed, 1 skipped** in each,
+  against 60 before; linux/aarch64 **musl** on Alpine 3 under `docker run --privileged` --
+  **71 ok, 0 failed, 3 skipped**. `sh scripts/sandbox-trace.sh --check` green on all three cells,
+  both directions, only `note` lines. Box cost unchanged (5.5-6.9 ms per box on the Lima cell).
+  -- `make bundle` re-run BEFORE bootstrapping: 93 files, raw 1222681 -> LZ 570028, blob 571190 B.
+  `make check` green end to end (**RC 0, zero FAIL**): `test` 32/32, `check-lex` 163/163
+  (3 skipped), `check-ast`/`check-asm` 164/164, `check-obj` **32/32 identical to the frozen seed**,
+  `check-bundle` (lz round trip 117 cases), `bootstrap` at a fixed point (`mc2.o == mc3.o`,
+  1304504 bytes; the `--dump-asm` diff between `mc1` and `mc2` is **empty**), `check-surface`
+  32/32 + inert, `test-exe` 32/32 via `--exe`, `check-mc`, `check-standalone`, **`check-parts`**
+  (the parts + `<mc/main>` == `<mc/core>`, 1304504 B; `<mc/core_min>` + `<mc/core_sandbox>` stands
+  alone), `check-toml`, `check-build`, **`check-pkg` 94/94**, `check-stubs`, `check-sysroots`,
+  **`check-limits` 17/17 under 90% (globals 445/512, 86%)**, `check-minimal`, `test-linux` 41/41
+  and `test-linux-x86_64` 39/39, the four `--exe` cells 44/44 + 44/44 + 42/42 + 42/42,
+  `test-windows` 42/42 objects (42 linked) and `test-windows-x86_64` 40/40 (40 linked),
+  `check-examples`, `check-lang`, `check-conc`, `check-desktop`, `check-float`, `check-wide`,
+  `check-kernel`, `check-avr`, **`test-sandbox` 73 ok / 0 failed / 1 skipped**, `check-docs`
+  (**200 symbols, 41 flags**, 27 TOML keys, 10 directives, 51 samples, 385 links), `site` 91 pages
+  + `check-site` + `check-site-linux` 11/11.
+  `scripts/check-inert.sh build/mc1.pre build/mc1` (pre = a `mc1` built from `origin/main`
+  900c569): **33 objects identical** (`tests/*.mc` and `src/mc.mc`) plus byte-identical artefacts
+  for `examples/api`, `lang`, `conc`, `desktop` and `kernel` -- nothing in the corpus writes one of
+  the six flags, so nothing it emits could move.
+  `make check-linux-host` RC 0 over all four cells (aarch64 musl 41/41 and gnu 42/42, x86_64 musl
+  39/39 and gnu 40/40), each after its own `mc2l.o == mc3l.o` and with the cross proof against the
+  macOS `build/mc2.o` green.
+  The five goldens rewritten **once**, each only after its own criterion: `mc2.sha256`
+  `38470e10...d6de2a` -> `76bd29dea48262c113e33c59686dcb97b2daa371f6a136b250c1039e778ab0cd`
+  (after the empty `--dump-asm` diff and `cmp build/mc2.o build/mc3.o`); the Linux pair deleted and
+  re-recorded by `make check-linux-host` -- `mc2-linux-arm64.sha256`
+  `dab7d5d92b32b8268254cb0e2b4ee6e7dd23499f228628c142d70a75bed3b4b7`,
+  `mc2-linux-x86_64.sha256`
+  `a2c7ebc8373b8bbbf64f58c8a3725fa90dd81f1be058f8211888e78ee078a1db`, each recorded in its musl
+  cell and re-verified by the gnu cell of the same architecture; the Windows pair cross-computed
+  per `tests/golden/README.md` -- `mc2-windows-arm64.sha256`
+  `7aeff614274168d9b8178015bffeed23d671c4806b3a259106ba8b03504c2be1` (1331611 B),
+  `mc2-windows-x86_64.sha256`
+  `6ce0b9705b4a3eaaf98ee89a55ff8d596a5101e2db33124e56139c2bf6dfd354` (1369763 B), both also
+  written byte for byte by `build/mc2`.
+  Docs: `docs/reference/sandbox.md` § The primitives (new) plus the tree, the profiles and the
+  interface, `docs/reference/cli.md` § 3c (six rows and the four refusals),
+  `docs/guide/99-sandbox.md` § 5 "Letting a little of the world in" (the later sections
+  renumbered), `docs/reference/hooks.md` (`host_which()`), `docs/specs/M43.md`.
+  **The CI fix (both sandbox cells failed on PR #44, and the three local cells could not see it):**
+  `host_which` tested a candidate with a raw `open(cand, 0, 0) >= 0`, and `open` returns a C
+  `int` -- on **glibc 2.39**, which is what `ubuntu-24.04-arm` and `ubuntu-latest` run, a failing
+  one comes back as `0x00000000ffffffff`, so the test was TRUE for a file that is not there and
+  the function answered the FIRST entry of `PATH` with the name appended. `--bin true` resolved to
+  `/usr/local/sbin/true`, which does not exist, and the box died binding it: `sandbox: cannot bind
+  a --bin program: ENOENT`, exit 126. The fix is `c_int()` at both `open` sites in
+  `src/host_linux.mc` (+13/-3, 2 of them code) -- the same M45 D8 class as the `lex_readable` miss
+  of M43 step D, and the last two `open`s in `src/` that were still raw. Reproduced first in
+  `docker run --privileged --platform linux/arm64 ubuntu:24.04` (glibc 2.39, merged-usr, the
+  runner's shape), where `strace` shows `openat("/usr/local/sbin/true") = -1 ENOENT` and then
+  `mount("/usr/local/sbin/true", ...) = -1 ENOENT`; a probe compiled against each libc gives
+  `raw lo32=4294967295 hi32=0 raw fd>=0:1 c_int fd>=0:0` on glibc 2.39 (**aarch64 and x86_64**)
+  and `hi32=4294967295 fd>=0:0` on glibc 2.43 and on musl -- which is exactly why Lima (Ubuntu
+  26.04, glibc 2.43) and `alpine:3` were green. Cells after the fix: ubuntu:24.04 container
+  **root 72 ok / 0 failed / 2 skipped** and **unprivileged 72 ok / 0 failed / 2 skipped** (the two
+  skips are `032-svc`'s own header and the `readelf` the container has not; CI installs binutils
+  and gets 73/1), Lima glibc 2.43 **root and unprivileged 73 ok / 0 failed / 1 skipped**,
+  `alpine:3` musl **71 ok / 0 failed / 3 skipped** -- `binexec` and `binexec (alt)` ok in every
+  one. The x86_64 box still cannot be run from this Mac (Docker Desktop's amd64 emulation reports
+  `landlock: absent / seccomp: notif absent / pidfd: absent`), but the defect and the fix are the
+  glibc int-return ABI in ONE shared file, and the probe measures it on x86_64 too.
+  `make check` RC 0 again (`check-obj` 32/32, `check-lex` 163/163, `check-ast`/`check-asm`
+  164/164, fixed point 1304984 B with an **empty** `--dump-asm` diff, `check-parts`,
+  `check-limits` **17/17 under 90%, globals 445/512 (86%) -- unchanged, no new global**,
+  `check-docs` 200 symbols / 41 flags / 385 links, `site` 91 pages, `test-sandbox` 73 ok);
+  `make check-linux-host` RC 0 over all four cells; `scripts/check-inert.sh` against a `mc1` built
+  from `origin/main` 0648e1a: **33 objects identical** plus all five taught examples.
+  The five goldens rewritten once more, superseding the values above -- `mc2.sha256`
+  `76bd29de...8ab0cd` -> `4dfacf7fdf3592886762632d4cf9973ad9ecbc292ac9ac743569a5fb455140b5`
+  (after the empty `--dump-asm` diff and `cmp build/mc2.o build/mc3.o`); the Linux pair deleted and
+  re-recorded by `make check-linux-host` -- `mc2-linux-arm64.sha256`
+  `9284c26c06e247f4f9713878df784362959d6e64d3865adab85dd5be98386542`,
+  `mc2-linux-x86_64.sha256`
+  `bf78bad80121cc68468b0789f705ddad5c136d24a5daee73cf280395022acf6f`, each recorded in its musl
+  cell and re-verified by the gnu cell of the same architecture; the Windows pair cross-computed
+  per `tests/golden/README.md` -- `mc2-windows-arm64.sha256`
+  `d59542470d567a90dc969ca98a05fb8566a1bf32e08288984fb2bbcbc5bbae06` (1332091 B),
+  `mc2-windows-x86_64.sha256`
+  `f756b2efa7c1a1b5cd26fcb6b5738a6c310b7347e00d9d43f5c1e3a0422e9cd4` (1370243 B), both also
+  written byte for byte by `build/mc2`.
+- M48 C2 rebased onto `origin/main` b0c76a3 (PR #43, the typed `callp` cast + `<float>`'s arm64
+  single-precision conversions; PR #45, M48 C1 -- `[[permission]]`, `[tools]` and the kind) and
+  the five goldens re-recorded once. **No source file conflicted**: the three milestones do not
+  overlap in code -- #43 is `src/gen_resolve.mc`, `src/gen_walk.mc` and the two float machines,
+  C1 is `src/deps.mc` and `src/pkg.mc`, C2 is `src/sandbox*.mc`, `src/seccomp.mc`,
+  `src/sysno*.mc` and the three `src/host_*.mc` -- so the only conflicts were `CLAUDE.md` § State
+  (every entry kept: main's callp entry, C1's and C1's rebase entry, then C2's) and the six
+  generated/aggregated files, discarded on both sides and regenerated: `src/bundle_data.mc`
+  (`make bundle` re-run FIRST -- 93 files, raw 1257081 -> LZ 583197, blob 584359 B) and the five
+  `tests/golden/*.sha256`. `docs/reference/cli.md` auto-merged with both sides' text (C1's
+  `mc pkg sync`/`list` columns and `--long`, C2's six `mc sandbox` primitive rows and the four
+  refusals), and so did `docs/reference/hooks.md` and `docs/reference/sandbox.md`.
+  `make check` green end to end on the merged tree (**RC 0, zero FAIL**): `budget` 2848/3000,
+  `test` 32/32, `check-lex` 163/163 (3 skipped), `check-ast`/`check-asm` 164/164 (2 skipped),
+  `check-obj` **32/32 identical to the frozen seed**, `check-bundle` (reproducible + fresh, lz
+  round trip 117 cases), `bootstrap` at a fixed point (`mc2.o == mc3.o`, 1342520 bytes; the
+  `--dump-asm` diff between `mc1` and `mc2` is **empty**), `check-surface` 32/32 + 146 ok lines +
+  inert, `test-exe` 32/32, `check-mc` 16/16, `check-standalone`, `check-parts` (the parts +
+  `<mc/main>` == `<mc/core>`, 1342520 B), `check-toml` 10/10, `check-build` 53/53,
+  **`check-pkg` 114/114**, `check-stubs` 9/9, `check-sysroots` (13 rows),
+  **`check-limits` 17/17 under 90% (globals 445/512, 86%)**, `check-minimal`, `test-linux` 42/42
+  and `test-linux-x86_64` 40/40, the four `--exe` cells 45/45 (aarch64 musl) + 45/45 (aarch64
+  gnu) + 43/43 (x86_64 musl) + 43/43 (x86_64 gnu), `test-windows` 43/43 objects and 43 linked,
+  `test-windows-x86_64` 41/41 and 41 linked, `check-examples`, `check-lang` 18, `check-conc` 21,
+  `check-desktop`, **`check-float` ok on all five legs** (macos/aarch64 16/16, linux/aarch64
+  16/16, linux/x86_64 16/16, windows/aarch64 14/14 objects, windows/x86_64 14/14, 2 skipped each)
+  with the sweep at **60 (mach-o arm64), 60 (elf aarch64), 249 (elf x86_64), 232 (coff x86_64),
+  0 mismatches**, `check-wide`, `check-kernel` (`kernel.bin` 3304 B), `check-avr` (`avr.elf`
+  15255 B), **`test-sandbox` 73 ok / 0 failed / 1 skipped** (delegated to Lima `mc-k7`,
+  glibc/aarch64 -- C2's six primitives among them), `check-docs` (200 symbols, 42 flags, 31 TOML
+  keys, 10 directives, 52 samples, 392 links), `site` 92 pages + `check-site` (0 link problems) +
+  `check-site-linux` 11/11.
+  `make check-linux-host` RC 0 over all four cells (aarch64 musl: suite 42/42, `check-obj` 31/31,
+  `check-mc` 12/12, `test-exe` 31/31 via `--exe --libc=musl`, `check-limits` 17/17; aarch64 gnu
+  43/43 native; x86_64 musl 40/40, `check-obj` 29/29, `test-exe` 29/29; x86_64 gnu 41/41 native),
+  each after its own `mc2l.o == mc3l.o` (1686248 B and 1582168 B) and with the cross proof
+  (`mc2l --backend=macho src/mc.mc` byte for byte the macOS `build/mc2.o`) green.
+  `scripts/check-inert.sh <mc1 from origin/main b0c76a3> build/mc1`: **33 objects identical**
+  (`tests/*.mc` and `src/mc.mc`) plus byte-identical artefacts for `examples/api`, `lang`,
+  `conc`, `desktop` and `kernel` -- C2 is the sandbox and the host layer's `host_which`, and
+  nothing the compiler emits could move.
+  The five goldens rewritten **once**, each only after its own criterion: `mc2.sha256`
+  `044387b8920c959944621aa4d727a23311c7078d7ebf45b0640d0326cc0fe03a` (after the empty
+  `--dump-asm` diff and `cmp build/mc2.o build/mc3.o`); the Linux pair deleted and re-recorded by
+  `make check-linux-host` -- `mc2-linux-arm64.sha256`
+  `dc09357a0769936f376aed2363585a5a483e75f6fa3377d6a4c213eb5a415453`,
+  `mc2-linux-x86_64.sha256`
+  `0ad83b3a81c783e2bcdc5a3e3303d34c83144c6d54f5a7b857cc43a1a7a8e101`, each recorded in its musl
+  cell and re-verified by the gnu cell of the same architecture; the Windows pair cross-computed
+  per `tests/golden/README.md` -- `mc2-windows-arm64.sha256`
+  `85ea59403cf3932a5da522336175a58c02634ca1fcc2f5b70134789f09d6b574` (1371026 B),
+  `mc2-windows-x86_64.sha256`
+  `4e77010e2463929ed2fb8d07568a6abfea4b929c9e3dfc1f373ae09ba49fe707` (1411502 B), both also
+  written byte for byte by `build/mc2`.
+- M48 C2, the windows/x86_64 CI finding (`docs/specs/M48.md` § Implementation notes -- C2;
+  `docs/reference/objects.md` § 4c): **`fold` recursed on the sibling chain, so the stack depth was
+  the LENGTH of a list.** C2 was green on macOS, on all four Linux cells and on
+  `mc on windows/arm64 host`, and red -- twice, deterministically -- on **`mc on windows/x86_64
+  host`**: the cross-compiled compiler linked, said `windows/x86_64`, compiled a small program,
+  lexed and PARSED its own source (exit 0 each) and then died with no output at all while
+  COMPILING it. Nothing C2 wrote is at fault.
+  * **The static pass named the shape and ruled out the code.** `--dump-asm --machine=x86_64-win`
+    of `src/mc_windows_x86_64.mc` from `origin/main` b0c76a3 and from the branch, with the
+    `l_strN` indices normalised: **1712 functions in common, 53 different, every one of them
+    `sb_*`**, plus 33 new. Per-symbol disassembly of the two COFF objects agrees -- **every core
+    function's machine code is byte for byte identical**. `sub rsp, N` maxima identical (1152,
+    under a page: no `__chkstk` question), section sizes, symbol counts and 14457 relocations all
+    far from any ceiling. So the compiler's own code did not change; only its data and the source
+    it was fed.
+  * **The oracle was `wine` under `--platform linux/amd64`** (a Debian 12 image, `wine` 8.0),
+    which runs the Windows binary at full Rosetta speed: main's compiler reproduces its CI
+    success (exit 0, `mc-windows-x86_64.obj` **1388708 bytes**, the CI byte count) and C2's
+    reproduces the failure in 1.1 s. `WINEDEBUG=+seh` named it -- `EXCEPTION_STACK_OVERFLOW`,
+    `c00000fd`, `stack 0x20000-0x21000-0x820000`, all 8 MiB gone. Two cross runs settled where the
+    fault lives: **the C2 binary compiles main's source (exit 0) and main's binary crashes on C2's
+    source (exit 1)** -- the INPUT, not the code.
+  * **The cause.** `fold` (`src/parse.mc`) ended with `i64 nx = fold(nd_next(n));`. A sibling
+    chain is a list and a global array initializer is one node per element, so the stack depth was
+    the length of the longest list in the program. `src/bundle_data.mc` is exactly that shape --
+    the M21.5 deviation keeps `u64 bundle_blob[] = { ... }` on disk, because the frozen seed's
+    lexer has no `#embed`. main: **71739** elements. C2, whose bundle carries the new sandbox
+    sources: **73045**. `fold`'s frame is 64 bytes of locals, so per level that is 8 (return
+    address) + 8 (saved `rbp`) + 64 + **32, the Win64 shadow space held across the recursive
+    call** = **112 bytes**, against **80** under AAPCS64 and SysV, which have no shadow space.
+    71739 x 112 = 7.66 MiB, fits; 73045 x 112 = 7.80 MiB plus the callers, does not. `fold` runs
+    on the compile road only -- `src/cli.mc` returns for `--dump-ast` on the line above it --
+    which is why the parse smoke passed. Measured with a generated `u64 big[] = { ... }` and
+    nothing else in the file: **windows/x86_64 took 74000 elements and failed at 75000;
+    linux/x86_64 took 100000 and SIGSEGVed at 120000; macOS arm64 SIGSEGVed at 150000.** Every
+    host had the defect; the 40% bigger Win64 frame is only what made it arrive first.
+  * **The fix is `src/parse.mc` +30/-16, 8 of the added lines code**: `fold` walks the SIBLING
+    chain with a loop and keeps the recursion for the CHILDREN, so the depth is the nesting and
+    nothing else. It always answered the node it was given, so `set_nd_next(n, nx)` was a no-op
+    and the loop is the same traversal in the same order. After it, **400000 elements compile on
+    windows/x86_64**. Zero new globals (`check-limits`: globals **445/512, 86%**).
+  * **The gate**, `scripts/check-mc.sh` (+41): a **150000-element** chain generated with `awk`,
+    compiled with the host compiler, linked and run (exit 42). Generated and not committed because
+    150000 elements is 300 KB of source; it is the one program in that script the repository does
+    not carry. It is there and NOT in `tests/windows/` because that corpus is cross-compiled on
+    macOS and only LINKED and RUN on Windows -- it would never touch the Windows-hosted compiler's
+    stack -- and `check-mc` is in the Windows and Linux `make check` subsets, so the case runs on
+    every host. Proved to have teeth: with the pre-fix compiler it is
+    `FAIL long-list (compilation: )`, the empty message being the SIGSEGV.
+  * **Not done, on record**: the linker's default 8 MiB stack reserve is left alone
+    (`scripts/link-windows.sh` still passes no `-stack:`). Raising it would have hidden this one
+    instance on one host and left the defect everywhere else.
+  -- `stage0/` untouched, 2848/3000. `make bundle` re-run BEFORE bootstrapping (`src/parse.mc` is
+  `mc/parse`): 93 files, raw 1258075 -> LZ 583749, blob 584911 B. `make check` green end to end
+  (**RC 0, zero FAIL**): `test` 32/32, `check-lex` 163/163 (3 skipped), `check-ast`/`check-asm`
+  164/164, `check-obj` **32/32 identical to the frozen seed**, `check-bundle` (lz round trip 117
+  cases), `bootstrap` at a fixed point (`mc2.o == mc3.o`, 1343032 bytes; the `--dump-asm` diff
+  between `mc1` and `mc2` is **empty**), `check-surface` 32/32 + inert, `test-exe` 32/32,
+  **`check-mc` 17/17** (16 + the new long-list case), `check-standalone`, `check-parts`,
+  `check-toml` 10/10, `check-build` 53/53, `check-pkg` 114/114, `check-stubs` 9/9,
+  `check-sysroots`, `check-limits` **17/17 under 90%**, `check-minimal`, `test-linux` 42/42 and
+  `test-linux-x86_64` 40/40, the four `--exe` cells, `test-windows` and `test-windows-x86_64`,
+  `check-examples`, `check-lang`, `check-conc`, `check-desktop`, `check-float`, `check-wide`,
+  `check-kernel`, `check-avr`, `test-sandbox` 73 ok / 0 failed / 1 skipped, `check-docs`,
+  `site` 92 pages + `check-site` + `check-site-linux` 11/11.
+  `make check-linux-host` RC 0 over all four cells, each after its own `mc2l.o == mc3l.o`
+  (1686712 B on aarch64, 1582648 B on x86_64) and with the cross proof green; `check-mc` is
+  **13/13** there, so the new case runs on the Linux hosts too.
+  `scripts/check-inert.sh <mc1 from origin/main b0c76a3> build/mc1`: **33 objects identical**
+  (`tests/*.mc` and `src/mc.mc`) plus byte-identical artefacts for `examples/api`, `lang`, `conc`,
+  `desktop` and `kernel` -- the traversal order did not change, so nothing the compiler emits
+  moved.
+  **The Windows chain was run here, under Wine**, which is more than the cross-computation the
+  goldens' README asks for: stage 1 -> 2 -> 3 with `lld-link` on the macOS side and each compiler
+  run under `wine`, **`cmp build/mc2w.obj build/mc3w.obj` equal** (1411990 B), and
+  `mc2w.exe --backend=macho src/mc.mc` byte for byte the macOS `build/mc2.o` -- the exact criterion
+  the CI leg applies.
+  The five goldens rewritten **once**, each only after its own criterion: `mc2.sha256`
+  `044387b8...0fe03a` -> `3f0cec7ae9c1ad366ab43dd22883bf317746ced0e7335d22e5466d5d9dfcefd6`
+  (after the empty `--dump-asm` diff and `cmp build/mc2.o build/mc3.o`); the Linux pair deleted
+  and re-recorded by `make check-linux-host` -- `mc2-linux-arm64.sha256`
+  `81e1fda80daef969c1c5fa3176c44a405e0962bd9bce5de9c032b617d8cc2bfa`,
+  `mc2-linux-x86_64.sha256`
+  `2a92672a43d0cab6c4fb00078a3268490932fa4964ed568073d6aa9b1ab0048f`, each recorded in its musl
+  cell and re-verified by the gnu cell of the same architecture; the Windows pair cross-computed
+  per `tests/golden/README.md` -- `mc2-windows-arm64.sha256`
+  `0333405bdabec4e0e804300366b53f615e33a7640a1f7f577477ca628da93cfc` (1371526 B),
+  `mc2-windows-x86_64.sha256`
+  `8b42d0ca3879fa5e2164ddffe44f439b7a10dfd8368680fa530745073566d571` (1411990 B), the second of
+  which the Wine-hosted `mc2w.exe` also wrote byte for byte.
 - Next: the **site + registry server, M47 S4-S6**, in `minicompiler/mc-registry`; then **M44 steps 4-5**
   (slim / install / upgrade), then **M42 step 2** (PE `--exe`, CI-gated on the Windows runners).
   **M46** only on the owner's request; **M43 Layer 2** after 1.0.0. M13 and M18 stay in the backlog

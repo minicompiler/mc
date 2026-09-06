@@ -1143,21 +1143,36 @@ void fold_cast(i64 n) {
     set_nd_a(n, 0);                                // type = the cast's own
 }
 
+// The SIBLING chain is walked with a loop and the CHILDREN with the recursion.
+// It used to recurse on `next` too, which made the stack depth the LENGTH of a
+// list rather than its nesting: a global array initializer is one `nd_next`
+// chain with one node per element, so `u64 blob[] = { ... }` cost one frame per
+// element. src/bundle_data.mc is exactly that shape -- the M21.5 deviation
+// keeps the array form on disk, because the frozen seed's lexer has no #embed
+// -- and at 73045 elements it overflowed an 8 MiB stack on windows/x86_64,
+// where the Win64 shadow space makes this frame 112 bytes against the 80 of
+// AAPCS64 and SysV (docs/reference/objects.md § 4b). Measured on the compilers
+// this tree builds: the ceiling was ~74000 elements on windows/x86_64 and
+// ~104000 on linux/x86_64; it is now the nesting depth on every host.
+// `fold` answers the node it was given, so `set_nd_next` was always a no-op.
 i64 fold(i64 n) {
-    if (n == 0) return 0;
-    i64 k = nd_kind(n);
-    if (k == N_UNARY)       fold_unary(n);
-    else if (k == N_BINARY) fold_binary(n);
-    else if (k == N_CAST)   fold_cast(n);
-    else {
-        i64 a = fold(nd_a(n)); set_nd_a(n, a);
-        i64 b = fold(nd_b(n)); set_nd_b(n, b);
-        i64 c = fold(nd_c(n)); set_nd_c(n, c);
-        i64 d = fold(nd_d(n)); set_nd_d(n, d);
+    i64 head = n;
+    i64 p = n;
+    loop {
+        if (p == 0) break;
+        i64 k = nd_kind(p);
+        if (k == N_UNARY)       fold_unary(p);
+        else if (k == N_BINARY) fold_binary(p);
+        else if (k == N_CAST)   fold_cast(p);
+        else {
+            i64 a = fold(nd_a(p)); set_nd_a(p, a);
+            i64 b = fold(nd_b(p)); set_nd_b(p, b);
+            i64 c = fold(nd_c(p)); set_nd_c(p, c);
+            i64 d = fold(nd_d(p)); set_nd_d(p, d);
+        }
+        p = nd_next(p);
     }
-    i64 nx = fold(nd_next(n));
-    set_nd_next(n, nx);
-    return n;
+    return head;
 }
 
 // ---- statements ----

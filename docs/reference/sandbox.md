@@ -285,7 +285,10 @@ In order, all inside I's private mount namespace, the first mount being `MS_PRIV
 | `/mc` | `readlink("/proc/self/exe")`, taken by P before any unshare | bind of a *file* onto an empty file, then remounted read-only |
 | `/src` | the source's directory, or `--root DIR` | overlayfs: `lowerdir=DIR`, `upperdir` and `workdir` on the box tmpfs, `userxattr` |
 | `/out` | the box tmpfs | where the compiler writes when there is no overlay (below) |
-| `/ro0`, `/ro1`, … | each `--ro DIR`, in the order given | bind + remount read-only |
+| `/ro0`, `/ro1`, … | each `--ro DIR`, in the order given | bind + remount read-only. With `--at-path`, each one is at its own absolute path instead |
+| each `--rw DIR` | the host directory, at its OWN absolute path | bind, and **no** read-only remount. Every component above it is a fresh empty directory on the box tmpfs |
+| `/tmp` | the box tmpfs | `--tmp` only: one `mkdir`, because the box's root already IS the tmpfs |
+| `/bin/<basename>` | each `--bin PROG`, as `host_which()` found it on the host's `PATH` | bind of a *file* onto an empty file, read-only. `PATH=/bin` in the box |
 | `/lib`, `/lib64`, `/usr/lib` | the host's, when they exist | bind + remount read-only, so an M42 dynamic binary finds its loader and its libc |
 | `/etc/ld.so.cache` | the host's, when it exists | bind of a *file* onto an empty file, read-only. The **only** thing of `/etc` that is there |
 | everything else | — | does not exist: no `/proc`, no `/dev`, no `/tmp`, no `/home`, and nothing else of `/etc` |
@@ -303,8 +306,9 @@ is a list of library names, and it comes in read-only and granted read-only by L
 `/etc/shadow` is still absent, and still refused by name.
 
 Then `pivot_root(".", ".old")` from inside the new root, `umount2("/.old", MNT_DETACH)`,
-`sethostname("sandbox")` and `chdir` to `/src` or to `--cwd`. The environment is three entries and
-nothing else: `HOME=/src`, `PATH=/`, the terminator.
+`sethostname("sandbox")` and `chdir` to `/src` or to `--cwd`. The environment is `HOME=/src`,
+then `PATH=/` — or `PATH=/bin` when a `--bin` put a program there — then one entry per `--env`,
+then the terminator. Nothing else of the host's environment ever crosses.
 
 `userxattr` is not decoration. An overlay mounted from a user namespace cannot set
 `trusted.overlay.*` xattrs — that needs `CAP_SYS_ADMIN` in the *init* namespace, which nobody
@@ -456,6 +460,53 @@ repository's own corpus:
 
 ---
 
+## The primitives
+
+Six flags, added by M48 C2, and not one of them knows what a permission is. Each is a mount, a
+namespace, an environment entry or a profile row; what a package's `[[permission]]` rows map onto
+them is a question for whoever derives the command line, and the answer lives outside the box.
+
+| flag | what it does to the box |
+|---|---|
+| `--rw DIR` | binds DIR **writable at its own absolute path**: the components above it are made on the box tmpfs, then `MS_BIND\|MS_REC` and *no* read-only remount. Landlock grants the full filesystem mask this kernel knows on that path, and the supervisor counts it as a root |
+| `--at-path` | changes where every `--ro DIR` lands: its own absolute path instead of `/ro0`, `/ro1`, … The numbering is right for a corpus that is told where things are; it is wrong for a tool, which is *handed* host paths by its own caller. One flag for the invocation, because a caller that speaks host paths speaks them for all of them |
+| `--tmp` | a writable `/tmp`. It is one `mkdir` and nothing else: the box's whole root is already a tmpfs, so the directory is already writable, already counted against `--out`, and already dies with the box. What the flag adds beside it is the Landlock grant and the root |
+| `--allow=net` | the one `unshare` asks for five namespaces instead of six — `CLONE_NEWNET` is left out, so the box keeps the host's network stack. The Landlock ruleset then stops *handling* the network (a ruleset that handled it and granted nothing would refuse exactly what was asked for), and the measured net delta joins the seccomp profile |
+| `--bin PROG` | `host_which(PROG)` walks the host's `PATH`; the program it finds is bound read-only at `/bin/<basename>`, `PATH=/bin` goes into the environment, Landlock grants `EXECUTE\|READ_FILE` on the file, the measured spawn delta joins the profile, and the run step's counters move: **16** processes instead of 0, **1 + the number of `--bin`** execve's instead of one |
+| `--env NAME` | `NAME=<the host's value>` joins the box's environment. A variable the host does not have arrives **empty**, and that is not an error: a variable that is not set has no value, and a `--env` that stopped the box would make every optional setting of a tool mandatory |
+
+They apply to `mc sandbox run` and to `mc sandbox exec` alike, because they are properties of the
+box and the box is one box. For `run` that means the compile step sees them too — a `--rw` is
+writable while the compiler runs, a `--bin` is on its `PATH` — which is what a project whose
+`[linker].cmd` names a real linker needs. Only the counters distinguish the steps, and only
+because the compile step already had its own (16 processes, 3 execve's).
+
+**What is refused, and why there is no flag that lifts it.** `--rw /` and `--rw $HOME` are refused
+before the box exists:
+
+```
+mc: --rw /: refusing to bind the whole filesystem read-write
+mc: --rw /Users/me: refusing to bind the home directory read-write; name a subdirectory
+```
+
+The box could do it — the bind is the same two calls — but the only caller of this primitive is a
+derived permission set, which can never legitimately hand it either of those two, and a mistake
+that hands it one is `rm -rf` with a sandbox's name on it. An escape flag would be surface nothing
+uses; a caller that really means it can name the subdirectories. `--ro /` is *not* refused: a
+read-only bind of a tree is a way of reading it, which is what the flag is for.
+
+A `--rw` that is not a directory and a `--bin` that is not on `PATH` are refused the same way
+(`mc: --rw is not a directory: PATH`, `mc: --bin NAME: not on PATH`), all four with exit **126**.
+They are `mc: ` lines on stderr and not `sandbox: ` report lines, which is the distinction
+`sb_plan` has drawn since step B: the report has a fixed vocabulary and never carries a host path,
+while a diagnostic about the *command line* may name what the caller typed.
+
+**One string per root.** `sb_box_ro_at(i)` answers where the i-th `--ro` is, and the mount, the
+Landlock rule and the supervisor's `sb_path_ok` all read it; the `--rw` and `--bin` paths are
+resolved once, in P, before the fork (`sb_resolve_paths`), for the same reason `/proc/self/exe` is:
+once the box has pivoted, the host's names mean nothing. So the two walls and the sentence cannot
+disagree about where the box ends.
+
 ## The two walls
 
 Both are installed by **C**, the process that `execve`s, in one place: after
@@ -556,10 +607,40 @@ build examples/lang`, and over two probes it writes itself, and records what it 
 tools/sandbox/<arch>-<libc>-compile.list      the compile step: /mc, and any compiler it teaches
 tools/sandbox/<arch>-<libc>-program.list      the run step: an mc program plus its loader
 tools/sandbox/<arch>-<libc>-threads.list      what --allow=threads adds
+tools/sandbox/net.list                        what --allow=net adds
+tools/sandbox/spawn.list                      what --bin adds
 ```
 
-`src/sandbox_profiles.mc` is generated from those twelve files: per architecture a base (musl), a
-glibc delta **per step**, and one shared threads delta. `sh scripts/sandbox-trace.sh --check`
+The last two are **one file each, not one per (architecture, libc)**, because that is how they are
+consumed: `sbp_net` and `sbp_spawn` are a single union over every host, a socket and a spawn are
+named the same on both architectures, and an entry an architecture does not have is dropped when
+the filter is built. They are always unioned, never replaced — a host that cannot measure the
+other's calls must not erase them — and a shared name also answers the one thing a per-host name
+cannot: what `--check` compares against on a host that has never been able to write its own copy.
+
+`src/sandbox_profiles.mc` is generated from those fourteen files: per architecture a base (musl), a
+glibc delta **per step**, and three shared deltas.
+
+**Measured on Ubuntu 26.04 / kernel 7.0.0-30 (aarch64, glibc 2.43) and Alpine 3 (aarch64, musl):**
+
+```
+net    accept accept4 bind connect getpeername getsockname getsockopt listen
+       recvfrom recvmsg sendmsg sendto setsockopt shutdown socket            15
+spawn  clone clone3 getuid pipe2 read wait4                                   6
+```
+
+`clone` and `clone3` are in the spawn list because the trace saw them and are written into the
+table as a **comment**: no profile allows a call that makes a process (§ The explain channel).
+What is left — `wait4` for both C libraries, and `getuid`, `pipe2` and `read` for musl, whose
+`posix_spawn` makes a pipe and reads the child's errno back out of it — is what running another
+program costs beside the fork itself.
+
+The two probes are what the trace runs: `tests/sandbox/nettrip.mc` for the net delta, which is one
+program being both ends of a TCP conversation on loopback, and a `posix_spawn` program the script
+writes for the spawn delta. The net probe is the test itself, so the profile is measured over
+exactly the program the suite then runs inside the box; the spawn probe is not, because
+`tests/sandbox/binexec.mc` forks (a fork is a fork on both C libraries, which is what makes its
+refusal one sentence) while `posix_spawn` is the wider measurement. `sh scripts/sandbox-trace.sh --check`
 (`make sandbox-trace-check`) re-traces the host it runs on and compares, and the CI job runs it on
 both architectures on every pull request.
 
@@ -803,9 +884,11 @@ mc sandbox check                             print what this host can do, exit 0
 ```
 
 The options and the exit codes are in [cli.md](cli.md) § 3c. In one line: `--time`, `--wall`,
-`--mem` and `--out` are the four caps; `--allow=threads` widens what the box permits; `--stdin`,
-`--ro`, `--cwd`, `--root`, `--config`, `--report` and `--verbose` are the rest; **124** means a cap
-stopped the program, **125** a refusal, **126** that the box could not be set up.
+`--mem` and `--out` are the four caps; `--allow=threads` and `--allow=net` widen what the box
+permits; `--rw`, `--at-path`, `--tmp`, `--bin` and `--env` are the six primitives of § The
+primitives (with `--ro`); `--stdin`, `--cwd`, `--root`, `--config`, `--report` and `--verbose` are
+the rest; **124** means a cap stopped the program, **125** a refusal, **126** that the box could
+not be set up.
 
 `scripts/test-sandbox.sh` (`make test-sandbox`, inside `make check`) is the gate: the isolation
 cases of `tests/sandbox/`, the whole `tests/*.mc` suite compiled *and* run inside the box, `exec`

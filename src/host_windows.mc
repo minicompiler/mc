@@ -101,3 +101,12 @@ i64 host_sysno(i64 sn) { return -1; }
 i64 host_audit_arch() { return 0; }       // no seccomp: no AUDIT_ARCH_* to name
 
 i64 host_sandbox_supported() { return 0; }
+
+// M48 C2: `mc sandbox --bin PROG` asks the host layer where PROG is on PATH
+// (src/sandbox.mc, sb_resolve_paths). There is no sandbox on this host --
+// host_sandbox_supported() answers 0 and `mc sandbox` refuses with exit 126
+// before any option is resolved -- so the only caller can never reach this,
+// and an implementation here would be a PATH search nothing in the repository
+// could run. It answers "not found", and a real one would have to split PATH
+// on ';', append host_exe_suffix(), and honour PATHEXT.
+uptr host_which(uptr name) { return 0; }
