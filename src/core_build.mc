@@ -41,7 +41,10 @@ void mc_build_init() {
     // a compiler with `mc build` and no bundle at all still resolves `<name>`
     // from a lock and from the installed `mc` package (D12). With no [deps] and
     // no <libs> the opener answers 0 to everything and nothing changes.
-    lex_set_libs(&libs_open);
+    // The second argument is the sentence a compiler with NO blob prints when
+    // nothing answered a `<name>` at all (M44 step 4): only src/deps.mc knows
+    // whether the `mc` package is installed, and only this part has it.
+    lex_set_libs(&libs_open, &dep_include_hint);
     // M25: the pinned rows `mc sysroot list|fetch` reads. Data only -- no I/O
     // and no network until `fetch --yes` (src/sysroots.mc).
     sysroots_init();

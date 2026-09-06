@@ -351,6 +351,65 @@ with `mc sysroot fetch` — one of the two that spawn a downloader. Everything a
 is, how `#include <pack/file.mc>` is resolved and what a build refuses is in
 [packages.md](packages.md).
 
+## 3e. `mc install` — the compiler's own package
+
+```
+mc install [VERSION] [--from-tree DIR] [--yes] [--force] [--registry URL|DIR] [--libs-dir DIR]
+```
+
+Puts the `mc` package — the compiler's own source tree, every name the bundle carries — under
+`<libs>/mc/v<VERSION>/`, which is the third and last step of `#include <name>` resolution
+([packages.md](packages.md) § 2). `VERSION` defaults to `mc --version`, and that default is the
+only one this binary will ever *read*: the directory carries the version in its name, so two
+compilers on one machine never share a tree.
+
+A **full** binary answers every bundled name out of its own blob and never needs it. A **slim**
+binary — `mc-<ver>-<target>-slim.tar.gz`, the same compiler without the blob
+([bundle.md](bundle.md) § The slim flavour) — has nothing to answer with, and says so:
+
+```
+prog.mc:1: #include <prelude>: not bundled in this compiler and mc 0.16.0 is not installed: run mc install
+```
+
+Two roads, and both write the same layout:
+
+| | what it reads | when |
+|---|---|---|
+| the registry | the `mc` package's own index row for exactly `VERSION` — the tag archive, `strip = 1`, the `[package].files` list hashed like any other package | a released binary |
+| `--from-tree DIR` | `DIR/mc.toml` and the files it declares, copied | a checkout, and any air-gapped machine |
+
+The registry road is `mc pkg sync`'s, verbatim: it prints the plan (`fetch mc <ver>`, the url, the
+expected tree hash, the destination) and downloads nothing without `--yes`; the archive's members
+are checked before `tar` writes a byte; the extracted tree is hashed and compared to the row's
+`sha256`, and a mismatch unlinks what was written and leaves no cache manifest, so the next read
+says "not fetched" rather than reading debris. Afterwards `tools/bundle.list` is copied to the root
+of the tree — the `NAME<TAB>PATH` map [packages.md](packages.md) § 2 step 3 reads, which the
+repository keeps under `tools/` and which is deliberately not part of the hash.
+
+Installing is idempotent: with the cache manifest already there it prints
+`mc 0.16.0 is installed (<libs>/mc/v0.16.0/)` and does nothing, unless `--force`.
+
+A development build reports `0.0.0-dev`, which no registry publishes, so the registry road refuses
+it and names the other one:
+
+```
+mc: mc 0.0.0-dev is a development build: the registry publishes no such version
+  run:   mc install --from-tree .
+```
+
+| flag | meaning |
+|---|---|
+| `--from-tree DIR` | install from a checkout instead of the registry: `DIR/mc.toml` must be the `mc` package |
+| `--force` | reinstall over a tree that is already blessed |
+| `--yes` | actually download (the registry road only; `--from-tree` copies and needs none) |
+| `--registry URL\|DIR` | as for `mc pkg` |
+| `--libs-dir DIR` | as for `mc pkg`. The single-file compiler has no such flag, so a program compiled by `mc prog.mc` reads `~/.mc/libs` and nothing else |
+
+`mc` is a reserved package name in `[deps]`, in `[replace]` and for `mc pkg add`
+([packages.md](packages.md) § 1) — a project may not pin the compiler's own source. This road is
+the exception that proves it: it installs the package **for the binary itself**, at the binary's
+own version, into a directory no project resolves through.
+
 ## 3c. `mc sandbox` — compile and run something you do not trust
 
 ```

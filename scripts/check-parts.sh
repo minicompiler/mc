@@ -197,6 +197,52 @@ else
     fi
 fi
 
+# ------------------------------- 4a. the slim assembly (M44 § B, step 4)
+# `mc-slim` is not a part: it is the ASSEMBLY src/core_slim.mc names -- the five
+# parts a compiler needs to compile anything, without <mc/core_bundle> and
+# without <mc/core_sandbox>. Three things are asserted: the bundled spelling and
+# the checked-in entry are the same object (the check-standalone argument, one
+# flavour down), the blob really is gone, and `mc install` -- the road that
+# replaces it -- is in the binary.
+cat > "$tmp/slim.mc" <<'EOF'
+#include <mc/host>
+#include <mc/core_slim>
+#include <user_default>
+EOF
+if ! msg=$("$mc" "$tmp/slim.mc" -o "$tmp/slim.o" 2>&1); then
+    fail "compiling <mc/core_slim>: $msg"
+elif ! msg=$("$mc" src/mc_slim.mc -o "$tmp/slim_disk.o" 2>&1); then
+    fail "compiling src/mc_slim.mc: $msg"
+elif ! cmp -s "$tmp/slim.o" "$tmp/slim_disk.o"; then
+    fail "<mc/core_slim> and src/mc_slim.mc produce different objects"
+else
+    echo "ok   <mc/host> + <mc/core_slim> + <user_default> == src/mc_slim.mc, byte for byte ($(wc -c < "$tmp/slim.o" | tr -d ' ') bytes)"
+    "$mc" --dump-syms "$tmp/slim.mc" > "$tmp/slim.syms" 2>&1
+    rm -f "$tmp/mcslim"
+    "$mc" --exe "$tmp/slim.mc" -o "$tmp/mcslim" > /dev/null 2>&1
+    sd=$(secsize "$tmp/slim.syms" __DATA,__data)
+    [ -n "$sd" ] || sd=0
+    if [ "$sd" -ge "$DATA_CEILING" ]; then
+        fail "__data of the slim compiler is $sd, ceiling $DATA_CEILING (the blob came back in?)"
+    else
+        echo "ok   slim __data $sd < $DATA_CEILING (no bundle blob), on disk $(wc -c < "$tmp/mcslim" | tr -d ' ') bytes"
+    fi
+    absent=""; missing=""
+    for sym in _bundle_open _bundle_read _sb_go; do
+        grep -q " $sym\$" "$tmp/slim.syms" && absent="$absent $sym"
+    done
+    for sym in _install_cmd _pkg_cmd _drv_build _macho_write _libs_open; do
+        grep -q " $sym\$" "$tmp/slim.syms" || missing="$missing $sym"
+    done
+    if [ -n "$absent" ]; then
+        fail "the slim compiler still carries:$absent"
+    elif [ -n "$missing" ]; then
+        fail "the slim compiler is missing:$missing"
+    else
+        echo "ok   slim: no _bundle_open _bundle_read _sb_go; has _install_cmd _pkg_cmd _drv_build _macho_write _libs_open"
+    fi
+fi
+
 # ------------------------------------------ 4b. the part that is not there (M43)
 # Acceptance 9 of M43: a compiler assembled without <mc/core_sandbox> has no
 # `sandbox` subcommand at all -- not a stub, not a refusal it has to keep true.

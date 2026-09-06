@@ -341,10 +341,13 @@ fi
 
 # ---- 15. step 3 of the resolution order: the installed `mc` package ----
 # A full binary answers every one of these names out of its own blob and never
-# reaches step 3, so the probe is a compiler with every part BUT <mc/core_bundle>
-# (tests/pkg/nobundle.mc). That is, line for line, what `mc-slim` will be.
+# reaches step 3, so the probe is a compiler with no blob: src/mc_slim.mc, which
+# since M44 step 4 IS the slim flavour and not a fixture (it replaced
+# tests/pkg/nobundle.mc). What this section installs, it installs BY HAND -- the
+# layout of § A4 written in shell, a second implementation of what src/install.mc
+# writes; § 32 below is the same proof through `mc install` itself.
 probe="$tmp/bin/nobundle"
-if "$mc" --exe tests/pkg/nobundle.mc -o "$probe" > "$tmp/o" 2>&1; then
+if "$mc" --exe src/mc_slim.mc -o "$probe" > "$tmp/o" 2>&1; then
     ok "the bundle-less probe compiler builds"
     mcd="$tmp/libs/mc/v$("$mc" --version | sed 's/^mc //')"
     mkdir -p "$mcd"
@@ -370,7 +373,8 @@ if "$mc" --exe tests/pkg/nobundle.mc -o "$probe" > "$tmp/o" 2>&1; then
     # the same probe with no installed package says so, with the bundle's words
     build tests/pkg/std "" "$tmp/empty"
     want_exit "the probe with no installed package" 1 \
-        && want_msg "the probe with no installed package" "unknown bundled include: mc/host"
+        && want_msg "the probe with no installed package" \
+                    "#include <mc/host>: not bundled in this compiler and mc .* is not installed: run mc install"
     cc="$mc"
 else
     fail "the bundle-less probe compiler" "$(cat "$tmp/o")"
@@ -1296,6 +1300,190 @@ rm -f tests/pkg/perm/wrong.toml
 grep -q 'permissions' tests/pkg/app/mc.lock \
     && fail "the old lock" "tests/pkg/app/mc.lock has been rewritten" \
     || ok "tests/pkg/app/mc.lock still has neither kind nor permissions, and § 2 built with it"
+
+# ---- 32. M44 step 4: `mc install` and the slim compiler ----
+# `mc install` puts the compiler's OWN package where a binary with no blob reads
+# its `<name>` includes from, and `mc-slim` (src/mc_slim.mc) is that binary. The
+# whole section is offline: the `--from-tree` road copies a checkout, and the
+# registry road reads an index file whose `url` is a tarball this script made.
+cd "$here" || exit 1
+ins() { PATH="$tmp/bin2:$realpath_env" "$mc" install "$@" > "$tmp/o" 2>&1; rc=$?; }
+mcver=$("$mc" --version | sed 's/^mc //')
+
+# 32a. --from-tree: the layout, and `bundle.list` at the ROOT of the tree --
+# which is the one file the package does not carry there (it is under tools/)
+# and the one src/deps.mc reads to answer `<name>` (M48 § 2.6).
+i1="$tmp/i1"
+ins --libs-dir "$i1" --from-tree .
+if [ "$rc" != 0 ]; then
+    fail "mc install --from-tree ." "exit $rc: $(cat "$tmp/o")"
+else
+    d="$i1/mc/v$mcver"
+    if [ -f "$d/mc.toml" ] && [ -f "$d.toml" ] && cmp -s tools/bundle.list "$d/bundle.list"; then
+        ok "mc install --from-tree .: $(wc -l < "$tmp/out/got-files" | tr -d ' ') files, the manifest beside the tree, bundle.list at its root"
+    else
+        fail "mc install --from-tree . layout" "$(ls "$d" 2>&1 | tr '\n' ' ')"
+    fi
+    # the manifest's hash is the tree hash, and the shell agrees about it
+    got=$(sed -n 's/^sha256  = "\(.*\)"/\1/p' "$d.toml" | head -1)
+    want=$(sh scripts/pkg-hash.sh .)
+    if [ -n "$got" ] && [ "$got" = "$want" ]; then
+        ok "the installed tree's manifest carries the repository's tree hash ($got)"
+    else
+        fail "the installed manifest hash" "manifest=$got pkg-hash.sh=$want"
+    fi
+fi
+
+# 32b. idempotent: a second run says so and touches nothing
+ins --libs-dir "$i1" --from-tree .
+if [ "$rc" = 0 ] && grep -q "^mc $mcver is installed (" "$tmp/o"; then
+    ok "a second mc install does nothing: $(head -1 "$tmp/o")"
+else
+    fail "mc install is idempotent" "exit $rc: $(cat "$tmp/o")"
+fi
+
+# 32c. the sentinel: a dev build has no published version, and the message says
+# what to run instead. (A released binary reports a real version and takes the
+# registry road; that half is 32e.)
+ins --libs-dir "$tmp/i2"
+case "$mcver" in
+0.0.0-dev)
+    if [ "$rc" = 2 ] && grep -q "is a development build" "$tmp/o" \
+       && grep -q "mc install --from-tree" "$tmp/o"; then
+        ok "mc install on a dev build: $(head -1 "$tmp/o")"
+    else
+        fail "mc install on a dev build" "exit $rc: $(cat "$tmp/o")"
+    fi ;;
+*) ok "mc install: not a dev build ($mcver), the sentinel case does not apply" ;;
+esac
+
+# 32d. the slim compiler: what it refuses with nothing installed, and what it
+# does afterwards. HOME is what picks <libs> for the single-file CLI, which has
+# no --libs-dir of its own.
+slim="$tmp/bin/mc-slim"
+rm -f "$slim"
+if ! msg=$("$mc" --exe src/mc_slim.mc -o "$slim" 2>&1); then
+    fail "building src/mc_slim.mc" "$msg"
+else
+    ok "mc-slim builds ($(wc -c < "$slim" | tr -d ' ') bytes, against $(wc -c < build/mc-exe | tr -d ' ') for the full binary)"
+    if [ "$("$slim" --version)" = "mc $mcver" ]; then
+        ok "mc-slim --version: mc $mcver"
+    else
+        fail "mc-slim --version" "$("$slim" --version)"
+    fi
+    mkdir -p "$tmp/slim/home" "$tmp/slim/p"
+    printf '#include <prelude>\ni64 main() { i64 i = 0; while (i < 42) { i = i + 1; } return i; }\n' \
+        > "$tmp/slim/p/prog.mc"
+    HOME="$tmp/slim/home" "$slim" "$tmp/slim/p/prog.mc" -o "$tmp/slim/p/prog.o" > "$tmp/o" 2>&1; rc=$?
+    if [ "$rc" = 1 ] && grep -q "#include <prelude>: not bundled in this compiler and mc $mcver is not installed: run mc install" "$tmp/o"; then
+        ok "mc-slim with nothing installed: $(sed 's|^.*prog.mc:1: ||' "$tmp/o")"
+    else
+        fail "mc-slim with nothing installed" "exit $rc: $(cat "$tmp/o")"
+    fi
+    # the full binary's message for a name nobody ships does NOT move
+    printf '#include <nosuchlib>\ni64 main() { return 0; }\n' > "$tmp/slim/p/nope.mc"
+    HOME="$tmp/slim/home" "$mc" "$tmp/slim/p/nope.mc" -o "$tmp/slim/p/nope.o" > "$tmp/o" 2>&1; rc=$?
+    if [ "$rc" = 1 ] && grep -q "unknown bundled include: nosuchlib" "$tmp/o"; then
+        ok "the full binary still says: $(sed 's|^.*nope.mc:1: ||' "$tmp/o")"
+    else
+        fail "the full binary's unknown-include message moved" "exit $rc: $(cat "$tmp/o")"
+    fi
+    # and now the install the message asked for, run BY THE SLIM COMPILER
+    HOME="$tmp/slim/home" PATH="$tmp/bin2:$realpath_env" "$slim" install --from-tree . > "$tmp/o" 2>&1; rc=$?
+    if [ "$rc" != 0 ]; then
+        fail "mc-slim install --from-tree ." "exit $rc: $(cat "$tmp/o")"
+    else
+        ok "mc-slim installs its own package: $(head -1 "$tmp/o" | sed 's| -> .*| -> <libs>/mc/v'"$mcver"'/|')"
+        HOME="$tmp/slim/home" "$slim" "$tmp/slim/p/prog.mc" -o "$tmp/slim/p/prog.o" > "$tmp/o" 2>&1; rc=$?
+        "$mc" "$tmp/slim/p/prog.mc" -o "$tmp/slim/p/ref.o" > /dev/null 2>&1
+        if [ "$rc" = 0 ] && cmp -s "$tmp/slim/p/prog.o" "$tmp/slim/p/ref.o"; then
+            ok "mc-slim + the installed package: <prelude> compiles to the full binary's object, byte for byte"
+        else
+            fail "mc-slim after install" "exit $rc: $(cat "$tmp/o")"
+        fi
+    fi
+    # the whole compiler, from the installed tree: M44 § A3 step 3, through
+    # `mc install` this time rather than a layout this script wrote by hand
+    cc="$slim"
+    build tests/pkg/std "" "$i1"
+    if want_exit "mc-slim compiles <mc/core> from the installed package" 0; then
+        "$mc" src/mc.mc -o "$tmp/out/ref2.o" 2> /dev/null
+        if cmp -s tests/pkg/std/build/def.o "$tmp/out/ref2.o"; then
+            ok "mc-slim + mc install: <mc/host> + <mc/core> + <user_default> == src/mc.mc, byte for byte"
+        else
+            fail "mc-slim + mc install" "the object differs from src/mc.mc's"
+        fi
+    fi
+    # and the pre-scan sees through the installed package: without that, a slim
+    # compiler estimates nothing for a project whose sources are all `<...>`,
+    # every table grows from its seed and the build uses twice the heap for the
+    # same output (M44 § Implementation notes -- step 4, note 9).
+    rm -rf tests/pkg/std/build
+    "$slim" build tests/pkg/std --libs-dir "$i1" --limits > "$tmp/o" 2>&1; rc=$?
+    if [ "$rc" = 0 ] && grep -q "verdict ok" "$tmp/o" \
+       && ! awk '$1 == "nodes" { print $5 }' "$tmp/o" | grep -qv '^0$'; then
+        ok "mc-slim's pre-scan reads the installed package: $(grep '^nodes' "$tmp/o")"
+    else
+        fail "mc-slim --limits" "exit $rc: $(grep -E '^(nodes|verdict|tolerance)' "$tmp/o" | tr '\n' ' ')"
+    fi
+    cc="$mc"
+fi
+
+# 32e. the registry road, offline: an index row for the `mc` package whose
+# archive is a tarball of this checkout. The reserved-name rule (`mc` in [deps],
+# [replace] or `mc pkg add`) does not apply here -- see § 11 above, which still
+# refuses all three -- because this road installs the compiler's own package for
+# the compiler itself (src/install.mc's header).
+mkdir -p "$tmp/mcstage/mc-1.0.0" "$tmp/i3"
+cp mc.toml "$tmp/mcstage/mc-1.0.0/"
+while IFS= read -r f; do
+    mkdir -p "$tmp/mcstage/mc-1.0.0/$(dirname "$f")"
+    cp "$f" "$tmp/mcstage/mc-1.0.0/$f"
+done < "$tmp/out/got-files"
+(cd "$tmp/mcstage" && rtar czf "$tmp/archives/mc-1.0.0.tar.gz" mc-1.0.0)
+mch=$(sh scripts/pkg-hash.sh "$tmp/mcstage/mc-1.0.0")
+{ echo '[package]'; echo 'name = "mc"'; echo
+  echo '[[versions]]'; echo 'version = "1.0.0"'
+  echo "url = \"$tmp/archives/mc-1.0.0.tar.gz\""
+  echo 'strip = 1'; echo "sha256 = \"$mch\""; echo 'deps = []'
+} > "$tmp/registry/index/mc.toml"
+
+ins 1.0.0 --registry "$tmp/registry" --libs-dir "$tmp/i3"
+if [ "$rc" = 0 ] && grep -q "^nothing was downloaded: re-run with --yes$" "$tmp/o" \
+   && grep -q "^fetch  mc 1.0.0$" "$tmp/o" && [ ! -d "$tmp/i3/mc" ]; then
+    ok "mc install VERSION prints the plan and fetches nothing without --yes"
+else
+    fail "mc install without --yes" "exit $rc: $(cat "$tmp/o")"
+fi
+
+ins 1.0.0 --registry "$tmp/registry" --libs-dir "$tmp/i3" --yes
+if [ "$rc" = 0 ] && [ -f "$tmp/i3/mc/v1.0.0.toml" ] \
+   && cmp -s tools/bundle.list "$tmp/i3/mc/v1.0.0/bundle.list"; then
+    ok "mc install 1.0.0 --yes: fetched, hashed against the row, blessed, bundle.list at the root"
+else
+    fail "mc install 1.0.0 --yes" "exit $rc: $(cat "$tmp/o")"
+fi
+
+# the row's sha256 is the tree hash and it is CHECKED: a wrong one leaves no
+# manifest behind, which is what `is not fetched` reads as afterwards
+sed 's/^sha256 = ".*"/sha256 = "0000000000000000000000000000000000000000000000000000000000000000"/' \
+    "$tmp/registry/index/mc.toml" > "$tmp/registry/index/mc.toml.new"
+mv "$tmp/registry/index/mc.toml.new" "$tmp/registry/index/mc.toml"
+ins 1.0.0 --registry "$tmp/registry" --libs-dir "$tmp/i4" --yes
+if [ "$rc" = 2 ] && grep -q "^mc: checksum mismatch for mc 1.0.0$" "$tmp/o" \
+   && [ ! -f "$tmp/i4/mc/v1.0.0.toml" ] && [ ! -f "$tmp/i4/mc/v1.0.0/mc.toml" ]; then
+    ok "a wrong sha256 refuses and leaves no claim: $(head -1 "$tmp/o")"
+else
+    fail "mc install with a wrong sha256" "exit $rc: $(cat "$tmp/o")"
+fi
+
+# a version nobody published
+ins 9.9.9 --registry "$tmp/registry" --libs-dir "$tmp/i4" --yes
+if [ "$rc" = 1 ] && grep -q "^mc: no such version of mc in the registry: 9.9.9$" "$tmp/o"; then
+    ok "an unpublished version: $(head -1 "$tmp/o")"
+else
+    fail "mc install 9.9.9" "exit $rc: $(cat "$tmp/o")"
+fi
 
 echo "check-pkg: $((total - fails))/$total"
 [ "$fails" -eq 0 ]

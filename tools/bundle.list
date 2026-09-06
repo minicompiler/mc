@@ -25,6 +25,7 @@ mc/core_machines	src/core_machines.mc
 mc/core_min	src/core_min.mc
 mc/core_pkg	src/core_pkg.mc
 mc/core_sandbox	src/core_sandbox.mc
+mc/core_slim	src/core_slim.mc
 mc/core_writers	src/core_writers.mc
 mc/deps	src/deps.mc
 mc/driver	src/driver.mc
@@ -39,12 +40,14 @@ mc/host_macos	src/host_macos.mc
 mc/host_windows	src/host_windows.mc
 mc/host_windows_aarch64	src/host_windows_aarch64.mc
 mc/host_windows_x86_64	src/host_windows_x86_64.mc
+mc/install	src/install.mc
 mc/lex	src/lex.mc
 mc/limits	src/limits.mc
 mc/machine_arm64	src/machine_arm64.mc
 mc/machine_x86_64	src/machine_x86_64.mc
 mc/macho	src/macho.mc
 mc/main	src/main.mc
+mc/main_slim	src/main_slim.mc
 mc/objmodel	src/objmodel.mc
 mc/parse	src/parse.mc
 mc/pkg	src/pkg.mc

@@ -45,7 +45,7 @@ notatype main() { return 0; }
 | `empty lexeme` | `#token ""` | give the lexeme at least one byte |
 | `unknown directive` | a `#name` that is not one of the ten | check the spelling; the list is in [directives.md](directives.md). `#include <name>` and `#embed` do not exist in the C seed |
 | `invalid hole` | a `$` that is not followed by a hole name | `$name` and `$$name` are only meaningful inside a `#rule` template |
-| `unknown bundled include` | `#include <name>` with a name the bundle does not carry | the catalogue is [bundle.md](bundle.md). There is no filesystem fallback for `<...>` |
+| `unknown bundled include` | `#include <name>` with a name the bundle does not carry | the catalogue is [bundle.md](bundle.md). There is no filesystem fallback for `<...>`. In a binary with no bundle at all the message names the install instead ([packages.md](packages.md) § 2) |
 | `path with too many segments` | a path with more than 64 components after normalisation | shorten it, or add an `[include].paths` root and include by a short name |
 | `too many substitutions` | more than 16 `p_subst_*` entries pending for one pushed source | a module bug: batch fewer substitutions per push |
 
@@ -526,6 +526,25 @@ environment is not ready" -- a transfer that failed, a checksum that did not mat
 | `mc: geo 1.2.0: the archive requires a package the row does not list: mathx` | 1 | `mc pkg check`: the row's `deps` are not the archive's `[deps]` | regenerate the row |
 | `mc: plot 1.0.0: a published row was edited: only yanked = true may be added` | 1 | `mc pkg check` against the registry's current copy | published rows are immutable; publish a new version |
 | `mc: plot 1.0.0: a published version was removed` | 1 | the same, for a row that vanished from the file | put it back and yank it instead |
+
+### `mc install`
+
+The compiler's own package ([cli.md](cli.md) § 3e). Same two codes, same meanings.
+
+| message | exit | cause | fix |
+|---|---|---|---|
+| `prog.mc:1: #include <prelude>: not bundled in this compiler and mc 0.16.0 is not installed: run mc install` | 1 | a binary with NO bundle -- `mc-slim` -- was asked for a `<name>` and neither a lock nor an installation had it. A binary that carries the blob says `unknown bundled include` instead, and a slim one that IS installed says it too, for a name the tree really does not have | `mc install --yes` |
+| `mc: mc 0.0.0-dev is a development build: the registry publishes no such version` + `run: mc install --from-tree .` | 2 | the registry road on a compiler built from a checkout: `0.0.0-dev` is the sentinel `scripts/set-version.sh` replaces at release time | install from the checkout, or name a published `VERSION` |
+| `mc: not the mc package: DIR` | 1 | `--from-tree DIR` where `DIR/mc.toml` has another `[package].name` | point it at a checkout of `minicompiler/mc` |
+| `mc: no mc.toml in: DIR` | 1 | `--from-tree DIR` with no manifest there at all | the same |
+| `mc: no such version of mc in the registry: 9.9.9` | 1 | the index file for `mc` has no row for that version | `mc install` with no argument installs this binary's own version |
+| `mc: the mc package carries no tools/bundle.list: DIR` | 2 | the tree that arrived has no `NAME<TAB>PATH` map, so no `<name>` could be resolved from it | the archive, or the `[package].files` of the tag |
+| `mc: the copy does not hash like the checkout: DIR` | 2 | `--from-tree` copied the tree and the copy hashes differently -- a file changed under it, or the destination could not be written | run it again on a quiet tree |
+
+Everything else `mc install` can print comes from the fetch it shares with `mc pkg sync`: the plan,
+`nothing was downloaded: re-run with --yes`, `checksum mismatch for mc 0.16.0`, the archive-member
+refusals. `mc 0.16.0 is installed (<libs>/mc/v0.16.0/)` on stdout with exit 0 is not a diagnostic:
+it is what a second `mc install` says.
 
 ---
 

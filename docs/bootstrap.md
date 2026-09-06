@@ -286,6 +286,28 @@ unchanged; `[target].link = "static"` (`--link=static`) is how a program that im
 *requires* the static image it already gets
 ([build.md § The matrix](build.md#the-matrix-libc-x-link)).
 
+### The two flavours (M44 step 4)
+
+Since M44 step 4 a release carries **two binaries per target**: `mc`, the full one, and `mc-slim`,
+the same compiler with the bundle blob left out (`mc-<ver>-<target>-slim.tar.gz`, the file inside
+still called `mc`). The claim above -- "the binary alone is the toolchain" -- is the FULL flavour's,
+and it is why the full one is what every bootstrap uses as its seed.
+
+A slim binary is 44% of the size (534 179 bytes against 1 225 843, macOS arm64) and gets the same
+library source from the disk instead of from its own `__data`:
+
+```
+mc install --yes                        # <libs>/mc/v<version>/, from the registry
+mc install --from-tree .                # or from a checkout: what a dev build must use
+```
+
+It is **not** a bootstrap seed. `scripts/bootstrap-linux.sh` and `scripts/bootstrap-windows.sh`
+download `mc-<VER>-<target>.tar.gz` on purpose: the release gate runs the whole suite with the
+seed, and the suite must not depend on anything outside the checkout -- an installation is
+outside it. What the slim flavour is for is a machine that already has, or is willing to fetch,
+the `mc` package: see [reference/bundle.md](reference/bundle.md) § The slim flavour and
+[reference/cli.md](reference/cli.md) § 3e.
+
 ## Binaries are not versioned
 
 `.gitignore` already ignores `build/` (and `*.o`, `*.dSYM`) — `mc0`, `mc1`, `mc2`, `mc3`, and

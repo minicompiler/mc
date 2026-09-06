@@ -1,0 +1,23 @@
+# mc.windows-aarch64-slim-obj.toml -- the SLIM flavour of src/mc.windows-aarch64-obj.toml
+# (M44 § B, step 4): the same cross-build, one line apart -- `entry` names
+# src/mc_windows_slim.mc, which is src/mc.*.mc with src/core_slim.mc in place of
+# src/core.mc, so the object carries no bundle blob.
+#
+# Everything else -- the target, the object road, the tolerance, the reason CI
+# uses it -- is the sibling's, and the comment there explains it.
+#
+[project]
+name  = "mc-windows-arm64-slim"
+entry = "mc_windows_slim.mc"
+out   = "../build/mc-windows-arm64-slim.obj"
+kind  = "obj"
+
+[target]
+os   = "windows"
+arch = "aarch64"
+
+# The compiler compiling itself is the biggest source in the repository; at the
+# default 0.25 several tables double mid-build. 1.0 keeps the whole build inside
+# the first reserve (`mc limits src --config src/mc.windows-aarch64-obj.toml`).
+[limits]
+tolerance = 1.0

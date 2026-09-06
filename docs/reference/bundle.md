@@ -237,8 +237,12 @@ this table cannot drift from the code.
 | `<mc/core_writers>` | `src/core_writers.mc` | `sha256` `macho` `backend_exe` `backend_elf` `backend_elf_exe` `backend_coff` | `mc_writers_init()` — the eight `backend()` and five `target()` registrations |
 | `<mc/core_build>` | `src/core_build.mc` | `sha256` `toml` `deps` `driver` `fetch` `sysroots` `sysroot` `stubs` `limits` | `mc_build_init()` — `mc build`, `mc limits`, `mc sysroot`, the pre-scan, and the READ side of packages |
 | `<mc/core_bundle>` | `src/core_bundle.mc` | `bundle_data` `bundle` | `mc_bundle_init()` — `#include <name>` itself |
-| `<mc/core_pkg>` | `src/core_pkg.mc` | `core_build` `pkg` | `mc_pkg_init()` — `mc pkg` and `mc update` ([packages.md](packages.md)) |
+| `<mc/core_pkg>` | `src/core_pkg.mc` | `core_build` `pkg` `install` | `mc_pkg_init()` — `mc pkg`, `mc update` and `mc install` ([packages.md](packages.md)) |
 | `<mc/core_sandbox>` | `src/core_sandbox.mc` | `sandbox` | `mc_sandbox_init()` — `mc sandbox run\|exec\|check` ([sandbox.md](sandbox.md)) |
+
+`<mc/core_pkg>` gained `src/install.mc` with M44 step 4: `mc install`, the subcommand that puts the
+`mc` package itself under `<libs>` — which is where a compiler assembled WITHOUT
+`<mc/core_bundle>` reads every `<name>` from (§ The slim flavour below).
 
 The two files M41 split out are bundled under their own names too: `<mc/objmodel>`
 (`src/objmodel.mc`, the section/symbol/relocation model every writer reads) and `<mc/cli>`
@@ -292,6 +296,45 @@ relative `#include` inside a bundled file resolves by joining and then, failing 
 component (see below), and `tools/bundle.mc` refuses a manifest where two entries share one. That
 is why the parts are `core_min` and not `core-min`: `src/core_min.mc` cannot be reached as
 `core-min`, so a hyphenated bundle name would be a name nothing inside the bundle could include.
+
+### The slim flavour (M44 step 4)
+
+A release carries two binaries per target: **`mc`**, the full one, and **`mc-slim`**, the same
+compiler with the blob left out — `mc-<ver>-<target>-slim.tar.gz`, where the file inside is still
+called `mc`. Measured here (macOS arm64, `scripts/check-parts.sh`): **534 179 bytes against
+1 225 843**, 44% of the full binary, and its `__DATA,__data` is 8 608 bytes against 605 104.
+
+It is an assembly and not a part: `src/core_slim.mc`, bundled as `<mc/core_slim>`, is the five
+parts a compiler needs to compile anything, and `src/main_slim.mc` (`<mc/main_slim>`) is the
+`main()` that matches. Spelled out:
+
+```
+#include <mc/host>
+#include <mc/core_min>
+#include <mc/core_machines>
+#include <mc/core_writers>
+#include <mc/core_build>
+#include <mc/core_pkg>
+#include <mc/main_slim>
+#include <user_default>
+```
+
+Two parts are missing. `<mc/core_bundle>` is the point of the flavour. `<mc/core_sandbox>` goes
+with it because `mc sandbox` is a Linux supervisor and not part of compiling anything; a build that
+wants it back adds the include and the `mc_sandbox_init()` call, and nothing else changes.
+
+What a slim binary does before anything is installed: compile a program with no `<...>` include,
+every `--dump-*`, `mc --host`, `mc --version`, `mc build` of a project whose sources use no
+bundled name, `mc limits`, `mc sysroot`, `mc pkg` — and `mc install` itself. What it does after
+`mc install` ([cli.md](cli.md) § 3e) is everything the full binary does, out of
+`<libs>/mc/v<version>/` instead of out of its own `__data`: `scripts/check-pkg.sh` § 32 compiles
+`#include <mc/host>` + `<mc/core>` + `<user_default>` with it and gets an object byte for byte
+identical to the full compiler's `src/mc.mc`.
+
+`src/mc_slim.mc` is the checked-in entry (host layer + `core_slim.mc` + `user.mc`), with one
+sibling per cross target — `src/mc_linux_slim.mc`, `src/mc_linux_x86_64_slim.mc`,
+`src/mc_windows_slim.mc`, `src/mc_windows_x86_64_slim.mc` — and one `*-slim-obj.toml` config each,
+exactly as the full flavour has. `make mc-slim` builds `build/mc-slim` on the host.
 
 ### Your own bundle
 

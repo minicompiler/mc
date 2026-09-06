@@ -51,15 +51,31 @@ A value that starts with `<` is emitted into the generated compiler source verba
 | 1 | the **lock** | `X`'s first path component is a package `mc.lock` names, and the file asking is allowed to reach it (§ 5) |
 | 2 | the **bundle** — the copy inside this binary ([bundle.md](bundle.md)) | every name in the manifest, plus `<mc/bundle_data>` and `<mc/bundle.bin>` |
 | 3 | the **installed `mc` package** under `<libs>/mc/v<version>/` | the same names as step 2, when the binary carries no bundle |
-| — | nobody | `prog.mc:1: unknown bundled include: no/such/module` |
+| — | nobody | `prog.mc:1: unknown bundled include: no/such/module` — or, in a binary that carries no bundle AND has no installation, `prog.mc:1: #include <prelude>: not bundled in this compiler and mc 0.16.0 is not installed: run mc install` |
 
 Step 1 exists only where a lock was read, which is `mc build`. The single-file CLI
 (`mc x.mc -o x.o`) has no project and therefore no step 1: `<geo/geo.mc>` there is
 `unknown bundled include: geo/geo`, and `--include=DIR` plus a quote include is the hand road.
 
-Step 3 is reached only on a bundle miss. For a binary that carries the blob — which is every
-binary this build produces — that means a name nobody ships, so a full `mc` behaves exactly as it
-did before packages existed unless a lock says otherwise.
+Step 3 is reached only on a bundle miss. For a binary that carries the blob — the full flavour —
+that means a name nobody ships, so a full `mc` behaves exactly as it did before packages existed
+unless a lock says otherwise. For **`mc-slim`** ([bundle.md](bundle.md) § The slim flavour) it
+means every `<name>` there is, which is what `mc install` ([cli.md](cli.md) § 3e) is for.
+
+What step 3 reads is `<libs>/mc/v<version>/` in the REPOSITORY layout, with one extra file:
+
+```
+~/.mc/libs/mc/v0.16.0.toml      the cache manifest: name, version, tree hash, one [[file]] row each
+~/.mc/libs/mc/v0.16.0/
+    mc.toml                     the package manifest, hashed first
+    bundle.list                 the NAME<TAB>PATH map, copied up from tools/ by `mc install`
+    src/…  lib/…  tools/…       every path of [package].files (§ 11)
+```
+
+`bundle.list` at the root is what turns a name into a path: `<float>` is `lib/float.mc`,
+`<mc/core>` is `src/core.mc`. The repository keeps that file under `tools/`, and the copy at the
+root is deliberately **not** in `[package].files` — it must not move the tree hash the registry
+published.
 
 **Where a locked package's tree is**, in order:
 
@@ -681,6 +697,12 @@ files = [ "lib/backend_arm64.mc", …, "tools/bundle.list" ]
   `src/core.mc` alone needs a host layer chosen first. The unit named is the
   entry point for the architecture the registry's worker runs
   (`linux/x86_64`); a unit that cannot be compiled there fails there.
+* **The install road.** `mc install [VERSION]` fetches exactly this package —
+  the tag archive, `strip = 1`, `files` hashed like any other package — into
+  `<libs>/mc/v<VERSION>/` and copies `tools/bundle.list` to the root of the
+  tree afterwards; `mc install --from-tree DIR` does the same from a checkout,
+  which is what a development build (`0.0.0-dev`, a version no registry
+  publishes) must use. See [cli.md](cli.md) § 3e.
 * **`files`** is `cut -f2 tools/bundle.list | LC_ALL=C sort -u` (byte order: a UTF-8
   locale collates `_` before `.` on macOS, and the manifest order is what the
   tree hash is over) plus **four** files that list
@@ -701,8 +723,13 @@ files = [ "lib/backend_arm64.mc", …, "tools/bundle.list" ]
 **`mc` is reserved on every road a consumer would take.** `[deps] mc = "…"`,
 `[replace] mc = "…"`, `mc pkg add mc` and `mc pkg check` of an index file whose
 `[package].name` is `mc` are all `reserved package name` (§ 6, § 8). The
-published package is therefore for the installed-tree road and for `mc install`
-(M44 steps 4-5), not for `[deps]`.
+published package is for the installed-tree road — `mc install`, § 2 step 3 —
+and not for `[deps]`. `mc install` reads the same index file every other package
+has, and the reserved set does not apply to it: it installs the compiler's own
+package **for the binary itself**, at the binary's own version, into a directory
+no project resolves through. `scripts/check-pkg.sh` asserts both halves in one
+run — § 11 still refuses all three consumer roads, § 32 installs from the same
+kind of row.
 
 **A package's namespace is not the bundle's.** `<mc/core>` out of the blob is
 `src/core.mc`; through a locked package it would be `<pkgdir>/core.mc`, because

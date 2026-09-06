@@ -121,18 +121,31 @@ i64 ps_bundled(uptr name) {
     u8 blen[8];
     st64(canon, 0);
     st64(blen, 0);
-    // reached through lex.mc's function pointer, not by calling bundle_open
-    // directly: a taught compiler assembled without src/bundle.mc (the core
-    // list is the module's to choose, docs/surface.md § Tier 3) still links,
-    // and simply pre-scans no bundled include. Same reason lex.mc uses it.
-    if (bopen_fn == 0) return 0;
-    uptr src = callp(bopen_fn, name, 1, canon, blen);
+    // reached through lex.mc's function pointers, not by calling bundle_open or
+    // libs_open directly: a taught compiler assembled without src/bundle.mc (the
+    // core list is the module's to choose, docs/surface.md § Tier 3) still
+    // links, and simply pre-scans no bundled include. Same reason lex.mc uses
+    // them.
+    uptr src = 0;
+    i64 virt = 1;
+    if (bopen_fn != 0) src = callp(bopen_fn, name, 1, canon, blen);
+    // M44 step 4: and then the installed `mc` package, which is where a binary
+    // with no blob reads every one of these names from. Without this second
+    // road a slim compiler pre-scans NOTHING -- `mc build` of a project whose
+    // sources are all `<...>` estimated 32 nodes and grew ten times, using
+    // twice the heap for the same output. The frame is not virtual here: the
+    // file came off the filesystem and its relative includes are paths, exactly
+    // as lex_include_libs pushes it.
+    if (src == 0 && lopen_fn != 0) {
+        src = callp(lopen_fn, name, 1, canon, blen);
+        virt = 0;
+    }
     if (src == 0) return 0;
     uptr key = ld64(canon);
     if (ps_seen_has(key)) return 1;
     ps_seen_add(key);
     ps_count(src, ld64(blen));
-    ps_includes(key, src, ld64(blen), 1);
+    ps_includes(key, src, ld64(blen), virt);
     return 1;
 }
 

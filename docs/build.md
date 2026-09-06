@@ -1951,6 +1951,31 @@ of `~/.mc/libs`, so no CI job depends on `HOME`) and nothing else. Everything ab
 the tree hash, the resolution order, the closure rule, every message — is in
 [reference/packages.md](reference/packages.md).
 
+### The two flavours, and `mc install` (step 4)
+
+The compiler's own tree is a package too (`mc.toml` at the root of this repository), and
+**`mc install`** is what puts it under `<libs>/mc/v<version>/` — from the registry, or with
+`--from-tree DIR` from a checkout, which is what a development build has to use because
+`0.0.0-dev` is a version nobody publishes. That directory is step 3 of the resolution order, and
+it is what makes a second release flavour possible:
+
+| flavour | `#include <prelude>` comes from | size, macOS arm64 |
+|---|---|---|
+| `mc` | the blob inside the binary | 1 225 843 B |
+| `mc-slim` | `<libs>/mc/v<version>/lib/prelude.mc`, after `mc install` | 534 179 B |
+
+`mc-slim` is the same compiler assembled without `<mc/core_bundle>` (and without
+`<mc/core_sandbox>`): same machines, same writers, same `mc build`, same `mc pkg`. With nothing
+installed it compiles anything that uses no `<name>` and says exactly what to do about the rest:
+
+```
+prog.mc:1: #include <prelude>: not bundled in this compiler and mc 0.16.0 is not installed: run mc install
+```
+
+`make mc-slim` builds it here; a release carries one per target
+([reference/bundle.md](reference/bundle.md) § The slim flavour,
+[reference/cli.md](reference/cli.md) § 3e).
+
 ## Limits of M14, M15, M16 and M23
 
 - **`[target]` defaults to the host.** With no `[target]` section at all, `os` and `arch` are what
