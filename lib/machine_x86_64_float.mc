@@ -582,14 +582,21 @@ void fx_result(i64 d) {
     x86_dst_done(d, rd);
 }
 
+// The result is taken out of the ABI return register BEFORE the live depths come
+// back, and that order is not cosmetic: on Win64 the float depths are xmm0..xmm5
+// (xmm6..xmm15 are callee-saved), so depth 0's register IS the return register --
+// restoring first overwrote xmm0 with the caller's own value and every call whose
+// float result was combined with a live float depth answered that value instead.
+// SysV never showed it (depths xmm8..xmm13 miss xmm0) and neither does the integer
+// half (rax is nobody's depth), which is why one order has to serve all four.
 void fx_call(i64 d, i64 na, i64 sym) {
     fx_save_live(d);
     i64 back = fx_push_args(d, na);
     fx_reg_args(d, na);
     ins_add(X_CALL, 0, 0, 0, 0, 0, sym);
     if (back) ei(X_SPADD, 0, 0, back);
-    fx_restore_live(d);
     fx_result(d);
+    fx_restore_live(d);
 }
 
 void fx_callp(i64 d, i64 na) {
@@ -599,8 +606,8 @@ void fx_callp(i64 d, i64 na) {
     fx_reg_args(d + 1, na - 1);
     e2(X_CALLR, XR_RAX, 0);
     if (back) ei(X_SPADD, 0, 0, back);
-    fx_restore_live(d);
     fx_result(d);
+    fx_restore_live(d);
 }
 
 void fx_ret(i64 d) {

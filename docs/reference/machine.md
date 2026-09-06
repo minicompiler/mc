@@ -526,6 +526,14 @@ contract it was told `i64` unconditionally and a float result was never moved ou
 The narrow half follows the same rule: `(i32) callp(...)` extends at the call, the way M45 extends
 a direct call, and `walk_depth_type(d)` holds `i32` when the written cast's own `MTASK_CAST` runs.
 
+**Take the result before you restore.** A machine that saves its live depths around a call has to
+move the value out of the ABI's return register *before* it reloads them, because the two can be
+the same register: on Win64 `<float>` puts the float depths in `xmm0..xmm5` (`xmm6..xmm15` are
+callee-saved), so depth 0's register **is** `xmm0`, and restoring first overwrites what the callee
+returned. AArch64 (`v16..v23` against `d0`), SysV (`xmm8..xmm13` against `xmm0`) and every integer
+half (`rax`/`x0` is nobody's depth) do not show it, so one order has to serve them all — result,
+then restore, in `MTASK_CALL` and `MTASK_CALLP` alike.
+
 **What this buys.** `MTASK_BIN(MOP_ADD, d, d2)` with `walk_depth_type(d) == f64` is an `fadd`;
 `MTASK_RET(d)` returns in `v0`; `MTASK_CALL(d, na, sym)` walks `walk_depth_type(d + i)` and runs
 the AAPCS64 NGRN/NSRN split — the whole float ABI, with no task added. A stale entry is wrong code

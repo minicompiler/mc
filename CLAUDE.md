@@ -4117,6 +4117,22 @@ agents (`.claude/agents/`): `stage0-dev` (C23), `mc-dev` (`.mc` code), `reviewer
      `llvm-mc -triple=arm64-apple-darwin` says `scvtf s16, x9` is `0x9E220000` and `ucvtf s16, x9`
      `0x9E230000`; with those two words the sweep re-assembles every one of them byte for byte,
      which is exactly the check that would have caught the original error had the rows been live.
+  4. **Then CI found the Win64 half of the same call** (`lib/machine_x86_64_float.mc`, the leg
+     `Link and run the suite (windows/x86_64)`, the only red one): `023-callp-f64` answered
+     `0x4000000000000000 ... 0x4070000000000000` -- columns 1 and 3 gave back the callp's own
+     ARGUMENT. `fx_call`/`fx_callp` restored the live depths and only then moved the result out of
+     `xmm0`, and on Win64 the float depths are `xmm0..xmm5` (`xmm6..xmm15` are callee-saved), so
+     depth 0's register **is** the return register: `movsd xmm0, [rbp-8]` overwrote what the callee
+     had just returned and `movsd xmm1, xmm0` copied the caller's own 1.0 into the result depth --
+     `1.0 + callp(&dbl, 2.0)` = 2.0, and the eight-deep column 255 + 1 = 256.0, both exactly the
+     bytes CI printed. The fix is the order, in both slots: `fx_result(d)` BEFORE
+     `fx_restore_live(d)`. SysV (`xmm8..xmm13`), AArch64 (`v16..v23` against `d0`) and every
+     integer half (`rax` is nobody's depth) could not show it, which is why one order now serves
+     all four. Scanning the whole float corpus for the pattern -- a restore of `xmm0` between a
+     `call` and the move that reads it -- finds exactly two sites, both in `023`, both only under
+     `--machine=x86_64-win`, and none after the fix. `tests/float/025-live-depth-call.mc` is the
+     DIRECT-call sibling nothing covered (the same defect: pre-fix it shows the pattern three
+     times on `x86_64-win` and nowhere else); `docs/reference/machine.md` § 3 states the rule.
   Proofs. `tests/float/023-callp-f64.mc` (the consumer's repro; a `callp` at a SPILLED float depth
   -- eight live float depths, so `v16..v23` are saved around the `blr` and the result goes to the
   frame with `str d`; two float arguments; and an `f32` result through `(f32) callp(...)`),
@@ -4169,10 +4185,41 @@ agents (`.claude/agents/`): `stage0-dev` (C23), `mc-dev` (`.mc` code), `reviewer
   `2c16fdd6dd8e0986a46c6d19109b2a8712d18507f134a54cdb4902317c9770f9` (1311785 B),
   `mc2-windows-x86_64.sha256`
   `406f23e154ed35c388ef97d4108f352a433d90e63ca3878d393c55355125e9fb` (1348945 B).
+  **Re-measured after (4)**, and these numbers supersede the ones above: `make bundle` re-run
+  BEFORE bootstrapping (93 files, raw 1201703 -> LZ 561413, blob 562575 B); `make check` green end
+  to end (**RC 0, zero FAIL**, 5m34s + the golden re-record) -- `budget` 2848/3000, `test` 32/32,
+  `check-lex` 163/163 (3 skipped), `check-ast`/`check-asm` 164/164, `check-obj` **32/32 identical
+  to the frozen seed**, `bootstrap` at a fixed point (`mc2.o == mc3.o`, 1285512 bytes; the
+  `--dump-asm` diff between `mc1` and `mc2` is **empty**), `check-surface` 185 ok lines,
+  `test-exe` 32/32, `check-mc` 16/16, `check-limits` 17/17 under 90%, `test-linux` 42/42 and
+  `test-linux-x86_64` 40/40, the four `--exe` cells 45/45 + 45/45 + 43/43 + 43/43,
+  `test-windows` 43/43 objects and 43 linked, `test-windows-x86_64` **41/41 and 41 linked**,
+  **`check-float` ok on all five legs with the new test** (macos/aarch64 16/16, linux/aarch64
+  16/16, linux/x86_64 16/16, windows/aarch64 14/14 objects, windows/x86_64 14/14, 2 skipped
+  each) and the sweep at **60 (mach-o arm64), 60 (elf aarch64), 249 (elf x86_64), 232 (coff
+  x86_64) distinct instructions, 0 mismatches**, `check-wide`, `check-kernel`, `check-avr`,
+  `test-sandbox` 60 ok / 0 failed / 1 skipped, `check-docs` (199 symbols, 36 flags, 27 TOML keys,
+  10 directives, 52 samples, 385 links), `site` 91 pages + `check-site` + `check-site-linux`
+  11/11. `scripts/check-inert.sh /tmp/premain/build/mc1 build/mc1` (pre = a `mc1` built from
+  `origin/main` 900c569): **33 objects identical** plus byte-identical `api`, `lang`, `conc`,
+  `desktop` and `kernel`. `make check-linux-host` RC 0 over all four cells (aarch64 musl 42/42 +
+  `test-exe` 31/31, aarch64 gnu 43/43, x86_64 musl 40/40 + 29/29, x86_64 gnu 41/41), each after
+  its own `mc2l.o == mc3l.o` (1613040 B and 1511816 B) and with the cross proof green.
+  The five goldens rewritten once more: `mc2.sha256`
+  `6ba7098da052867e5bad23f5aa019da224d7b51eeb643c998b5a4bf2a684c936`, `mc2-linux-arm64.sha256`
+  `7b1c5d2b2f193e639972e11a707a90ae7c2856c058499589d3508cbf8e4e09de`,
+  `mc2-linux-x86_64.sha256`
+  `37a6996b71833036d217119875795c5be869c68da4d475d00007cebd4d9139ea` (both re-recorded by
+  `make check-linux-host`), and the Windows pair cross-computed per `tests/golden/README.md` --
+  `mc2-windows-arm64.sha256`
+  `b049c700c1c4b292cc1e5804815302989df066a90ff0fa2f3c5bbfe97efd5584` (1312121 B),
+  `mc2-windows-x86_64.sha256`
+  `8c6c1870547f4b641acf09638574ae2c5d2d489436171dd9b9583b34e446c3f1` (1349281 B).
   Docs: `docs/reference/language.md` § 6 and § 7 (the cast contract, with a sample that runs),
-  `docs/reference/machine.md` § 3 ("Where a `callp`'s answer comes from", next to
-  `walk_ret_type`), `docs/reference/bundle.md` § `<float>` (what the two machines map, the four
-  conversions named). No message was added, so `docs/reference/diagnostics.md` is untouched.
+  `docs/reference/machine.md` § 3 ("Where a `callp`'s answer comes from" and, since (4), "Take the
+  result before you restore" beside it), `docs/reference/bundle.md` § `<float>` (what the two
+  machines map, the four conversions named). No message was added, so
+  `docs/reference/diagnostics.md` is untouched.
 - Next: the **site + registry server, M47 S4-S6**, in `minicompiler/mc-registry`; then **M44 steps 4-5**
   (slim / install / upgrade), then **M42 step 2** (PE `--exe`, CI-gated on the Windows runners).
   **M46** only on the owner's request; **M43 Layer 2** after 1.0.0. M13 and M18 stay in the backlog
