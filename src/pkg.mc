@@ -908,7 +908,7 @@ void pkg_pad(uptr s, i64 w) {
 }
 
 i64 pkg_list() {
-    deps_apply(cfg_file);
+    deps_apply(cfg_file());
     i64 i = 0;
     while (i < dp_npkg()) {
         pkg_pad(dp_name(i), 12);
@@ -933,7 +933,7 @@ i64 pkg_list() {
 // refuses with the § 8 messages and exit 2. What is added here is the sentence
 // that says nothing was wrong.
 i64 pkg_verify() {
-    deps_apply(cfg_file);
+    deps_apply(cfg_file());
     out_str(1, "verified ");
     out_str(1, tm_num_str(dp_npkg()));
     out_str(1, " packages against mc.lock\n");
@@ -971,7 +971,7 @@ i64 pkg_copy_tree(uptr src, uptr dst, uptr what) {
 }
 
 i64 pkg_vendor() {
-    deps_apply(cfg_file);
+    deps_apply(cfg_file());
     i64 i = 0;
     while (i < dp_npkg()) {
         uptr name = dp_name(i);
@@ -1098,11 +1098,11 @@ i64 pkg_add(uptr arg) {
     if (dep_reserved(name)) pkg_die1("reserved package name", name);
     if (!dep_name_ok(name)) pkg_die1("invalid package name", name);
     uptr ver = pkg_pick(name, pkg_at_ver(arg), -1, 0);
-    pkg_add_write(cfg_file, name, ver);
-    drv_step("add", pkg_what(name, ver), cfg_file);
+    pkg_add_write(cfg_file(), name, ver);
+    drv_step("add", pkg_what(name, ver), cfg_file());
     // the config changed under the table we parsed: read it again, so that
     // MVS and the lock see the [deps] this command just wrote
-    toml_parse(cfg_file);
+    toml_parse(cfg_file());
     return pkg_sync();
 }
 
@@ -1130,12 +1130,12 @@ i64 pkg_update(uptr only) {
         // a minimum that already names a candidate keeps looking at them
         uptr v = pkg_pick(name, 0, ver_major(cur), ver_is_pre(cur));
         if (ver_cmp(v, cur) > 0) {
-            pkg_add_write(cfg_file, name, v);
+            pkg_add_write(cfg_file(), name, v);
             drv_step("update", name, tm_cat(tm_cat(cur, " -> "), v));
         }
         i = i + 1;
     }
-    toml_parse(cfg_file);
+    toml_parse(cfg_file());
     return pkg_sync();
 }
 
@@ -1319,7 +1319,7 @@ i64 pkg_check(uptr file) {
 void pkg_open_config(uptr dir, uptr cfg) {
     if (dir == 0) dir = ".";
     if (cfg == 0) cfg = path_norm(tm_cat(dir, "/mc.toml"));
-    cfg_file = cfg;
+    set_cfg_file(cfg);
     toml_parse(cfg);
     uptr r = deps_registry();
     if (r != 0 && str_eq(pk_registry(), pkg_default_registry())) pk_set_registry(r);
