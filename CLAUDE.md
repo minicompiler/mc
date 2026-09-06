@@ -4518,6 +4518,47 @@ agents (`.claude/agents/`): `stage0-dev` (C23), `mc-dev` (`.mc` code), `reviewer
   interface, `docs/reference/cli.md` § 3c (six rows and the four refusals),
   `docs/guide/99-sandbox.md` § 5 "Letting a little of the world in" (the later sections
   renumbered), `docs/reference/hooks.md` (`host_which()`), `docs/specs/M43.md`.
+  **The CI fix (both sandbox cells failed on PR #44, and the three local cells could not see it):**
+  `host_which` tested a candidate with a raw `open(cand, 0, 0) >= 0`, and `open` returns a C
+  `int` -- on **glibc 2.39**, which is what `ubuntu-24.04-arm` and `ubuntu-latest` run, a failing
+  one comes back as `0x00000000ffffffff`, so the test was TRUE for a file that is not there and
+  the function answered the FIRST entry of `PATH` with the name appended. `--bin true` resolved to
+  `/usr/local/sbin/true`, which does not exist, and the box died binding it: `sandbox: cannot bind
+  a --bin program: ENOENT`, exit 126. The fix is `c_int()` at both `open` sites in
+  `src/host_linux.mc` (+13/-3, 2 of them code) -- the same M45 D8 class as the `lex_readable` miss
+  of M43 step D, and the last two `open`s in `src/` that were still raw. Reproduced first in
+  `docker run --privileged --platform linux/arm64 ubuntu:24.04` (glibc 2.39, merged-usr, the
+  runner's shape), where `strace` shows `openat("/usr/local/sbin/true") = -1 ENOENT` and then
+  `mount("/usr/local/sbin/true", ...) = -1 ENOENT`; a probe compiled against each libc gives
+  `raw lo32=4294967295 hi32=0 raw fd>=0:1 c_int fd>=0:0` on glibc 2.39 (**aarch64 and x86_64**)
+  and `hi32=4294967295 fd>=0:0` on glibc 2.43 and on musl -- which is exactly why Lima (Ubuntu
+  26.04, glibc 2.43) and `alpine:3` were green. Cells after the fix: ubuntu:24.04 container
+  **root 72 ok / 0 failed / 2 skipped** and **unprivileged 72 ok / 0 failed / 2 skipped** (the two
+  skips are `032-svc`'s own header and the `readelf` the container has not; CI installs binutils
+  and gets 73/1), Lima glibc 2.43 **root and unprivileged 73 ok / 0 failed / 1 skipped**,
+  `alpine:3` musl **71 ok / 0 failed / 3 skipped** -- `binexec` and `binexec (alt)` ok in every
+  one. The x86_64 box still cannot be run from this Mac (Docker Desktop's amd64 emulation reports
+  `landlock: absent / seccomp: notif absent / pidfd: absent`), but the defect and the fix are the
+  glibc int-return ABI in ONE shared file, and the probe measures it on x86_64 too.
+  `make check` RC 0 again (`check-obj` 32/32, `check-lex` 163/163, `check-ast`/`check-asm`
+  164/164, fixed point 1304984 B with an **empty** `--dump-asm` diff, `check-parts`,
+  `check-limits` **17/17 under 90%, globals 445/512 (86%) -- unchanged, no new global**,
+  `check-docs` 200 symbols / 41 flags / 385 links, `site` 91 pages, `test-sandbox` 73 ok);
+  `make check-linux-host` RC 0 over all four cells; `scripts/check-inert.sh` against a `mc1` built
+  from `origin/main` 0648e1a: **33 objects identical** plus all five taught examples.
+  The five goldens rewritten once more, superseding the values above -- `mc2.sha256`
+  `76bd29de...8ab0cd` -> `4dfacf7fdf3592886762632d4cf9973ad9ecbc292ac9ac743569a5fb455140b5`
+  (after the empty `--dump-asm` diff and `cmp build/mc2.o build/mc3.o`); the Linux pair deleted and
+  re-recorded by `make check-linux-host` -- `mc2-linux-arm64.sha256`
+  `9284c26c06e247f4f9713878df784362959d6e64d3865adab85dd5be98386542`,
+  `mc2-linux-x86_64.sha256`
+  `bf78bad80121cc68468b0789f705ddad5c136d24a5daee73cf280395022acf6f`, each recorded in its musl
+  cell and re-verified by the gnu cell of the same architecture; the Windows pair cross-computed
+  per `tests/golden/README.md` -- `mc2-windows-arm64.sha256`
+  `d59542470d567a90dc969ca98a05fb8566a1bf32e08288984fb2bbcbc5bbae06` (1332091 B),
+  `mc2-windows-x86_64.sha256`
+  `f756b2efa7c1a1b5cd26fcb6b5738a6c310b7347e00d9d43f5c1e3a0422e9cd4` (1370243 B), both also
+  written byte for byte by `build/mc2`.
 - Next: the **site + registry server, M47 S4-S6**, in `minicompiler/mc-registry`; then **M44 steps 4-5**
   (slim / install / upgrade), then **M42 step 2** (PE `--exe`, CI-gated on the Windows runners).
   **M46** only on the owner's request; **M43 Layer 2** after 1.0.0. M13 and M18 stay in the backlog
