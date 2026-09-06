@@ -994,6 +994,25 @@ i64 sb_plan(i64 argc, uptr argv) {
     return 0;
 }
 
+// Does a run step follow a compile that succeeded? ONE predicate, read by the
+// box (which stops after the compile when the answer is no) and by the
+// supervisor (which has to know that a `compile: exit 0` was the box's LAST
+// event, and therefore its terminal status). They must agree, and before this
+// existed they did not: the box broke out of its loop correctly while
+// sb_note_exit left no terminal status, so a project that builds an object and
+// a `--dump-*` both ended in `the box ended without a status`, exit 126, after
+// a compile that succeeded (docs/specs/M43.md § Implementation notes -- the
+// compile-only box).
+//
+// Both readers run in a process that has the whole plan in hand: sb_plan()
+// settles the entry, the dump and [project].kind in P, before any fork, and
+// the box inherits the record.
+i64 sb_has_run_step() {
+    if (!sb_is_run()) return 1;                  // `exec`: the run step is all there is
+    if (sb_dump()) return 0;                     // the dump IS the output (§ 5)
+    return str_eq(sb_kind(), "exe");             // a project that builds an object
+}
+
 // The compile step needs to know which libc family the box will offer it: the
 // binary it writes names its own loader BY PATH (M42), and /lib comes from this
 // host. --libc= wins; otherwise it is whichever loader is on this host's disk.
@@ -1167,7 +1186,11 @@ void sb_note_exit(i64 step, i64 code) {
     sb_note_counts(step);
     if (step == SB_STEP_COMPILE) {
         sb_say(tm_cat("compile: exit ", tm_num_str(code)));
-        if (code != 0) { set_sb_rc(code); set_sb_done(1); }
+        if (code != 0) { set_sb_rc(code); set_sb_done(1); return; }
+        // A box with no run step ends here, and `compile: exit 0` is its
+        // terminal status: there is no program to announce an exit for, and a
+        // bare `exit 0` after it would say one ran.
+        if (!sb_has_run_step()) { set_sb_rc(0); set_sb_done(1); }
         return;
     }
     sb_say(tm_cat("exit ", tm_num_str(code)));

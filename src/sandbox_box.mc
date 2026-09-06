@@ -465,8 +465,7 @@ void sb_steps_main() {
     loop {
         if (sb_run_step(step)) break;
         if (step == SB_STEP_RUN) break;
-        if (sb_dump()) break;                    // the dump IS the output (§ 5)
-        if (!str_eq(sb_kind(), "exe")) break;    // a project that builds an object
+        if (!sb_has_run_step()) break;           // the compile was the last step
         step = SB_STEP_RUN;
     }
     sb_sys(SN_EXIT_GROUP, 0, 0, 0, 0, 0, 0);

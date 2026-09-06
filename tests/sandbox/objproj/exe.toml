@@ -1,0 +1,6 @@
+# The control for mc.toml: the SAME entry with a run step after the compile.
+[project]
+name  = "objproj"
+entry = "main.mc"
+out   = "build/objproj"
+kind  = "exe"

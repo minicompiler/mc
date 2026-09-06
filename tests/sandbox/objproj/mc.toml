@@ -1,0 +1,6 @@
+# kind = "obj": the box compiles and stops. See main.mc.
+[project]
+name  = "objproj"
+entry = "main.mc"
+out   = "build/objproj.o"
+kind  = "obj"

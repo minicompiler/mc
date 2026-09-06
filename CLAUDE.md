@@ -3569,6 +3569,101 @@ agents (`.claude/agents/`): `stage0-dev` (C23), `mc-dev` (`.mc` code), `reviewer
   `mc2-windows-x86_64.sha256`
   `4c1b54c5099a12cbffa4b6547e24891caf4f46f467bffe877a92c3eb9e021227` (1331426 B), both also
   written byte for byte by `build/mc2`.
+- Post-S5 follow-up (three findings from the registry's validator rehearsal, `minicompiler/mc-registry`
+  PR #7 / its `docs/spec-M47.md` § 22): **a compile-only box ends `done`, and the `mc` package
+  ships the unit it declares.** `stage0/` untouched (2848/3000); the whole compiled change is
+  `src/sandbox.mc` +24/-1 and `src/sandbox_box.mc` +1/-2, **8 added lines that are neither comment
+  nor blank**.
+  1. **`mc sandbox run` exited 126 after a compile that succeeded.** Two shapes have no run step
+     -- a project whose `[project].kind` is not `"exe"` (which is exactly what the validator
+     writes: a unit may or may not carry `main`, so the wrapper asks for an object) and a
+     `--dump-*`, which IS the output. Reproduced on the Lima oracle (`mc-k7`, Ubuntu 26.04,
+     kernel `7.0.0-30-generic`, aarch64, glibc) with the compiler of `origin/main` a87e9b5:
+     `sandbox: compile: exit 0` / `sandbox: the box ended without a status`, **exit 126**, where
+     the same entry with `kind = "exe"` is exit 0. The box's step loop knew to stop
+     (`if (!str_eq(sb_kind(), "exe")) break;`) and `sb_note_exit(SB_STEP_COMPILE, 0)` set no
+     terminal status, so `sb_go`'s `else if (!sb_done())` fired. Fixed at the root with ONE
+     predicate and two readers, which is what makes them unable to drift again:
+     `sb_has_run_step()` in `src/sandbox.mc` (`exec` -> 1, a dump -> 0, else
+     `str_eq(sb_kind(), "exe")`), read by `sandbox_box.mc`'s loop and by `sb_note_exit`, which now
+     ends the box with rc 0. **No new report line**: a one-step box's report is
+     `sandbox: compile: exit 0` and nothing else, because a bare `exit 0` after it would say a
+     program ran. Gate: `scripts/test-sandbox.sh` § 2c over the new `tests/sandbox/objproj/` (one
+     entry, three configs) asserts all four corners -- `kind = "obj"` and `--dump-ast` end 0 with
+     `compile: exit 0` as the report's LAST line and no `ended without a status` anywhere, the
+     same entry with `kind = "exe"` still gets its run step, and a compile that FAILS in a
+     one-step box is still `compile: exit 1`, exit 1. Measured after the fix: **60 ok / 0 failed /
+     1 skipped** on the Lima cell and **58 ok / 0 failed / 3 skipped** under
+     `docker run --privileged alpine:3` (musl, aarch64), against 55 and 53 before. On the
+     registry's side it deletes `jb_box_ok`'s exit-126 exemption.
+  2. **The `mc` package declared a check unit it did not ship.** `[package].check` names
+     `src/mc_linux_x86_64.mc`, and neither that file nor the `src/user.mc` it includes had a
+     `tools/bundle.list` row, so neither was in `files` -- and the tree hash covers `files` and
+     nothing else. Both added (byte order, `LC_ALL=C`), **97 entries**;
+     `scripts/check-pkg.sh` § 30a's extras list grew from two to four with its comment, and a new
+     § 30b' asserts that every `[package].check` unit is on disk AND declared. Proved by a local
+     rehearsal in the shape `web/job.mc` writes -- `kind = "obj"`,
+     `[target] os = "linux" arch = "x86_64"`, the tree **vendored** at `deps/pkgcheck/`
+     (`mc` cannot be a `[deps]` key; `pkgcheck` is the registry's own local name) holding
+     `mc.toml` plus every `files` entry and nothing else, an `mc.lock` row with the tree hash, and
+     `check.mc` = `#include <pkgcheck/src/mc_linux_x86_64.mc>`: with this branch's manifest it is
+     `exit 0` and an ELF 64-bit LSB relocatable x86-64 of **1 494 016 bytes**; with
+     `origin/main`'s it is `pkgcheck/src/mc_linux_x86_64.mc:1: not declared in pkgcheck's
+     [package].files`, exit 1. The `[replace]` spelling the instruction named was tried first and
+     is not usable (`mc: pkgcheck 0.0.0-dev is not fetched`, exit 2 -- `[replace]` is consulted
+     after the tree is resolved, the registry's own § 18 finding). Tree hash of the final tree,
+     `mc pkg hash .` == `sh scripts/pkg-hash.sh .` ==
+     `770d6e1c103d12f297fa586d4cf7d44555cea7fa0d841e58e9770f294fed6196`.
+     **Recommendation, not taken here**: `src/mc_linux.mc` as a SECOND check unit. It compiles on
+     an x86_64 worker in the same shape (measured: exit 0, `build/check.o` 1 494 032 bytes, an
+     x86-64 object) -- nothing in a host file is architecture-gated at compile time -- and it is
+     the only path to `src/host_linux_aarch64.mc` and `src/sysno_linux_aarch64.mc`, which are in
+     `files` and are compiled by no check today. It costs one more box per tag (~1.5 s of the
+     ~1.6 s job) and one more `files` entry.
+  3. **Docs.** `docs/reference/packages.md` gained the `[package].check` section (the key the
+     compiler ignores and the registry reads; default = the lib alone; each unit compiled on its
+     own; must be in `files`; it takes part in the tree hash because `mc.toml` is line 1 of the
+     digest) and § 11's four-extras correction; `docs/reference/sandbox.md` § The report says a
+     `compile: exit N` is the TERMINAL status when there is no run step, with the transcript;
+     `docs/specs/M43.md` gained § Implementation notes -- the compile-only box;
+     `docs/specs/M47-S5.md` gained § 5, the outcome (the rehearsal table, the second-unit
+     recommendation, and the registry's § 22.5 caps -- CPU 1.39 s of 60, wall 1.48 s of 180,
+     90 716 KiB of 512 MiB, an output of 1 595 016 B of 64 MiB, the two-tag job in 1631 ms);
+     `docs/ci.md` documents `publish-to-registry`'s two explicit inputs (`registry:
+     https://next.minicompiler.dev`, `index: https://pkg.minicompiler.dev`) and that both lines
+     are deleted at the apex flip -- the apex is still GitHub Pages and answers 405 to
+     `POST /poll`.
+  -- `make bundle` re-run before bootstrapping (93 files, raw 1180351 -> LZ 552350, blob
+  553512 B). `make check` green end to end (**RC 0, zero FAIL**): `budget` 2848/3000, `test`
+  32/32, `check-lex` 149/149 (3 skipped), `check-ast`/`check-asm` 150/150, `check-obj` **32/32
+  identical to the frozen seed**, `check-bundle`, `bootstrap` at a fixed point
+  (`mc2.o == mc3.o`, 1270064 B; the `--dump-asm` diff between `mc1` and `mc2` is **empty**),
+  `check-surface` 32/32 + inert, `test-exe` 32/32, `check-mc` 15/15, `check-standalone`,
+  `check-parts`, `check-toml` 10/10, `check-build` 53/53, **`check-pkg` 94/94**, `check-sysroots`
+  (13 rows), `check-stubs` 9/9, `check-limits` 17/17 under 90% (globals 449/512 = 87%),
+  `check-minimal`, `test-linux` 41/41, `test-linux-x86_64` 39/39, `test-linux-exe` and
+  `test-linux-x86_64-exe` (musl and gnu), `test-windows` 42/42 + `test-windows-x86_64` 40/40
+  objects cross-compiled, `check-examples`, `check-lang`, `check-conc`, `check-desktop`,
+  `check-float`, `check-wide`, `check-kernel`, `check-avr`, **`test-sandbox` 60 ok / 0 failed /
+  1 skipped**, `check-docs` (198 symbols, 36 flags, 27 TOML keys, 10 directives, 51 samples,
+  366 links), `site` 90 pages + `check-site` (0 link problems, 90 files 0 problems, 50 contrast
+  pairs 0 below the minimum). `make check-linux-host` RC 0 over all four cells (musl and gnu x
+  aarch64 and x86_64), each after its own `mc2l.o == mc3l.o` and with the cross proof green.
+  `scripts/check-inert.sh build/mc1.pre build/mc1` (pre = a `mc1` built from `origin/main`
+  a87e9b5): **33 objects identical** (`tests/*.mc` and `src/mc.mc`) plus byte-identical artefacts
+  for `examples/api`, `lang`, `conc`, `desktop` and `kernel` -- `src/sandbox.mc` emits nothing.
+  The five goldens rewritten **once**, each only after its own criterion: `mc2.sha256`
+  `6a689f82...a50b9` -> `4bcf3cd82142872232b7ebc55703aed580fa062c824de776873b4c80e917df06`
+  (after the empty `--dump-asm` diff and `cmp build/mc2.o build/mc3.o`); the Linux pair deleted and
+  re-recorded by `make check-linux-host` -- `mc2-linux-arm64.sha256`
+  `672ee2d3ddbc4bbccbaa839729978abdabe1312b0b51f1068a37844702fd9cd1`,
+  `mc2-linux-x86_64.sha256`
+  `c32e130e9b123171a080138fd4d8c58c89c6f18cea38f8cf899be28ae728c4a2`, each recorded in its musl
+  cell and re-verified by the gnu cell of the same architecture; the Windows pair cross-computed
+  per `tests/golden/README.md` -- `mc2-windows-arm64.sha256`
+  `103a3221398be254ffe19b2d7d6c79274b37ad37c82def83d75df48dbbeefa76` (1296500 B),
+  `mc2-windows-x86_64.sha256`
+  `b0af8baca4044bfacb26b50cd00e2b45cb58c2701f9986c6b1bfa3ce2cefce81` (1332236 B).
 - Next: the **site + registry server, M47 S4-S6**, in `minicompiler/mc-registry`; then **M44 steps 4-5**
   (slim / install / upgrade), then **M42 step 2** (PE `--exe`, CI-gated on the Windows runners).
   **M46** only on the owner's request; **M43 Layer 2** after 1.0.0. M13 and M18 stay in the backlog

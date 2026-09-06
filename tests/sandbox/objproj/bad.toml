@@ -1,0 +1,6 @@
+# kind = "obj" again, with an entry that does not compile. See bad.mc.
+[project]
+name  = "objproj"
+entry = "bad.mc"
+out   = "build/bad.o"
+kind  = "obj"
