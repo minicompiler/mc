@@ -1,11 +1,13 @@
 # comparison.md — how `mc` compares, measured against C, Go, Zig, Rust and C# (2026-09-06)
 
 Two benchmarks, run on one Mac, comparing `mc` against five real toolchains on the same code: a
-CPU-bound integer workload compiled and run by all six, and nine minimal HTTP servers under load.
-Every command, every number and every failure hit along the way is in
-[`../bench/RESULTS.md`](../bench/RESULTS.md) and [`../bench/http/RESULTS.md`](../bench/http/RESULTS.md);
-this page is the five-minute version. The benchmark sources are in [`../bench/`](../bench/README.md)
-and build with the same `mc` this repository builds — nothing here is a projection.
+CPU-bound integer workload compiled and run by all six, and 17 minimal HTTP servers under load
+(nine in the first set: mc, C, Go, Zig, Rust threads, C#; eight more in a second set: Node,
+Rust axum, Python, Ruby, PHP). Every command, every number and every failure hit along the way
+is in [`../bench/RESULTS.md`](../bench/RESULTS.md), [`../bench/http/RESULTS.md`](../bench/http/RESULTS.md)
+and [`../bench/http2/RESULTS.md`](../bench/http2/RESULTS.md); this page is the five-minute version.
+The benchmark sources are in [`../bench/`](../bench/README.md) and build with the same `mc` this
+repository builds — nothing here is a projection.
 
 ## Conditions
 
@@ -19,9 +21,16 @@ and build with the same `mc` this repository builds — nothing here is a projec
 | .NET | SDK 10.0.301, runtime 10.0.9 |
 | C | Apple clang 21.0.0 (clang-2100.1.1.101) |
 | mc | commit `0648e1a` (tag `v0.15.13`), `build/mc1`, `mc 0.0.0-dev` |
+| Node (2nd HTTP set) | v24.16.0 (nvm) |
+| Rust axum (2nd HTTP set) | axum 0.8.9, hyper 1.11.1, tokio 1.53.1 (`cargo` 1.96.0, same rustc as above) |
+| Python (2nd HTTP set) | 3.9.6 (Apple `/usr/bin/python3` shim), uvicorn 0.39.0 (h11 0.16.0, no httptools/uvloop) |
+| Ruby (2nd HTTP set) | 2.6.10p210 (Apple `/usr/bin/ruby` shim), puma 6.6.1 |
+| PHP (2nd HTTP set) | 8.5.10 (cli, NTS, Homebrew) |
 | Load generators | ApacheBench (`ab`) 2.3, `oha` 1.16.0 |
 | Method | best of 3 timed runs, `/usr/bin/time -l` for wall clock and max RSS, a warm-up run before each measured one, `ps` sampled every 0.5 s for the HTTP servers, `ulimit -n` raised, TIME_WAIT drained between HTTP runs |
 | Date | 2026-09-06 |
+
+The HTTP tables below merge two measurement sets on the same host, back to back: the first (mc, C, Go, Zig, Rust threads, C#) ran to completion before the second (Node single/cluster, Rust axum, Python, Ruby, PHP) was started, so neither harness's load competed with the other's for the ten cores. Every command and number for the second set is in [`../bench/http2/RESULTS.md`](../bench/http2/RESULTS.md).
 
 **Read this with two things in mind.**
 
@@ -85,11 +94,15 @@ and build with the same `mc` this repository builds — nothing here is a projec
 
 ### The HTTP servers
 
-Nine servers, same contract (`GET /` → `200 text/plain hello, world\n`, verified byte-identical
-across all nine), driven with `ab -k -c 64 -n 200000` (64 keep-alive connections) and
-`ab -c 1 -n 50000` (one connection, no keep-alive), plus `oha` once per configuration.
-`CPU ms / 1k req` is the number comparable across concurrency models: total server-life CPU time
-(user+sys, children included) divided by requests served.
+Seventeen servers, same contract (`GET /` → `200 text/plain hello, world\n`, verified byte-identical
+across all of them, first set and second set each checked on their own), driven with
+`ab -k -c 64 -n 200000` (64 keep-alive connections) and `ab -c 1 -n 50000` (one connection, no
+keep-alive), plus `oha` once per configuration. `CPU ms / 1k req` is the number comparable across
+concurrency models: total server-life CPU time (user+sys, children included) divided by requests
+served. The second set (Node single-process and `cluster`, Rust `axum`, Python stdlib and uvicorn,
+Ruby WEBrick and Puma, PHP's built-in server) is marked with its runtime version in the server
+column; its full method, environment and per-run numbers are in
+[`../bench/http2/RESULTS.md`](../bench/http2/RESULTS.md).
 
 **Keep-alive, 64 connections — best of 3:**
 
@@ -104,6 +117,14 @@ across all nine), driven with `ab -k -c 64 -n 200000` (64 keep-alive connections
 | zig-threads | 111,900 | 0.57 | 5.4 MB | **11.5** |
 | cs-jit (Kestrel, JIT) | 112,072 | 0.57 | 118.6 MB | 19.2 |
 | cs-aot (Kestrel, NativeAOT) | 98,755 | 0.65 | 57.1 MB | 14.3 |
+| node-single (Node 24) | 56,679 | 1.13 | 84.8 MB | 17.0 |
+| node-cluster (Node 24) | 89,468 | 0.72 | 744.6 MB | 34.8 |
+| rust-axum (Rust 1.96, axum 0.8) | 124,042 | 0.52 | 6.8 MB | 16.2 |
+| py-stdlib (Python 3.9) | FAILED — `ab -k` hung, 0 requests completed in warm-up on all 3 runs | - | - | - |
+| py-uvicorn (Python 3.9, uvicorn 0.39) | 5,030 | 12.72 | 27.2 MB | 195.0 |
+| rb-webrick (Ruby 2.6) | 6,916 | 9.25 | 40.6 MB | 138.0 |
+| rb-puma (Ruby 2.6, puma 6.6) | 17,094 | 3.74 | 20.1 MB | 45.3 |
+| php-builtin (PHP 8.5) | 15,415 | 4.15 | 30.0 MB | 60.7 |
 
 **No keep-alive, 1 connection — best of 3:**
 
@@ -118,8 +139,44 @@ across all nine), driven with `ab -k -c 64 -n 200000` (64 keep-alive connections
 | cs-jit | 9,650 | 274.0 |
 | mc-fork1 | 2,359 | 344.9 |
 | mc-forkka | 2,326 | 342.7 |
+| rust-axum (Rust 1.96, axum 0.8) | 11,115 | 48.9 |
+| node-single (Node 24) | 10,926 | 41.7 |
+| rb-puma (Ruby 2.6, puma 6.6) | 10,249 | 47.9 |
+| php-builtin (PHP 8.5) | 9,385 | 56.0 |
+| py-stdlib (Python 3.9) | 5,722 | 140.3 |
+| node-cluster (Node 24) | 5,885 | 170.3 |
+| rb-webrick (Ruby 2.6) | 4,947 | 158.1 |
+| py-uvicorn (Python 3.9, uvicorn 0.39) | 2,271 | 331.0 |
 
-(Both `ab` tables in full, plus the `oha` runs and the per-run spread: `../bench/http/RESULTS.md`.)
+**`oha -c 64 -z 5s` (keep-alive), one run:**
+
+| server | req/s | mean ms | peak RSS (group) | ps peak %CPU (group) |
+|---|---|---|---|---|
+| mc-serial | 30,967 | 2.07 | 2.5 MB | 36 |
+| **mc-forkka** | **106,741** | 0.60 | 67.4 MB | 154 |
+| mc-fork1 | 3,874 | 16.54 | 3.7 MB | 67 |
+| c-serial | 19,289 | 3.31 | 2.5 MB | 14 |
+| go-nethttp | 96,171 | 0.66 | 22.8 MB | 220 |
+| rust-threads | 171,220 | 0.37 | 3.9 MB | 188 |
+| zig-threads | 148,548 | 0.43 | 5.6 MB | 159 |
+| cs-jit | 106,425 | 0.60 | 124.4 MB | 177 |
+| cs-aot | 121,131 | 0.53 | 66.8 MB | 254 |
+| node-single (Node 24) | 55,072 | 1.16 | 85.9 MB | 100 |
+| node-cluster (Node 24) | 99,141 | 0.64 | 768.4 MB | 278 |
+| rust-axum (Rust 1.96, axum 0.8) | 151,186 | 0.42 | 6.9 MB | 214 |
+| py-stdlib (Python 3.9) | 13,280 | 4.74 | 19.5 MB | 108 |
+| py-uvicorn (Python 3.9, uvicorn 0.39) | 6,612 | 9.68 | 27.2 MB | 93 |
+| rb-webrick (Ruby 2.6) | 5,875 | 10.89 | 40.5 MB | 90 |
+| rb-puma (Ruby 2.6, puma 6.6) | 19,685 | 3.24 | 39.1 MB | 108 |
+| php-builtin (PHP 8.5) | 15,797 | 4.05 | 30.0 MB | 98 |
+
+py-stdlib's `oha` keep-alive run succeeded (13,280 req/s) even though its `ab -k` run did not —
+the failure is specific to that combination of `ab` and `ThreadingHTTPServer`, not to keep-alive
+connections in general; its no-keep-alive number (5,722 req/s, above) is unaffected either way.
+
+(Both `ab` tables in full, plus the `oha` `-c 1 --disable-keepalive` run and the per-run spread:
+[`../bench/http/RESULTS.md`](../bench/http/RESULTS.md) and
+[`../bench/http2/RESULTS.md`](../bench/http2/RESULTS.md).)
 
 ## Reading the numbers
 
@@ -160,6 +217,26 @@ process), Go's 22 MB, or C#'s 118 MB (Kestrel/JIT) — a process-per-connection 
 per-process baseline (stack, TLS, libSystem's own footprint) what a thread-per-connection or
 event-loop design does not.
 
+**The second HTTP set lands where each runtime's model predicts, one order of magnitude apart in
+two steps.** Node's single-process event loop (`node-single`) reaches 47% of mc-forkka's
+keep-alive throughput (56,679 vs 120,177 req/s, `ab -k`) at 1.4x the CPU per request (17.0 vs
+12.5 CPU ms/1k req) — one JS thread against mc-forkka's process-per-connection fan-out. Node's
+`cluster` mode (11 processes: 1 primary + `os.availableParallelism()` = 10 workers sharing the
+listening socket) closes most of that gap to 75% of the throughput (89,468 req/s) but at 727 MB
+of combined RSS across those 11 processes and 2.8x the CPU (34.8 ms/1k) — the primary alone stays
+under 52 MB, the ten workers are where the memory and the CPU go. Rust's `axum` (0.8, on hyper 1
+and a multi-thread tokio runtime) lands inside the same 120k–133k req/s band as `mc-forkka` and
+`rust-threads` (124,042 req/s), between Node's CPU cost and mc's own (16.2 vs 17.0 and 12.5 ms/1k)
+— a general-purpose async framework paying a little more than a hand-rolled thread-per-connection
+loop, and about the same as `mc`'s own fork-per-connection shape. The four servers with no
+compiled runtime underneath the request path — `py-uvicorn`, `rb-webrick`, `rb-puma`,
+`php-builtin` — sit an order of magnitude below that band (5,030–17,094 req/s) at 3 to 16x the
+CPU per request (45.3–195.0 ms/1k against mc-forkka's 12.5). `py-stdlib`'s `ab -k` run failed
+outright — 0 requests completed in warm-up on all three attempts, the same `ThreadingHTTPServer`
+that its own no-keep-alive run (5,722 req/s) and its `oha` keep-alive run (13,280 req/s) both
+completed without incident, so the failure is specific to that combination of `ab` and the
+server, not to keep-alive itself (`../bench/http2/RESULTS.md` § Notes).
+
 ## What is not measured, and is not comparable
 
 - **No floating-point workload.** `<float>` is a library, not core (`f32`/`f64` via `type_new` +
@@ -171,10 +248,11 @@ event-loop design does not.
 - **One host, one architecture (Apple M4 / arm64).** `mc` also targets `x86_64` (macOS via
   Rosetta is not tested; Linux/Windows x86_64 are supported build targets — `machine_x86_64.mc` —
   but not benchmarked here) and RISC-V/AVR bare metal, none measured in this pass.
-- **Round 2** (Node.js single-process and `cluster`, Rust `axum`, Python, Ruby, PHP) widens the
-  HTTP comparison under the same harness; its sources are in `bench/http2/` — see
-  [`../bench/README.md`](../bench/README.md) § "Round 2" for its status. It had not finished
-  running when this page was written, so no round-2 row is in the tables above.
+- **The second HTTP set (Node single-process and `cluster`, Rust `axum`, Python, Ruby, PHP)
+  is now merged into the tables above and read in § Reading the numbers.** Its full method,
+  environment and every command run are in
+  [`../bench/http2/RESULTS.md`](../bench/http2/RESULTS.md); the sources are in
+  [`../bench/http2/`](../bench/http2/README.md).
 - **Nothing here ran for longer than five seconds.** What a server's memory does over an HOUR
   under a steady load — the drift the public Rust/Go/Zig comparisons argue about — is a separate
   measurement with a separate protocol: the soak workflow (`.github/workflows/bench-soak.yml`,

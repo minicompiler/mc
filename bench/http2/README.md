@@ -2,9 +2,11 @@
 
 The second HTTP round of `bench/`: the same contract as round 1 (`GET /` -> `200`,
 `Content-Type: text/plain`, `Content-Length: 13`, body `hello, world\n`), the same harness shape,
-eight more servers. These are the SOURCES; the write-up (`RESULTS.md`) does not exist yet -- see
-[`../README.md`](../README.md) § Round 2 -- and the soak (`../README.md` § C) is where they are
-first measured next to round 1's servers.
+eight more servers. These are the SOURCES; the write-up is [`RESULTS.md`](RESULTS.md) (and
+[`results.json`](results.json) for the per-run detail), merged into
+[`../../docs/comparison.md`](../../docs/comparison.md) alongside round 1's numbers -- see
+[`../README.md`](../README.md) § Round 2. The soak (`../README.md` § C) is where these servers
+are measured over an hour, next to round 1's.
 
 | server | source | shape | run as |
 |---|---|---|---|
