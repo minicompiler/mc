@@ -30,6 +30,11 @@ repository builds — nothing here is a projection.
 | Method | best of 3 timed runs, `/usr/bin/time -l` for wall clock and max RSS, a warm-up run before each measured one, `ps` sampled every 0.5 s for the HTTP servers, `ulimit -n` raised, TIME_WAIT drained between HTTP runs |
 | Date | 2026-09-06 |
 
+The hour-long soak below (§ "The hour under load") is a separate measurement, on separate
+hardware: it runs on GitHub's hosted Actions runners (one per server, four vCPU each), not on
+the Apple M4 this table describes -- its own conditions block gives the runner, kernel and
+toolchain versions for that run.
+
 The HTTP tables below merge two measurement sets on the same host, back to back: the first (mc, C, Go, Zig, Rust threads, C#) ran to completion before the second (Node single/cluster, Rust axum, Python, Ruby, PHP) was started, so neither harness's load competed with the other's for the ten cores. Every command and number for the second set is in [`../bench/http2/RESULTS.md`](../bench/http2/RESULTS.md).
 
 **Read this with two things in mind.**
@@ -178,6 +183,137 @@ connections in general; its no-keep-alive number (5,722 req/s, above) is unaffec
 [`../bench/http/RESULTS.md`](../bench/http/RESULTS.md) and
 [`../bench/http2/RESULTS.md`](../bench/http2/RESULTS.md).)
 
+## The hour under load
+
+The first full run of the soak (`.github/workflows/bench-soak.yml`, protocol in
+[`../bench/README.md`](../bench/README.md) § "C. The soak"): every server above plus round 2's,
+under a FIXED 3,000 req/s for 60 minutes, one GitHub Actions runner per server, pinned to two of
+its four cores (`oha` and the sampler on the other two), the whole process tree sampled every 5 s.
+Full tables, `results.json` and the SVG time series:
+[`../bench/soak/results/2026-09-06-34062566194/RESULTS.md`](../bench/soak/results/2026-09-06-34062566194/RESULTS.md).
+
+### Conditions
+
+| | |
+|---|---|
+| Runner | ubuntu24 20260831.293.1, GitHub Actions, 4 vCPU (AMD EPYC 7763), 16,373,452 kB — **not the Apple M4 above; this cell runs on GitHub's hosted runners, one per server** |
+| Kernel | Linux 6.17.0-1022-azure x86_64 (Ubuntu 24.04.4 LTS) |
+| Pinning | server on cores 0,1; `oha` and the sampler on cores 2,3 (`taskset`) |
+| Load | `oha -z 60m -q 3000 -c 16 --no-tui --output-format json` (3,000 req/s, 16 keep-alive connections, oha 1.16.0) |
+| Sampling | every 5 s: RSS/CPU time/threads/processes of the whole process tree, `VmRSS`/`VmHWM` of the parent, `/proc/loadavg` |
+| Date | 2026-09-06 21:57 UTC |
+| Tree | `7d01b3a` (run [34062566194](https://github.com/minicompiler/mc/actions/runs/34062566194)) |
+| mc | `mc 0.15.15` (latest release at run time, checksum-verified) |
+| C | Ubuntu clang 18.1.3 |
+| Go | go1.26.7 linux/amd64 |
+| Rust | rustc 1.96.0 (ac68faa20 2026-05-25) |
+| Zig | 0.16.0 |
+| .NET | 10.0.400 |
+| Node | v24.20.0 |
+| Python / uvicorn | Python 3.12.14; uvicorn 0.39.0 — **did not run this hour, see below** |
+| Ruby / puma | ruby 3.3.12; puma 6.6.1 |
+| PHP | 8.4.25 (cli, NTS) |
+
+### Memory and CPU
+
+RSS is the sum over the process tree in KiB; `slope` is the least-squares fit over the fitting
+window named in the verdict (after the first 10 minutes, here), with its R²; `flat`/`drifted` is a
+rule (projected move ≥ 5% of the window's mean AND R² ≥ 0.5), not a judgement.
+
+| server | RSS 10 min | RSS 60 min | slope KiB/min (R²) | verdict | %CPU mean | CPU ms / 1k req | threads max | procs max |
+|---|---|---|---|---|---|---|---|---|
+| mc-serial | 940 | 940 | +0.0 (1.00) | flat | 7.6 | 25.46 | 1 | 1 |
+| mc-forkka | 5,348 | 5,348 | +0.0 (1.00) | flat | 8.1 | 27.07 | 17 | 17 |
+| c-serial | 1,124 | 1,124 | +0.0 (1.00) | flat | 7.4 | 24.79 | 1 | 1 |
+| go-nethttp | 15,784 | 16,108 | +2.0 (0.08) | flat | 20.9 | 69.48 | 7 | 1 |
+| rust-threads | 2,436 | 2,436 | +0.0 (1.00) | flat | 6.8 | 22.52 | 17 | 1 |
+| rust-axum | 3,832 | 3,832 | +0.0 (1.00) | flat | 6.4 | 21.22 | 3 | 1 |
+| zig-threads | 12,480 | 12,480 | +0.0 (1.00) | flat | 6.8 | 22.53 | 17 | 1 |
+| cs-jit | 68,452 | 69,732 | +26.2 (0.98) | flat | 32.5 | 108.37 | 18 | 1 |
+| cs-aot | 19,488 | 20,640 | +23.1 (0.96) | **drifted** | 11.7 | 39.02 | 13 | 1 |
+| node-single | 72,496 | 94,128 | +369.6 (0.68) | **drifted** | 4.8 | 16.00 | 7 | 1 |
+| node-cluster | 199,208 | 215,216 | +448.1 (0.80) | **drifted** | 22.2 | 73.89 | 21 | 3 |
+| py-uvicorn | — | — | — | *(did not start)* | — | — | — | — |
+| rb-puma | 46,536 | 47,304 | +12.8 (0.91) | flat | 21.1 | 70.46 | 12 | 1 |
+| php-builtin | 142,256 | 564,400 | +8437.6 (1.00) | **drifted** | 35.3 | 117.68 | 1 | 1 |
+
+### Throughput and latency
+
+`req/s` is what `oha` achieved against 3,000 asked; latencies in ms from `oha`'s own histogram;
+`startup` is time to the first `200`. Every server served effectively all 10,800,000 requests the
+hour asks for (0–11 connection-level errors each, the normal way a timed run ends: `oha` aborts
+its still-open connections at the deadline).
+
+| server | req/s (asked 3,000) | p50 | p99 | p99.9 | startup |
+|---|---|---|---|---|---|
+| mc-serial | 3,000.0 | 0.168 | 0.302 | 0.418 | 8 ms |
+| mc-forkka | 3,000.0 | 0.077 | 0.118 | 0.150 | 8 ms |
+| c-serial | 3,000.0 | 0.167 | 0.306 | 0.477 | 8 ms |
+| go-nethttp | 3,000.0 | 0.122 | 0.219 | 0.354 | 24 ms |
+| rust-threads | 3,000.0 | 0.073 | 0.116 | 0.148 | 9 ms |
+| rust-axum | 3,000.0 | 0.057 | 0.081 | 0.322 | 100 ms |
+| zig-threads | 3,000.0 | 0.070 | 0.114 | 0.151 | 8 ms |
+| cs-jit | 3,000.0 | 0.122 | 0.181 | 0.386 | 851 ms |
+| cs-aot | 3,000.0 | 0.071 | 0.101 | 0.137 | 61 ms |
+| node-single | 3,000.0 | 0.041 | 0.082 | 0.444 | 127 ms |
+| node-cluster | 3,000.0 | 0.127 | 0.232 | 0.290 | 129 ms |
+| py-uvicorn | — | — | — | — | *(did not start)* |
+| rb-puma | 3,000.0 | 0.163 | 38.476 | 41.994 | 672 ms |
+| php-builtin | 3,000.0 | 0.318 | 0.719 | 1.699 | 58 ms |
+
+### Charts
+
+![RSS of the whole process tree over the hour, one line per server, log scale (the range spans more than 20x)](/static/bench-soak-rss.svg)
+
+![%CPU of the whole process tree over the hour, one line per server](/static/bench-soak-cpu.svg)
+
+The full set -- `rss.svg`, `cpu.svg`, `threads.svg` and one three-panel chart per server -- is in
+[`../bench/soak/results/2026-09-06-34062566194/RESULTS.md`](../bench/soak/results/2026-09-06-34062566194/RESULTS.md)
+(same directory on disk).
+
+### Verdicts, verbatim
+
+- `mc-serial`: RSS 940 -> 940 KiB over minutes 10-60 (+0.0%), slope +0.0 KiB/min (R^2 1.00), peak 940 KiB: **flat**
+- `mc-forkka`: RSS 5,348 -> 5,348 KiB over minutes 10-60 (+0.0%), slope +0.0 KiB/min (R^2 1.00), peak 5,348 KiB: **flat**
+- `c-serial`: RSS 1,124 -> 1,124 KiB over minutes 10-60 (+0.0%), slope +0.0 KiB/min (R^2 1.00), peak 1,124 KiB: **flat**
+- `go-nethttp`: RSS 15,784 -> 16,108 KiB over minutes 10-60 (+2.1%), slope +2.0 KiB/min (R^2 0.08), peak 16,556 KiB: **flat**
+- `rust-threads`: RSS 2,436 -> 2,436 KiB over minutes 10-60 (+0.0%), slope +0.0 KiB/min (R^2 1.00), peak 2,436 KiB: **flat**
+- `rust-axum`: RSS 3,832 -> 3,832 KiB over minutes 10-60 (+0.0%), slope +0.0 KiB/min (R^2 1.00), peak 3,832 KiB: **flat**
+- `zig-threads`: RSS 12,480 -> 12,480 KiB over minutes 10-60 (+0.0%), slope +0.0 KiB/min (R^2 1.00), peak 12,480 KiB: **flat**
+- `cs-jit`: RSS 68,452 -> 69,732 KiB over minutes 10-60 (+1.9%), slope +26.2 KiB/min (R^2 0.98), peak 69,988 KiB: **flat**
+- `cs-aot`: RSS 19,488 -> 20,640 KiB over minutes 10-60 (+5.9%), slope +23.1 KiB/min (R^2 0.96), peak 20,640 KiB: **drifted**
+- `node-single`: RSS 72,496 -> 94,128 KiB over minutes 10-60 (+29.8%), slope +369.6 KiB/min (R^2 0.68), peak 94,396 KiB: **drifted**
+- `node-cluster`: RSS 199,336 -> 215,216 KiB over minutes 10-60 (+8.0%), slope +448.1 KiB/min (R^2 0.80), peak 215,776 KiB: **drifted**
+- `py-uvicorn`: no RSS window (server did not answer 200 within 90 s (exit 2))
+- `rb-puma`: RSS 46,536 -> 47,304 KiB over minutes 10-60 (+1.7%), slope +12.8 KiB/min (R^2 0.91), peak 47,304 KiB: **flat**
+- `php-builtin`: RSS 143,024 -> 564,400 KiB over minutes 10-60 (+294.6%), slope +8437.6 KiB/min (R^2 1.00), peak 564,784 KiB: **drifted**
+
+### Reading it
+
+Every server with a compiled, ahead-of-time runtime underneath it — `mc` in both shapes, C, Go,
+both Rust servers, Zig — holds its RSS flat to within a few KiB over the full hour, and four of
+those five fit their slope with an R² of 1.00 (a perfectly straight, perfectly flat line — Go's
+0.08 says the opposite, a slope with no explanatory power, i.e. noise around a flat mean, not a
+trend). The two JIT/managed runtimes split: C# under Kestrel/JIT drifted +1.9% and does not clear
+the 5%-of-window rule (`flat`), but its own NativeAOT build — no JIT, no GC warm-up to finish —
+drifts +5.9% over the same hour and does. Node's event loop drifts hardest of the JavaScript/managed
+group: +29.8% single-process, +8.0% in `cluster` mode (11 processes sharing the RSS, so the
+per-process share of that drift is smaller even though the aggregate crosses the rule). PHP's
+built-in development server is the outlier by an order of magnitude — RSS goes from 143 MB to
+564 MB over the hour (+295%, R²=1.00, a process that leaks at a constant rate and never stops) —
+which is consistent with it being explicitly a development tool, not a production server, in PHP's
+own documentation. Ruby's Puma holds flat (+1.7%). On CPU per 1,000 requests, `mc` (25.46 serial,
+27.07 fork-per-connection) sits in the same band as the other compiled servers — C 24.79,
+Rust threads 22.52, Rust `axum` 21.22, Zig 22.53 — a few CPU ms apart, all under 30; Node's
+single-process event loop is the lowest of everything measured this hour at 16.00 ms/1k, ahead of
+every compiled server, which is the event-loop model paying almost nothing per request once the
+JIT is warm. `py-uvicorn` has no row: the workflow's own `UVICORN_VERSION` environment variable
+collided with uvicorn's `click`-based CLI (which reads any `UVICORN_<OPTION>` variable
+automatically — `auto_envvar_prefix="UVICORN"` — so `UVICORN_VERSION=0.39.0` was read as the value
+of uvicorn's own `--version` flag, a boolean, and the process refused to start: `Error: Invalid
+value for '--version': '0.39.0' is not a valid boolean`); the workflow now uses
+`PY_UVICORN_VERSION` instead, and py-uvicorn's hour has not been re-run.
+
 ## Reading the numbers
 
 **Compile time, binary size and toolchain size are where `mc` leads everything measured here.**
@@ -253,15 +389,20 @@ server, not to keep-alive itself (`../bench/http2/RESULTS.md` § Notes).
   environment and every command run are in
   [`../bench/http2/RESULTS.md`](../bench/http2/RESULTS.md); the sources are in
   [`../bench/http2/`](../bench/http2/README.md).
-- **Nothing here ran for longer than five seconds.** What a server's memory does over an HOUR
-  under a steady load — the drift the public Rust/Go/Zig comparisons argue about — is a separate
-  measurement with a separate protocol: the soak workflow (`.github/workflows/bench-soak.yml`,
-  described in [`../bench/README.md`](../bench/README.md) § "C. The soak") runs every server
-  above plus round 2's, one GitHub Actions runner each, under a fixed 3000 req/s for 60 minutes,
-  pinned to two cores, sampling the whole process tree every 5 s, and reports RSS at 1/10/30/60
-  min, the fitted slope over the last fifty minutes, CPU ms per 1k requests and p50/p99/p99.9
-  with time-series charts. No numbers from it are on this page yet: they are added once a full
-  hour has run.
+- **The soak (§ "The hour under load") only ran once, on 2026-09-06, and `py-uvicorn` is not in
+  it.** A single hour is one data point, not a trend line across runs; a GitHub-hosted runner is
+  shared hardware (`../bench/README.md` § "The runner caveat"), so a second hour on a different
+  day could move the noisier rows (Go's `+2.0 KiB/min, R²=0.08` is noise by its own fit).
+  `py-uvicorn`'s row is a workflow defect (`UVICORN_VERSION` colliding with uvicorn's own
+  `click` auto-envvar prefix), now fixed; its hour has not been re-run.
+- **No connection churn.** The soak holds 16 keep-alive connections open for the whole hour
+  (`--disable-keepalive` exists as an option and was not used this run); a server's behaviour
+  under connections opening and closing continuously — the shape a real front end sees — is
+  untested.
+- **The soak's hour is still short next to a service's uptime.** `php-builtin`'s slope
+  (+8,437.6 KiB/min) would exhaust a small container's memory in well under a day; whether the
+  other `drifted` rows (Node, C# NativeAOT) are heading somewhere similar or asymptoting is a
+  question a longer window would answer and this one does not.
 
 ### Feature matrix
 

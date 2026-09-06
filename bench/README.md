@@ -243,6 +243,19 @@ python3 bench/soak/soak.py mc-forkka --minutes 5 --server-cpus 0,1 --load-cpus 2
 python3 bench/soak/report.py bench/soak/out     # -> bench/soak/out/report/
 ```
 
+### Recorded runs
+
+Full results of each hour, dated so a later run sits beside it instead of overwriting it:
+
+- [`soak/results/2026-09-06-34062566194/`](soak/results/2026-09-06-34062566194/) -- the first
+  full run (tree `7d01b3a`), 13 of 14 servers. `py-uvicorn` did not start: the workflow's
+  `UVICORN_VERSION` environment variable collided with uvicorn's own `click`-based CLI, which
+  reads any `UVICORN_<OPTION>` variable automatically (`auto_envvar_prefix="UVICORN"`), so
+  `UVICORN_VERSION=0.39.0` was taken as the value of uvicorn's `--version` flag (a boolean) and
+  the process refused to start. Fixed by renaming the variable to `PY_UVICORN_VERSION`, which
+  cannot collide with any uvicorn option; the hour has not been re-run. Read into
+  [`../docs/comparison.md`](../docs/comparison.md) § "The hour under load".
+
 ### The runner caveat
 
 A GitHub-hosted runner is a virtual machine on shared hardware: another tenant's load, a noisy

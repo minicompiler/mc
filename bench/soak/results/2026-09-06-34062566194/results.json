@@ -1,0 +1,1895 @@
+{
+ "conditions": {
+  "c-serial": {
+   "server": "c-serial",
+   "sources": [
+    "bench/http/c/serial.c"
+   ],
+   "toolchain": {
+    "clang --version": "Ubuntu clang version 18.1.3 (1ubuntu1)"
+   },
+   "oha": "oha 1.16.0",
+   "server_cmd": [
+    "taskset",
+    "-c",
+    "0,1",
+    "bin/c-serial",
+    "18080"
+   ],
+   "server_cwd": "/home/runner/work/mc/mc/bench/soak",
+   "oha_cmd": [
+    "taskset",
+    "-c",
+    "2,3",
+    "oha",
+    "-z",
+    "60m",
+    "-q",
+    "3000",
+    "-c",
+    "16",
+    "--no-tui",
+    "--output-format",
+    "json",
+    "http://127.0.0.1:18080/"
+   ],
+   "minutes": 60.0,
+   "rate": 3000,
+   "connections": 16,
+   "keepalive": true,
+   "latency_correction": false,
+   "sample_every_s": 5.0,
+   "server_cpus": "0,1",
+   "load_cpus": "2,3",
+   "taskset": true,
+   "sysctl": {
+    "ip_local_port_range": "32768\t60999",
+    "tcp_tw_reuse": "2"
+   },
+   "nproc": 4,
+   "kernel": "Linux runnervmejwal 6.17.0-1022-azure #22-Ubuntu SMP Mon Jul 27 17:24:03 UTC 2026 x86_64 x86_64",
+   "meminfo": {
+    "MemTotal": "       16373452 kB",
+    "MemAvailable": "   15183988 kB"
+   },
+   "os_release": "PRETTY_NAME=\"Ubuntu 24.04.4 LTS\"\nNAME=\"Ubuntu\"\nVERSION_ID=\"24.04\"\nVERSION=\"24.04.4 LTS (Noble Numbat)\"\nVERSION_CODENAME=noble\nID=ubuntu\nID_LIKE=debian\nHOME_URL=\"https://www.ubuntu.com/\"\nSUPPORT_URL=\"https://help.ubuntu.com/\"\nBUG_REPORT_URL=\"https://bugs.launchpad.net/ubuntu/\"\nPRIVACY_POLICY_URL=\"https://www.ubuntu.com/legal/terms-and-policies/privacy-policy\"\nUBUNTU_CODENAME=noble\nLOGO=ubuntu-logo",
+   "runner": {
+    "ImageOS": "ubuntu24",
+    "ImageVersion": "20260831.293.1",
+    "RUNNER_NAME": "GitHub Actions 1000000851",
+    "RUNNER_ARCH": "X64",
+    "GITHUB_RUN_ID": "34062566194",
+    "GITHUB_SHA": "7d01b3a86a1d78a7d438a88218f2e9ba097a33e8",
+    "GITHUB_REF_NAME": "main"
+   },
+   "date_utc": "2026-09-06 21:57:30 UTC",
+   "git": "7d01b3a",
+   "startup_s": 0.0078,
+   "cpu_time_at_load_start_s": 0.0,
+   "load_start_s": 0.02,
+   "load_end_s": 3602.33,
+   "cpu_time_at_load_end_s": 267.72,
+   "oha_exit": 0,
+   "samples": 721,
+   "server_exit": -15
+  },
+  "cs-aot": {
+   "server": "cs-aot",
+   "sources": [
+    "bench/http/cs/Program.cs"
+   ],
+   "toolchain": {
+    "dotnet --version": "10.0.400"
+   },
+   "oha": "oha 1.16.0",
+   "server_cmd": [
+    "taskset",
+    "-c",
+    "0,1",
+    "bin/cs-aot/cs",
+    "18080"
+   ],
+   "server_cwd": "/home/runner/work/mc/mc/bench/soak",
+   "oha_cmd": [
+    "taskset",
+    "-c",
+    "2,3",
+    "oha",
+    "-z",
+    "60m",
+    "-q",
+    "3000",
+    "-c",
+    "16",
+    "--no-tui",
+    "--output-format",
+    "json",
+    "http://127.0.0.1:18080/"
+   ],
+   "minutes": 60.0,
+   "rate": 3000,
+   "connections": 16,
+   "keepalive": true,
+   "latency_correction": false,
+   "sample_every_s": 5.0,
+   "server_cpus": "0,1",
+   "load_cpus": "2,3",
+   "taskset": true,
+   "sysctl": {
+    "ip_local_port_range": "32768\t60999",
+    "tcp_tw_reuse": "2"
+   },
+   "nproc": 4,
+   "kernel": "Linux runnervmejwal 6.17.0-1022-azure #22-Ubuntu SMP Mon Jul 27 17:24:03 UTC 2026 x86_64 x86_64",
+   "meminfo": {
+    "MemTotal": "       16372436 kB",
+    "MemAvailable": "   14913800 kB"
+   },
+   "os_release": "PRETTY_NAME=\"Ubuntu 24.04.4 LTS\"\nNAME=\"Ubuntu\"\nVERSION_ID=\"24.04\"\nVERSION=\"24.04.4 LTS (Noble Numbat)\"\nVERSION_CODENAME=noble\nID=ubuntu\nID_LIKE=debian\nHOME_URL=\"https://www.ubuntu.com/\"\nSUPPORT_URL=\"https://help.ubuntu.com/\"\nBUG_REPORT_URL=\"https://bugs.launchpad.net/ubuntu/\"\nPRIVACY_POLICY_URL=\"https://www.ubuntu.com/legal/terms-and-policies/privacy-policy\"\nUBUNTU_CODENAME=noble\nLOGO=ubuntu-logo",
+   "runner": {
+    "ImageOS": "ubuntu24",
+    "ImageVersion": "20260831.293.1",
+    "RUNNER_NAME": "GitHub Actions 1000000847",
+    "RUNNER_ARCH": "X64",
+    "GITHUB_RUN_ID": "34062566194",
+    "GITHUB_SHA": "7d01b3a86a1d78a7d438a88218f2e9ba097a33e8",
+    "GITHUB_REF_NAME": "main"
+   },
+   "date_utc": "2026-09-06 21:58:00 UTC",
+   "git": "7d01b3a",
+   "startup_s": 0.0614,
+   "cpu_time_at_load_start_s": 0.01,
+   "load_start_s": 0.07,
+   "load_end_s": 3602.9,
+   "cpu_time_at_load_end_s": 421.4,
+   "oha_exit": 0,
+   "samples": 722,
+   "server_exit": 0
+  },
+  "cs-jit": {
+   "server": "cs-jit",
+   "sources": [
+    "bench/http/cs/Program.cs"
+   ],
+   "toolchain": {
+    "dotnet --version": "10.0.400"
+   },
+   "oha": "oha 1.16.0",
+   "server_cmd": [
+    "taskset",
+    "-c",
+    "0,1",
+    "dotnet",
+    "bin/cs-jit/cs.dll",
+    "18080"
+   ],
+   "server_cwd": "/home/runner/work/mc/mc/bench/soak",
+   "oha_cmd": [
+    "taskset",
+    "-c",
+    "2,3",
+    "oha",
+    "-z",
+    "60m",
+    "-q",
+    "3000",
+    "-c",
+    "16",
+    "--no-tui",
+    "--output-format",
+    "json",
+    "http://127.0.0.1:18080/"
+   ],
+   "minutes": 60.0,
+   "rate": 3000,
+   "connections": 16,
+   "keepalive": true,
+   "latency_correction": false,
+   "sample_every_s": 5.0,
+   "server_cpus": "0,1",
+   "load_cpus": "2,3",
+   "taskset": true,
+   "sysctl": {
+    "ip_local_port_range": "32768\t60999",
+    "tcp_tw_reuse": "2"
+   },
+   "nproc": 4,
+   "kernel": "Linux runnervmejwal 6.17.0-1022-azure #22-Ubuntu SMP Mon Jul 27 17:24:03 UTC 2026 x86_64 x86_64",
+   "meminfo": {
+    "MemTotal": "       16377684 kB",
+    "MemAvailable": "   14935904 kB"
+   },
+   "os_release": "PRETTY_NAME=\"Ubuntu 24.04.4 LTS\"\nNAME=\"Ubuntu\"\nVERSION_ID=\"24.04\"\nVERSION=\"24.04.4 LTS (Noble Numbat)\"\nVERSION_CODENAME=noble\nID=ubuntu\nID_LIKE=debian\nHOME_URL=\"https://www.ubuntu.com/\"\nSUPPORT_URL=\"https://help.ubuntu.com/\"\nBUG_REPORT_URL=\"https://bugs.launchpad.net/ubuntu/\"\nPRIVACY_POLICY_URL=\"https://www.ubuntu.com/legal/terms-and-policies/privacy-policy\"\nUBUNTU_CODENAME=noble\nLOGO=ubuntu-logo",
+   "runner": {
+    "ImageOS": "ubuntu24",
+    "ImageVersion": "20260831.293.1",
+    "RUNNER_NAME": "GitHub Actions 1000000849",
+    "RUNNER_ARCH": "X64",
+    "GITHUB_RUN_ID": "34062566194",
+    "GITHUB_SHA": "7d01b3a86a1d78a7d438a88218f2e9ba097a33e8",
+    "GITHUB_REF_NAME": "main"
+   },
+   "date_utc": "2026-09-06 21:57:32 UTC",
+   "git": "7d01b3a",
+   "startup_s": 0.8507,
+   "cpu_time_at_load_start_s": 0.22,
+   "load_start_s": 0.86,
+   "load_end_s": 3603.29,
+   "cpu_time_at_load_end_s": 1170.65,
+   "oha_exit": 0,
+   "samples": 721,
+   "server_exit": 0
+  },
+  "go-nethttp": {
+   "server": "go-nethttp",
+   "sources": [
+    "bench/http/go/main.go"
+   ],
+   "toolchain": {
+    "go version": "go version go1.26.7 linux/amd64"
+   },
+   "oha": "oha 1.16.0",
+   "server_cmd": [
+    "taskset",
+    "-c",
+    "0,1",
+    "bin/go-nethttp",
+    "18080"
+   ],
+   "server_cwd": "/home/runner/work/mc/mc/bench/soak",
+   "oha_cmd": [
+    "taskset",
+    "-c",
+    "2,3",
+    "oha",
+    "-z",
+    "60m",
+    "-q",
+    "3000",
+    "-c",
+    "16",
+    "--no-tui",
+    "--output-format",
+    "json",
+    "http://127.0.0.1:18080/"
+   ],
+   "minutes": 60.0,
+   "rate": 3000,
+   "connections": 16,
+   "keepalive": true,
+   "latency_correction": false,
+   "sample_every_s": 5.0,
+   "server_cpus": "0,1",
+   "load_cpus": "2,3",
+   "taskset": true,
+   "sysctl": {
+    "ip_local_port_range": "32768\t60999",
+    "tcp_tw_reuse": "2"
+   },
+   "nproc": 4,
+   "kernel": "Linux runnervmejwal 6.17.0-1022-azure #22-Ubuntu SMP Mon Jul 27 17:24:03 UTC 2026 x86_64 x86_64",
+   "meminfo": {
+    "MemTotal": "       16373452 kB",
+    "MemAvailable": "   15283232 kB"
+   },
+   "os_release": "PRETTY_NAME=\"Ubuntu 24.04.4 LTS\"\nNAME=\"Ubuntu\"\nVERSION_ID=\"24.04\"\nVERSION=\"24.04.4 LTS (Noble Numbat)\"\nVERSION_CODENAME=noble\nID=ubuntu\nID_LIKE=debian\nHOME_URL=\"https://www.ubuntu.com/\"\nSUPPORT_URL=\"https://help.ubuntu.com/\"\nBUG_REPORT_URL=\"https://bugs.launchpad.net/ubuntu/\"\nPRIVACY_POLICY_URL=\"https://www.ubuntu.com/legal/terms-and-policies/privacy-policy\"\nUBUNTU_CODENAME=noble\nLOGO=ubuntu-logo",
+   "runner": {
+    "ImageOS": "ubuntu24",
+    "ImageVersion": "20260831.293.1",
+    "RUNNER_NAME": "GitHub Actions 1000000852",
+    "RUNNER_ARCH": "X64",
+    "GITHUB_RUN_ID": "34062566194",
+    "GITHUB_SHA": "7d01b3a86a1d78a7d438a88218f2e9ba097a33e8",
+    "GITHUB_REF_NAME": "main"
+   },
+   "date_utc": "2026-09-06 21:57:57 UTC",
+   "git": "7d01b3a",
+   "startup_s": 0.0244,
+   "cpu_time_at_load_start_s": 0.0,
+   "load_start_s": 0.04,
+   "load_end_s": 3602.57,
+   "cpu_time_at_load_end_s": 750.35,
+   "oha_exit": 0,
+   "samples": 721,
+   "server_exit": -15
+  },
+  "mc-forkka": {
+   "server": "mc-forkka",
+   "sources": [
+    "bench/http/mc/forkka.mc",
+    "bench/http/mc/httpmin.mc",
+    "bench/http/mc/linux/netsys.mc"
+   ],
+   "toolchain": {
+    "mc --version": "mc 0.15.15"
+   },
+   "oha": "oha 1.16.0",
+   "server_cmd": [
+    "taskset",
+    "-c",
+    "0,1",
+    "bin/mc-forkka",
+    "18080"
+   ],
+   "server_cwd": "/home/runner/work/mc/mc/bench/soak",
+   "oha_cmd": [
+    "taskset",
+    "-c",
+    "2,3",
+    "oha",
+    "-z",
+    "60m",
+    "-q",
+    "3000",
+    "-c",
+    "16",
+    "--no-tui",
+    "--output-format",
+    "json",
+    "http://127.0.0.1:18080/"
+   ],
+   "minutes": 60.0,
+   "rate": 3000,
+   "connections": 16,
+   "keepalive": true,
+   "latency_correction": false,
+   "sample_every_s": 5.0,
+   "server_cpus": "0,1",
+   "load_cpus": "2,3",
+   "taskset": true,
+   "sysctl": {
+    "ip_local_port_range": "32768\t60999",
+    "tcp_tw_reuse": "2"
+   },
+   "nproc": 4,
+   "kernel": "Linux runnervmejwal 6.17.0-1022-azure #22-Ubuntu SMP Mon Jul 27 17:24:03 UTC 2026 x86_64 x86_64",
+   "meminfo": {
+    "MemTotal": "       16373452 kB",
+    "MemAvailable": "   15305628 kB"
+   },
+   "os_release": "PRETTY_NAME=\"Ubuntu 24.04.4 LTS\"\nNAME=\"Ubuntu\"\nVERSION_ID=\"24.04\"\nVERSION=\"24.04.4 LTS (Noble Numbat)\"\nVERSION_CODENAME=noble\nID=ubuntu\nID_LIKE=debian\nHOME_URL=\"https://www.ubuntu.com/\"\nSUPPORT_URL=\"https://help.ubuntu.com/\"\nBUG_REPORT_URL=\"https://bugs.launchpad.net/ubuntu/\"\nPRIVACY_POLICY_URL=\"https://www.ubuntu.com/legal/terms-and-policies/privacy-policy\"\nUBUNTU_CODENAME=noble\nLOGO=ubuntu-logo",
+   "runner": {
+    "ImageOS": "ubuntu24",
+    "ImageVersion": "20260831.293.1",
+    "RUNNER_NAME": "GitHub Actions 1000000845",
+    "RUNNER_ARCH": "X64",
+    "GITHUB_RUN_ID": "34062566194",
+    "GITHUB_SHA": "7d01b3a86a1d78a7d438a88218f2e9ba097a33e8",
+    "GITHUB_REF_NAME": "main"
+   },
+   "date_utc": "2026-09-06 21:57:24 UTC",
+   "git": "7d01b3a",
+   "startup_s": 0.0083,
+   "cpu_time_at_load_start_s": 0.0,
+   "load_start_s": 0.02,
+   "load_end_s": 3602.32,
+   "cpu_time_at_load_end_s": 292.37,
+   "oha_exit": 0,
+   "samples": 721,
+   "server_exit": -15
+  },
+  "mc-serial": {
+   "server": "mc-serial",
+   "sources": [
+    "bench/http/mc/serial.mc",
+    "bench/http/mc/httpmin.mc",
+    "bench/http/mc/linux/netsys.mc"
+   ],
+   "toolchain": {
+    "mc --version": "mc 0.15.15"
+   },
+   "oha": "oha 1.16.0",
+   "server_cmd": [
+    "taskset",
+    "-c",
+    "0,1",
+    "bin/mc-serial",
+    "18080"
+   ],
+   "server_cwd": "/home/runner/work/mc/mc/bench/soak",
+   "oha_cmd": [
+    "taskset",
+    "-c",
+    "2,3",
+    "oha",
+    "-z",
+    "60m",
+    "-q",
+    "3000",
+    "-c",
+    "16",
+    "--no-tui",
+    "--output-format",
+    "json",
+    "http://127.0.0.1:18080/"
+   ],
+   "minutes": 60.0,
+   "rate": 3000,
+   "connections": 16,
+   "keepalive": true,
+   "latency_correction": false,
+   "sample_every_s": 5.0,
+   "server_cpus": "0,1",
+   "load_cpus": "2,3",
+   "taskset": true,
+   "sysctl": {
+    "ip_local_port_range": "32768\t60999",
+    "tcp_tw_reuse": "2"
+   },
+   "nproc": 4,
+   "kernel": "Linux runnervmejwal 6.17.0-1022-azure #22-Ubuntu SMP Mon Jul 27 17:24:03 UTC 2026 x86_64 x86_64",
+   "meminfo": {
+    "MemTotal": "       16373452 kB",
+    "MemAvailable": "   14958604 kB"
+   },
+   "os_release": "PRETTY_NAME=\"Ubuntu 24.04.4 LTS\"\nNAME=\"Ubuntu\"\nVERSION_ID=\"24.04\"\nVERSION=\"24.04.4 LTS (Noble Numbat)\"\nVERSION_CODENAME=noble\nID=ubuntu\nID_LIKE=debian\nHOME_URL=\"https://www.ubuntu.com/\"\nSUPPORT_URL=\"https://help.ubuntu.com/\"\nBUG_REPORT_URL=\"https://bugs.launchpad.net/ubuntu/\"\nPRIVACY_POLICY_URL=\"https://www.ubuntu.com/legal/terms-and-policies/privacy-policy\"\nUBUNTU_CODENAME=noble\nLOGO=ubuntu-logo",
+   "runner": {
+    "ImageOS": "ubuntu24",
+    "ImageVersion": "20260831.293.1",
+    "RUNNER_NAME": "GitHub Actions 1000000843",
+    "RUNNER_ARCH": "X64",
+    "GITHUB_RUN_ID": "34062566194",
+    "GITHUB_SHA": "7d01b3a86a1d78a7d438a88218f2e9ba097a33e8",
+    "GITHUB_REF_NAME": "main"
+   },
+   "date_utc": "2026-09-06 21:57:25 UTC",
+   "git": "7d01b3a",
+   "startup_s": 0.008,
+   "cpu_time_at_load_start_s": 0.0,
+   "load_start_s": 0.02,
+   "load_end_s": 3602.31,
+   "cpu_time_at_load_end_s": 275.01,
+   "oha_exit": 0,
+   "samples": 721,
+   "server_exit": -15
+  },
+  "node-cluster": {
+   "server": "node-cluster",
+   "sources": [
+    "bench/http2/node/cluster.js"
+   ],
+   "toolchain": {
+    "node --version": "v24.20.0"
+   },
+   "oha": "oha 1.16.0",
+   "server_cmd": [
+    "taskset",
+    "-c",
+    "0,1",
+    "node",
+    "/home/runner/work/mc/mc/bench/http2/node/cluster.js",
+    "18080"
+   ],
+   "server_cwd": "/home/runner/work/mc/mc/bench/soak",
+   "oha_cmd": [
+    "taskset",
+    "-c",
+    "2,3",
+    "oha",
+    "-z",
+    "60m",
+    "-q",
+    "3000",
+    "-c",
+    "16",
+    "--no-tui",
+    "--output-format",
+    "json",
+    "http://127.0.0.1:18080/"
+   ],
+   "minutes": 60.0,
+   "rate": 3000,
+   "connections": 16,
+   "keepalive": true,
+   "latency_correction": false,
+   "sample_every_s": 5.0,
+   "server_cpus": "0,1",
+   "load_cpus": "2,3",
+   "taskset": true,
+   "sysctl": {
+    "ip_local_port_range": "32768\t60999",
+    "tcp_tw_reuse": "2"
+   },
+   "nproc": 4,
+   "kernel": "Linux runnervmejwal 6.17.0-1022-azure #22-Ubuntu SMP Mon Jul 27 17:24:03 UTC 2026 x86_64 x86_64",
+   "meminfo": {
+    "MemTotal": "       16373452 kB",
+    "MemAvailable": "   15068428 kB"
+   },
+   "os_release": "PRETTY_NAME=\"Ubuntu 24.04.4 LTS\"\nNAME=\"Ubuntu\"\nVERSION_ID=\"24.04\"\nVERSION=\"24.04.4 LTS (Noble Numbat)\"\nVERSION_CODENAME=noble\nID=ubuntu\nID_LIKE=debian\nHOME_URL=\"https://www.ubuntu.com/\"\nSUPPORT_URL=\"https://help.ubuntu.com/\"\nBUG_REPORT_URL=\"https://bugs.launchpad.net/ubuntu/\"\nPRIVACY_POLICY_URL=\"https://www.ubuntu.com/legal/terms-and-policies/privacy-policy\"\nUBUNTU_CODENAME=noble\nLOGO=ubuntu-logo",
+   "runner": {
+    "ImageOS": "ubuntu24",
+    "ImageVersion": "20260831.293.1",
+    "RUNNER_NAME": "GitHub Actions 1000000840",
+    "RUNNER_ARCH": "X64",
+    "GITHUB_RUN_ID": "34062566194",
+    "GITHUB_SHA": "7d01b3a86a1d78a7d438a88218f2e9ba097a33e8",
+    "GITHUB_REF_NAME": "main"
+   },
+   "date_utc": "2026-09-06 21:57:27 UTC",
+   "git": "7d01b3a",
+   "startup_s": 0.129,
+   "cpu_time_at_load_start_s": 0.12,
+   "load_start_s": 0.15,
+   "load_end_s": 3602.65,
+   "cpu_time_at_load_end_s": 798.19,
+   "oha_exit": 0,
+   "samples": 721,
+   "server_exit": 0
+  },
+  "node-single": {
+   "server": "node-single",
+   "sources": [
+    "bench/http2/node/single.js"
+   ],
+   "toolchain": {
+    "node --version": "v24.20.0"
+   },
+   "oha": "oha 1.16.0",
+   "server_cmd": [
+    "taskset",
+    "-c",
+    "0,1",
+    "node",
+    "/home/runner/work/mc/mc/bench/http2/node/single.js",
+    "18080"
+   ],
+   "server_cwd": "/home/runner/work/mc/mc/bench/soak",
+   "oha_cmd": [
+    "taskset",
+    "-c",
+    "2,3",
+    "oha",
+    "-z",
+    "60m",
+    "-q",
+    "3000",
+    "-c",
+    "16",
+    "--no-tui",
+    "--output-format",
+    "json",
+    "http://127.0.0.1:18080/"
+   ],
+   "minutes": 60.0,
+   "rate": 3000,
+   "connections": 16,
+   "keepalive": true,
+   "latency_correction": false,
+   "sample_every_s": 5.0,
+   "server_cpus": "0,1",
+   "load_cpus": "2,3",
+   "taskset": true,
+   "sysctl": {
+    "ip_local_port_range": "32768\t60999",
+    "tcp_tw_reuse": "2"
+   },
+   "nproc": 4,
+   "kernel": "Linux runnervmejwal 6.17.0-1022-azure #22-Ubuntu SMP Mon Jul 27 17:24:03 UTC 2026 x86_64 x86_64",
+   "meminfo": {
+    "MemTotal": "       16373452 kB",
+    "MemAvailable": "   15309312 kB"
+   },
+   "os_release": "PRETTY_NAME=\"Ubuntu 24.04.4 LTS\"\nNAME=\"Ubuntu\"\nVERSION_ID=\"24.04\"\nVERSION=\"24.04.4 LTS (Noble Numbat)\"\nVERSION_CODENAME=noble\nID=ubuntu\nID_LIKE=debian\nHOME_URL=\"https://www.ubuntu.com/\"\nSUPPORT_URL=\"https://help.ubuntu.com/\"\nBUG_REPORT_URL=\"https://bugs.launchpad.net/ubuntu/\"\nPRIVACY_POLICY_URL=\"https://www.ubuntu.com/legal/terms-and-policies/privacy-policy\"\nUBUNTU_CODENAME=noble\nLOGO=ubuntu-logo",
+   "runner": {
+    "ImageOS": "ubuntu24",
+    "ImageVersion": "20260831.293.1",
+    "RUNNER_NAME": "GitHub Actions 1000000846",
+    "RUNNER_ARCH": "X64",
+    "GITHUB_RUN_ID": "34062566194",
+    "GITHUB_SHA": "7d01b3a86a1d78a7d438a88218f2e9ba097a33e8",
+    "GITHUB_REF_NAME": "main"
+   },
+   "date_utc": "2026-09-06 21:57:34 UTC",
+   "git": "7d01b3a",
+   "startup_s": 0.1271,
+   "cpu_time_at_load_start_s": 0.02,
+   "load_start_s": 0.14,
+   "load_end_s": 3601.78,
+   "cpu_time_at_load_end_s": 172.78,
+   "oha_exit": 0,
+   "samples": 721,
+   "server_exit": -15
+  },
+  "php-builtin": {
+   "server": "php-builtin",
+   "sources": [
+    "bench/http2/php/index.php"
+   ],
+   "toolchain": {
+    "php --version": "PHP 8.4.25 (cli) (built: Aug 27 2026 15:39:11) (NTS)"
+   },
+   "oha": "oha 1.16.0",
+   "server_cmd": [
+    "taskset",
+    "-c",
+    "0,1",
+    "php",
+    "-S",
+    "127.0.0.1:18080",
+    "index.php"
+   ],
+   "server_cwd": "/home/runner/work/mc/mc/bench/http2/php",
+   "oha_cmd": [
+    "taskset",
+    "-c",
+    "2,3",
+    "oha",
+    "-z",
+    "60m",
+    "-q",
+    "3000",
+    "-c",
+    "16",
+    "--no-tui",
+    "--output-format",
+    "json",
+    "http://127.0.0.1:18080/"
+   ],
+   "minutes": 60.0,
+   "rate": 3000,
+   "connections": 16,
+   "keepalive": true,
+   "latency_correction": false,
+   "sample_every_s": 5.0,
+   "server_cpus": "0,1",
+   "load_cpus": "2,3",
+   "taskset": true,
+   "sysctl": {
+    "ip_local_port_range": "32768\t60999",
+    "tcp_tw_reuse": "2"
+   },
+   "nproc": 4,
+   "kernel": "Linux runnervmejwal 6.17.0-1022-azure #22-Ubuntu SMP Mon Jul 27 17:24:03 UTC 2026 x86_64 x86_64",
+   "meminfo": {
+    "MemTotal": "       16372440 kB",
+    "MemAvailable": "   15034500 kB"
+   },
+   "os_release": "PRETTY_NAME=\"Ubuntu 24.04.4 LTS\"\nNAME=\"Ubuntu\"\nVERSION_ID=\"24.04\"\nVERSION=\"24.04.4 LTS (Noble Numbat)\"\nVERSION_CODENAME=noble\nID=ubuntu\nID_LIKE=debian\nHOME_URL=\"https://www.ubuntu.com/\"\nSUPPORT_URL=\"https://help.ubuntu.com/\"\nBUG_REPORT_URL=\"https://bugs.launchpad.net/ubuntu/\"\nPRIVACY_POLICY_URL=\"https://www.ubuntu.com/legal/terms-and-policies/privacy-policy\"\nUBUNTU_CODENAME=noble\nLOGO=ubuntu-logo",
+   "runner": {
+    "ImageOS": "ubuntu24",
+    "ImageVersion": "20260831.293.1",
+    "RUNNER_NAME": "GitHub Actions 1000000844",
+    "RUNNER_ARCH": "X64",
+    "GITHUB_RUN_ID": "34062566194",
+    "GITHUB_SHA": "7d01b3a86a1d78a7d438a88218f2e9ba097a33e8",
+    "GITHUB_REF_NAME": "main"
+   },
+   "date_utc": "2026-09-06 21:57:36 UTC",
+   "git": "7d01b3a",
+   "startup_s": 0.0584,
+   "cpu_time_at_load_start_s": 0.02,
+   "load_start_s": 0.07,
+   "load_end_s": 3603.44,
+   "cpu_time_at_load_end_s": 1270.97,
+   "oha_exit": 0,
+   "samples": 722,
+   "server_exit": -15
+  },
+  "py-uvicorn": {
+   "server": "py-uvicorn",
+   "sources": [
+    "bench/http2/py/asgi.py"
+   ],
+   "toolchain": {
+    "python3 --version": "Python 3.12.14",
+    "python3 -m uvicorn --version": "Running uvicorn 0.39.0 with CPython 3.12.14 on Linux"
+   },
+   "oha": "oha 1.16.0",
+   "server_cmd": [
+    "taskset",
+    "-c",
+    "0,1",
+    "python3",
+    "-m",
+    "uvicorn",
+    "asgi:app",
+    "--host",
+    "127.0.0.1",
+    "--port",
+    "18080",
+    "--log-level",
+    "warning"
+   ],
+   "server_cwd": "/home/runner/work/mc/mc/bench/http2/py",
+   "oha_cmd": [
+    "taskset",
+    "-c",
+    "2,3",
+    "oha",
+    "-z",
+    "60m",
+    "-q",
+    "3000",
+    "-c",
+    "16",
+    "--no-tui",
+    "--output-format",
+    "json",
+    "http://127.0.0.1:18080/"
+   ],
+   "minutes": 60.0,
+   "rate": 3000,
+   "connections": 16,
+   "keepalive": true,
+   "latency_correction": false,
+   "sample_every_s": 5.0,
+   "server_cpus": "0,1",
+   "load_cpus": "2,3",
+   "taskset": true,
+   "sysctl": {
+    "ip_local_port_range": "32768\t60999",
+    "tcp_tw_reuse": "2"
+   },
+   "nproc": 4,
+   "kernel": "Linux runnervmejwal 6.17.0-1022-azure #22-Ubuntu SMP Mon Jul 27 17:24:03 UTC 2026 x86_64 x86_64",
+   "meminfo": {
+    "MemTotal": "       16373452 kB",
+    "MemAvailable": "   15058856 kB"
+   },
+   "os_release": "PRETTY_NAME=\"Ubuntu 24.04.4 LTS\"\nNAME=\"Ubuntu\"\nVERSION_ID=\"24.04\"\nVERSION=\"24.04.4 LTS (Noble Numbat)\"\nVERSION_CODENAME=noble\nID=ubuntu\nID_LIKE=debian\nHOME_URL=\"https://www.ubuntu.com/\"\nSUPPORT_URL=\"https://help.ubuntu.com/\"\nBUG_REPORT_URL=\"https://bugs.launchpad.net/ubuntu/\"\nPRIVACY_POLICY_URL=\"https://www.ubuntu.com/legal/terms-and-policies/privacy-policy\"\nUBUNTU_CODENAME=noble\nLOGO=ubuntu-logo",
+   "runner": {
+    "ImageOS": "ubuntu24",
+    "ImageVersion": "20260831.293.1",
+    "RUNNER_NAME": "GitHub Actions 1000000841",
+    "RUNNER_ARCH": "X64",
+    "GITHUB_RUN_ID": "34062566194",
+    "GITHUB_SHA": "7d01b3a86a1d78a7d438a88218f2e9ba097a33e8",
+    "GITHUB_REF_NAME": "main"
+   },
+   "date_utc": "2026-09-06 21:57:27 UTC",
+   "git": "7d01b3a",
+   "error": "server did not answer 200 within 90 s (exit 2)"
+  },
+  "rb-puma": {
+   "server": "rb-puma",
+   "sources": [
+    "bench/http2/rb/config.ru"
+   ],
+   "toolchain": {
+    "ruby --version": "ruby 3.3.12 (2026-07-16 revision 0581089df9) [x86_64-linux]",
+    "puma --version": "puma version 6.6.1"
+   },
+   "oha": "oha 1.16.0",
+   "server_cmd": [
+    "taskset",
+    "-c",
+    "0,1",
+    "puma",
+    "-b",
+    "tcp://127.0.0.1:18080",
+    "config.ru"
+   ],
+   "server_cwd": "/home/runner/work/mc/mc/bench/http2/rb",
+   "oha_cmd": [
+    "taskset",
+    "-c",
+    "2,3",
+    "oha",
+    "-z",
+    "60m",
+    "-q",
+    "3000",
+    "-c",
+    "16",
+    "--no-tui",
+    "--output-format",
+    "json",
+    "http://127.0.0.1:18080/"
+   ],
+   "minutes": 60.0,
+   "rate": 3000,
+   "connections": 16,
+   "keepalive": true,
+   "latency_correction": false,
+   "sample_every_s": 5.0,
+   "server_cpus": "0,1",
+   "load_cpus": "2,3",
+   "taskset": true,
+   "sysctl": {
+    "ip_local_port_range": "32768\t60999",
+    "tcp_tw_reuse": "2"
+   },
+   "nproc": 4,
+   "kernel": "Linux runnervmejwal 6.17.0-1022-azure #22-Ubuntu SMP Mon Jul 27 17:24:03 UTC 2026 x86_64 x86_64",
+   "meminfo": {
+    "MemTotal": "       16372436 kB",
+    "MemAvailable": "   15035916 kB"
+   },
+   "os_release": "PRETTY_NAME=\"Ubuntu 24.04.4 LTS\"\nNAME=\"Ubuntu\"\nVERSION_ID=\"24.04\"\nVERSION=\"24.04.4 LTS (Noble Numbat)\"\nVERSION_CODENAME=noble\nID=ubuntu\nID_LIKE=debian\nHOME_URL=\"https://www.ubuntu.com/\"\nSUPPORT_URL=\"https://help.ubuntu.com/\"\nBUG_REPORT_URL=\"https://bugs.launchpad.net/ubuntu/\"\nPRIVACY_POLICY_URL=\"https://www.ubuntu.com/legal/terms-and-policies/privacy-policy\"\nUBUNTU_CODENAME=noble\nLOGO=ubuntu-logo",
+   "runner": {
+    "ImageOS": "ubuntu24",
+    "ImageVersion": "20260831.293.1",
+    "RUNNER_NAME": "GitHub Actions 1000000848",
+    "RUNNER_ARCH": "X64",
+    "GITHUB_RUN_ID": "34062566194",
+    "GITHUB_SHA": "7d01b3a86a1d78a7d438a88218f2e9ba097a33e8",
+    "GITHUB_REF_NAME": "main"
+   },
+   "date_utc": "2026-09-06 21:57:44 UTC",
+   "git": "7d01b3a",
+   "startup_s": 0.6719,
+   "cpu_time_at_load_start_s": 0.1,
+   "load_start_s": 0.68,
+   "load_end_s": 3604.2,
+   "cpu_time_at_load_end_s": 761.07,
+   "oha_exit": 0,
+   "samples": 722,
+   "server_exit": -15
+  },
+  "rust-axum": {
+   "server": "rust-axum",
+   "sources": [
+    "bench/http2/axum/src/main.rs",
+    "bench/http2/axum/Cargo.toml"
+   ],
+   "toolchain": {
+    "rustc --version": "rustc 1.96.0 (ac68faa20 2026-05-25)",
+    "cargo --version": "cargo 1.96.0 (30a34c682 2026-05-25)"
+   },
+   "oha": "oha 1.16.0",
+   "server_cmd": [
+    "taskset",
+    "-c",
+    "0,1",
+    "bin/rust-axum",
+    "18080"
+   ],
+   "server_cwd": "/home/runner/work/mc/mc/bench/soak",
+   "oha_cmd": [
+    "taskset",
+    "-c",
+    "2,3",
+    "oha",
+    "-z",
+    "60m",
+    "-q",
+    "3000",
+    "-c",
+    "16",
+    "--no-tui",
+    "--output-format",
+    "json",
+    "http://127.0.0.1:18080/"
+   ],
+   "minutes": 60.0,
+   "rate": 3000,
+   "connections": 16,
+   "keepalive": true,
+   "latency_correction": false,
+   "sample_every_s": 5.0,
+   "server_cpus": "0,1",
+   "load_cpus": "2,3",
+   "taskset": true,
+   "sysctl": {
+    "ip_local_port_range": "32768\t60999",
+    "tcp_tw_reuse": "2"
+   },
+   "nproc": 4,
+   "kernel": "Linux runnervmejwal 6.17.0-1022-azure #22-Ubuntu SMP Mon Jul 27 17:24:03 UTC 2026 x86_64 x86_64",
+   "meminfo": {
+    "MemTotal": "       16373452 kB",
+    "MemAvailable": "   15165528 kB"
+   },
+   "os_release": "PRETTY_NAME=\"Ubuntu 24.04.4 LTS\"\nNAME=\"Ubuntu\"\nVERSION_ID=\"24.04\"\nVERSION=\"24.04.4 LTS (Noble Numbat)\"\nVERSION_CODENAME=noble\nID=ubuntu\nID_LIKE=debian\nHOME_URL=\"https://www.ubuntu.com/\"\nSUPPORT_URL=\"https://help.ubuntu.com/\"\nBUG_REPORT_URL=\"https://bugs.launchpad.net/ubuntu/\"\nPRIVACY_POLICY_URL=\"https://www.ubuntu.com/legal/terms-and-policies/privacy-policy\"\nUBUNTU_CODENAME=noble\nLOGO=ubuntu-logo",
+   "runner": {
+    "ImageOS": "ubuntu24",
+    "ImageVersion": "20260831.293.1",
+    "RUNNER_NAME": "GitHub Actions 1000000850",
+    "RUNNER_ARCH": "X64",
+    "GITHUB_RUN_ID": "34062566194",
+    "GITHUB_SHA": "7d01b3a86a1d78a7d438a88218f2e9ba097a33e8",
+    "GITHUB_REF_NAME": "main"
+   },
+   "date_utc": "2026-09-06 21:57:48 UTC",
+   "git": "7d01b3a",
+   "startup_s": 0.1002,
+   "cpu_time_at_load_start_s": 0.0,
+   "load_start_s": 0.11,
+   "load_end_s": 3602.35,
+   "cpu_time_at_load_end_s": 229.19,
+   "oha_exit": 0,
+   "samples": 721,
+   "server_exit": -15
+  },
+  "rust-threads": {
+   "server": "rust-threads",
+   "sources": [
+    "bench/http/rust/main.rs"
+   ],
+   "toolchain": {
+    "rustc --version": "rustc 1.96.0 (ac68faa20 2026-05-25)"
+   },
+   "oha": "oha 1.16.0",
+   "server_cmd": [
+    "taskset",
+    "-c",
+    "0,1",
+    "bin/rust-threads",
+    "18080"
+   ],
+   "server_cwd": "/home/runner/work/mc/mc/bench/soak",
+   "oha_cmd": [
+    "taskset",
+    "-c",
+    "2,3",
+    "oha",
+    "-z",
+    "60m",
+    "-q",
+    "3000",
+    "-c",
+    "16",
+    "--no-tui",
+    "--output-format",
+    "json",
+    "http://127.0.0.1:18080/"
+   ],
+   "minutes": 60.0,
+   "rate": 3000,
+   "connections": 16,
+   "keepalive": true,
+   "latency_correction": false,
+   "sample_every_s": 5.0,
+   "server_cpus": "0,1",
+   "load_cpus": "2,3",
+   "taskset": true,
+   "sysctl": {
+    "ip_local_port_range": "32768\t60999",
+    "tcp_tw_reuse": "2"
+   },
+   "nproc": 4,
+   "kernel": "Linux runnervmejwal 6.17.0-1022-azure #22-Ubuntu SMP Mon Jul 27 17:24:03 UTC 2026 x86_64 x86_64",
+   "meminfo": {
+    "MemTotal": "       16373452 kB",
+    "MemAvailable": "   14979576 kB"
+   },
+   "os_release": "PRETTY_NAME=\"Ubuntu 24.04.4 LTS\"\nNAME=\"Ubuntu\"\nVERSION_ID=\"24.04\"\nVERSION=\"24.04.4 LTS (Noble Numbat)\"\nVERSION_CODENAME=noble\nID=ubuntu\nID_LIKE=debian\nHOME_URL=\"https://www.ubuntu.com/\"\nSUPPORT_URL=\"https://help.ubuntu.com/\"\nBUG_REPORT_URL=\"https://bugs.launchpad.net/ubuntu/\"\nPRIVACY_POLICY_URL=\"https://www.ubuntu.com/legal/terms-and-policies/privacy-policy\"\nUBUNTU_CODENAME=noble\nLOGO=ubuntu-logo",
+   "runner": {
+    "ImageOS": "ubuntu24",
+    "ImageVersion": "20260831.293.1",
+    "RUNNER_NAME": "GitHub Actions 1000000842",
+    "RUNNER_ARCH": "X64",
+    "GITHUB_RUN_ID": "34062566194",
+    "GITHUB_SHA": "7d01b3a86a1d78a7d438a88218f2e9ba097a33e8",
+    "GITHUB_REF_NAME": "main"
+   },
+   "date_utc": "2026-09-06 21:57:35 UTC",
+   "git": "7d01b3a",
+   "startup_s": 0.0091,
+   "cpu_time_at_load_start_s": 0.0,
+   "load_start_s": 0.02,
+   "load_end_s": 3602.32,
+   "cpu_time_at_load_end_s": 243.2,
+   "oha_exit": 0,
+   "samples": 721,
+   "server_exit": -15
+  },
+  "zig-threads": {
+   "server": "zig-threads",
+   "sources": [
+    "bench/http/zig/main.zig"
+   ],
+   "toolchain": {
+    "zig version": "0.16.0"
+   },
+   "oha": "oha 1.16.0",
+   "server_cmd": [
+    "taskset",
+    "-c",
+    "0,1",
+    "bin/zig-threads",
+    "18080"
+   ],
+   "server_cwd": "/home/runner/work/mc/mc/bench/soak",
+   "oha_cmd": [
+    "taskset",
+    "-c",
+    "2,3",
+    "oha",
+    "-z",
+    "60m",
+    "-q",
+    "3000",
+    "-c",
+    "16",
+    "--no-tui",
+    "--output-format",
+    "json",
+    "http://127.0.0.1:18080/"
+   ],
+   "minutes": 60.0,
+   "rate": 3000,
+   "connections": 16,
+   "keepalive": true,
+   "latency_correction": false,
+   "sample_every_s": 5.0,
+   "server_cpus": "0,1",
+   "load_cpus": "2,3",
+   "taskset": true,
+   "sysctl": {
+    "ip_local_port_range": "32768\t60999",
+    "tcp_tw_reuse": "2"
+   },
+   "nproc": 4,
+   "kernel": "Linux runnervmejwal 6.17.0-1022-azure #22-Ubuntu SMP Mon Jul 27 17:24:03 UTC 2026 x86_64 x86_64",
+   "meminfo": {
+    "MemTotal": "       16377732 kB",
+    "MemAvailable": "   15132452 kB"
+   },
+   "os_release": "PRETTY_NAME=\"Ubuntu 24.04.4 LTS\"\nNAME=\"Ubuntu\"\nVERSION_ID=\"24.04\"\nVERSION=\"24.04.4 LTS (Noble Numbat)\"\nVERSION_CODENAME=noble\nID=ubuntu\nID_LIKE=debian\nHOME_URL=\"https://www.ubuntu.com/\"\nSUPPORT_URL=\"https://help.ubuntu.com/\"\nBUG_REPORT_URL=\"https://bugs.launchpad.net/ubuntu/\"\nPRIVACY_POLICY_URL=\"https://www.ubuntu.com/legal/terms-and-policies/privacy-policy\"\nUBUNTU_CODENAME=noble\nLOGO=ubuntu-logo",
+   "runner": {
+    "ImageOS": "ubuntu24",
+    "ImageVersion": "20260831.293.1",
+    "RUNNER_NAME": "GitHub Actions 1000000839",
+    "RUNNER_ARCH": "X64",
+    "GITHUB_RUN_ID": "34062566194",
+    "GITHUB_SHA": "7d01b3a86a1d78a7d438a88218f2e9ba097a33e8",
+    "GITHUB_REF_NAME": "main"
+   },
+   "date_utc": "2026-09-06 21:57:50 UTC",
+   "git": "7d01b3a",
+   "startup_s": 0.0085,
+   "cpu_time_at_load_start_s": 0.0,
+   "load_start_s": 0.02,
+   "load_end_s": 3602.42,
+   "cpu_time_at_load_end_s": 243.29,
+   "oha_exit": 0,
+   "samples": 721,
+   "server_exit": -15
+  }
+ },
+ "results": {
+  "c-serial": {
+   "server": "c-serial",
+   "duration_min": 59.98,
+   "samples": 721,
+   "error": null,
+   "window_min": [
+    10.0,
+    60.0
+   ],
+   "rss_at": {
+    "1": 1124.0,
+    "10": 1124.0,
+    "30": 1124.0,
+    "60": 1124.0
+   },
+   "rss_end": 1124.0,
+   "rss_peak": 1124.0,
+   "threads_at": {
+    "1": 1.0,
+    "10": 1.0,
+    "30": 1.0,
+    "60": 1.0
+   },
+   "threads_end": 1.0,
+   "threads_peak": 1.0,
+   "procs_at": {
+    "1": 1.0,
+    "10": 1.0,
+    "30": 1.0,
+    "60": 1.0
+   },
+   "procs_end": 1.0,
+   "procs_peak": 1.0,
+   "hwm_parent_kib": 1288.0,
+   "rss_slope_kib_per_min": 0.0,
+   "rss_slope_r2": 1.0,
+   "rss_window_start_kib": 1124.0,
+   "rss_window_mean_kib": 1124,
+   "pcpu_mean": 7.44,
+   "pcpu_peak": 7.79,
+   "cpu_s": 267.72,
+   "requests": 10800000,
+   "ok_200": 10800000,
+   "non_200": 0,
+   "errors": 2,
+   "error_kinds": {
+    "aborted due to deadline": 2
+   },
+   "rps": 3000.0,
+   "rps_requested": 3000,
+   "p50_ms": 0.167,
+   "p99_ms": 0.306,
+   "p999_ms": 0.477,
+   "cpu_ms_per_1k_req": 24.789,
+   "startup_s": 0.0078,
+   "toolchain": {
+    "clang --version": "Ubuntu clang version 18.1.3 (1ubuntu1)"
+   },
+   "drift": "flat",
+   "drift_line": "`c-serial`: RSS 1,124 -> 1,124 KiB over minutes 10-60 (+0.0%), slope +0.0 KiB/min (R^2 1.00), peak 1,124 KiB: **flat**"
+  },
+  "cs-aot": {
+   "server": "cs-aot",
+   "duration_min": 59.98,
+   "samples": 722,
+   "error": null,
+   "window_min": [
+    10.0,
+    60.0
+   ],
+   "rss_at": {
+    "1": 19780.0,
+    "10": 19488.0,
+    "30": 19872.0,
+    "60": 20640.0
+   },
+   "rss_end": 20640.0,
+   "rss_peak": 20640.0,
+   "threads_at": {
+    "1": 13.0,
+    "10": 13.0,
+    "30": 13.0,
+    "60": 13.0
+   },
+   "threads_end": 13.0,
+   "threads_peak": 13.0,
+   "procs_at": {
+    "1": 1.0,
+    "10": 1.0,
+    "30": 1.0,
+    "60": 1.0
+   },
+   "procs_end": 1.0,
+   "procs_peak": 1.0,
+   "hwm_parent_kib": 20800.0,
+   "rss_slope_kib_per_min": 23.09,
+   "rss_slope_r2": 0.962,
+   "rss_window_start_kib": 19488.0,
+   "rss_window_mean_kib": 20034,
+   "pcpu_mean": 11.7,
+   "pcpu_peak": 12.79,
+   "cpu_s": 421.39,
+   "requests": 10799998,
+   "ok_200": 10799998,
+   "non_200": 0,
+   "errors": 3,
+   "error_kinds": {
+    "aborted due to deadline": 3
+   },
+   "rps": 3000.0,
+   "rps_requested": 3000,
+   "p50_ms": 0.071,
+   "p99_ms": 0.101,
+   "p999_ms": 0.137,
+   "cpu_ms_per_1k_req": 39.018,
+   "startup_s": 0.0614,
+   "toolchain": {
+    "dotnet --version": "10.0.400"
+   },
+   "drift": "drifted",
+   "drift_line": "`cs-aot`: RSS 19,488 -> 20,640 KiB over minutes 10-60 (+5.9%), slope +23.1 KiB/min (R^2 0.96), peak 20,640 KiB: **drifted**"
+  },
+  "cs-jit": {
+   "server": "cs-jit",
+   "duration_min": 59.98,
+   "samples": 721,
+   "error": null,
+   "window_min": [
+    10.0,
+    60.0
+   ],
+   "rss_at": {
+    "1": 66196.0,
+    "10": 68452.0,
+    "30": 68964.0,
+    "60": 69732.0
+   },
+   "rss_end": 69732.0,
+   "rss_peak": 69988.0,
+   "threads_at": {
+    "1": 17.0,
+    "10": 17.0,
+    "30": 17.0,
+    "60": 17.0
+   },
+   "threads_end": 17.0,
+   "threads_peak": 18.0,
+   "procs_at": {
+    "1": 1.0,
+    "10": 1.0,
+    "30": 1.0,
+    "60": 1.0
+   },
+   "procs_end": 1.0,
+   "procs_peak": 1.0,
+   "hwm_parent_kib": 70312.0,
+   "rss_slope_kib_per_min": 26.23,
+   "rss_slope_r2": 0.977,
+   "rss_window_start_kib": 68452.0,
+   "rss_window_mean_kib": 69109,
+   "pcpu_mean": 32.51,
+   "pcpu_peak": 49.72,
+   "cpu_s": 1170.43,
+   "requests": 10800000,
+   "ok_200": 10800000,
+   "non_200": 0,
+   "errors": 3,
+   "error_kinds": {
+    "aborted due to deadline": 3
+   },
+   "rps": 3000.0,
+   "rps_requested": 3000,
+   "p50_ms": 0.122,
+   "p99_ms": 0.181,
+   "p999_ms": 0.386,
+   "cpu_ms_per_1k_req": 108.373,
+   "startup_s": 0.8507,
+   "toolchain": {
+    "dotnet --version": "10.0.400"
+   },
+   "drift": "flat",
+   "drift_line": "`cs-jit`: RSS 68,452 -> 69,732 KiB over minutes 10-60 (+1.9%), slope +26.2 KiB/min (R^2 0.98), peak 69,988 KiB: **flat**"
+  },
+  "go-nethttp": {
+   "server": "go-nethttp",
+   "duration_min": 59.98,
+   "samples": 721,
+   "error": null,
+   "window_min": [
+    10.0,
+    60.0
+   ],
+   "rss_at": {
+    "1": 15828.0,
+    "10": 15784.0,
+    "30": 16032.0,
+    "60": 15956.0
+   },
+   "rss_end": 16108.0,
+   "rss_peak": 16556.0,
+   "threads_at": {
+    "1": 6.0,
+    "10": 6.0,
+    "30": 7.0,
+    "60": 7.0
+   },
+   "threads_end": 7.0,
+   "threads_peak": 7.0,
+   "procs_at": {
+    "1": 1.0,
+    "10": 1.0,
+    "30": 1.0,
+    "60": 1.0
+   },
+   "procs_end": 1.0,
+   "procs_peak": 1.0,
+   "hwm_parent_kib": 16556.0,
+   "rss_slope_kib_per_min": 2.0,
+   "rss_slope_r2": 0.082,
+   "rss_window_start_kib": 15784.0,
+   "rss_window_mean_kib": 16027,
+   "pcpu_mean": 20.85,
+   "pcpu_peak": 21.97,
+   "cpu_s": 750.35,
+   "requests": 10800000,
+   "ok_200": 10800000,
+   "non_200": 0,
+   "errors": 2,
+   "error_kinds": {
+    "aborted due to deadline": 2
+   },
+   "rps": 3000.0,
+   "rps_requested": 3000,
+   "p50_ms": 0.122,
+   "p99_ms": 0.219,
+   "p999_ms": 0.354,
+   "cpu_ms_per_1k_req": 69.477,
+   "startup_s": 0.0244,
+   "toolchain": {
+    "go version": "go version go1.26.7 linux/amd64"
+   },
+   "drift": "flat",
+   "drift_line": "`go-nethttp`: RSS 15,784 -> 16,108 KiB over minutes 10-60 (+2.1%), slope +2.0 KiB/min (R^2 0.08), peak 16,556 KiB: **flat**"
+  },
+  "mc-forkka": {
+   "server": "mc-forkka",
+   "duration_min": 59.98,
+   "samples": 721,
+   "error": null,
+   "window_min": [
+    10.0,
+    60.0
+   ],
+   "rss_at": {
+    "1": 5348.0,
+    "10": 5348.0,
+    "30": 5348.0,
+    "60": 5348.0
+   },
+   "rss_end": 5348.0,
+   "rss_peak": 5348.0,
+   "threads_at": {
+    "1": 17.0,
+    "10": 17.0,
+    "30": 17.0,
+    "60": 17.0
+   },
+   "threads_end": 17.0,
+   "threads_peak": 17.0,
+   "procs_at": {
+    "1": 17.0,
+    "10": 17.0,
+    "30": 17.0,
+    "60": 17.0
+   },
+   "procs_end": 17.0,
+   "procs_peak": 17.0,
+   "hwm_parent_kib": 1280.0,
+   "rss_slope_kib_per_min": 0.0,
+   "rss_slope_r2": 1.0,
+   "rss_window_start_kib": 5348.0,
+   "rss_window_mean_kib": 5348,
+   "pcpu_mean": 8.12,
+   "pcpu_peak": 9.39,
+   "cpu_s": 292.37,
+   "requests": 10800000,
+   "ok_200": 10800000,
+   "non_200": 0,
+   "errors": 2,
+   "error_kinds": {
+    "aborted due to deadline": 2
+   },
+   "rps": 3000.0,
+   "rps_requested": 3000,
+   "p50_ms": 0.077,
+   "p99_ms": 0.118,
+   "p999_ms": 0.15,
+   "cpu_ms_per_1k_req": 27.071,
+   "startup_s": 0.0083,
+   "toolchain": {
+    "mc --version": "mc 0.15.15"
+   },
+   "drift": "flat",
+   "drift_line": "`mc-forkka`: RSS 5,348 -> 5,348 KiB over minutes 10-60 (+0.0%), slope +0.0 KiB/min (R^2 1.00), peak 5,348 KiB: **flat**"
+  },
+  "mc-serial": {
+   "server": "mc-serial",
+   "duration_min": 59.98,
+   "samples": 721,
+   "error": null,
+   "window_min": [
+    10.0,
+    60.0
+   ],
+   "rss_at": {
+    "1": 940.0,
+    "10": 940.0,
+    "30": 940.0,
+    "60": 940.0
+   },
+   "rss_end": 940.0,
+   "rss_peak": 940.0,
+   "threads_at": {
+    "1": 1.0,
+    "10": 1.0,
+    "30": 1.0,
+    "60": 1.0
+   },
+   "threads_end": 1.0,
+   "threads_peak": 1.0,
+   "procs_at": {
+    "1": 1.0,
+    "10": 1.0,
+    "30": 1.0,
+    "60": 1.0
+   },
+   "procs_end": 1.0,
+   "procs_peak": 1.0,
+   "hwm_parent_kib": 1088.0,
+   "rss_slope_kib_per_min": 0.0,
+   "rss_slope_r2": 1.0,
+   "rss_window_start_kib": 940.0,
+   "rss_window_mean_kib": 940,
+   "pcpu_mean": 7.64,
+   "pcpu_peak": 7.99,
+   "cpu_s": 275.01,
+   "requests": 10799997,
+   "ok_200": 10799997,
+   "non_200": 0,
+   "errors": 0,
+   "error_kinds": {},
+   "rps": 3000.0,
+   "rps_requested": 3000,
+   "p50_ms": 0.168,
+   "p99_ms": 0.302,
+   "p999_ms": 0.418,
+   "cpu_ms_per_1k_req": 25.464,
+   "startup_s": 0.008,
+   "toolchain": {
+    "mc --version": "mc 0.15.15"
+   },
+   "drift": "flat",
+   "drift_line": "`mc-serial`: RSS 940 -> 940 KiB over minutes 10-60 (+0.0%), slope +0.0 KiB/min (R^2 1.00), peak 940 KiB: **flat**"
+  },
+  "node-cluster": {
+   "server": "node-cluster",
+   "duration_min": 59.98,
+   "samples": 721,
+   "error": null,
+   "window_min": [
+    10.0,
+    60.0
+   ],
+   "rss_at": {
+    "1": 191784.0,
+    "10": 199208.0,
+    "30": 200752.0,
+    "60": 215216.0
+   },
+   "rss_end": 215216.0,
+   "rss_peak": 215776.0,
+   "threads_at": {
+    "1": 21.0,
+    "10": 21.0,
+    "30": 21.0,
+    "60": 21.0
+   },
+   "threads_end": 21.0,
+   "threads_peak": 21.0,
+   "procs_at": {
+    "1": 3.0,
+    "10": 3.0,
+    "30": 3.0,
+    "60": 3.0
+   },
+   "procs_end": 3.0,
+   "procs_peak": 3.0,
+   "hwm_parent_kib": 52760.0,
+   "rss_slope_kib_per_min": 448.11,
+   "rss_slope_r2": 0.797,
+   "rss_window_start_kib": 199336.0,
+   "rss_window_mean_kib": 207379,
+   "pcpu_mean": 22.17,
+   "pcpu_peak": 32.76,
+   "cpu_s": 798.07,
+   "requests": 10799999,
+   "ok_200": 10799999,
+   "non_200": 0,
+   "errors": 3,
+   "error_kinds": {
+    "aborted due to deadline": 3
+   },
+   "rps": 3000.0,
+   "rps_requested": 3000,
+   "p50_ms": 0.127,
+   "p99_ms": 0.232,
+   "p999_ms": 0.29,
+   "cpu_ms_per_1k_req": 73.895,
+   "startup_s": 0.129,
+   "toolchain": {
+    "node --version": "v24.20.0"
+   },
+   "drift": "drifted",
+   "drift_line": "`node-cluster`: RSS 199,336 -> 215,216 KiB over minutes 10-60 (+8.0%), slope +448.1 KiB/min (R^2 0.80), peak 215,776 KiB: **drifted**"
+  },
+  "node-single": {
+   "server": "node-single",
+   "duration_min": 59.98,
+   "samples": 721,
+   "error": null,
+   "window_min": [
+    10.0,
+    60.0
+   ],
+   "rss_at": {
+    "1": 68656.0,
+    "10": 72496.0,
+    "30": 79792.0,
+    "60": 94128.0
+   },
+   "rss_end": 94128.0,
+   "rss_peak": 94396.0,
+   "threads_at": {
+    "1": 7.0,
+    "10": 7.0,
+    "30": 7.0,
+    "60": 7.0
+   },
+   "threads_end": 7.0,
+   "threads_peak": 7.0,
+   "procs_at": {
+    "1": 1.0,
+    "10": 1.0,
+    "30": 1.0,
+    "60": 1.0
+   },
+   "procs_end": 1.0,
+   "procs_peak": 1.0,
+   "hwm_parent_kib": 94644.0,
+   "rss_slope_kib_per_min": 369.65,
+   "rss_slope_r2": 0.675,
+   "rss_window_start_kib": 72496.0,
+   "rss_window_mean_kib": 82710,
+   "pcpu_mean": 4.8,
+   "pcpu_peak": 9.79,
+   "cpu_s": 172.76,
+   "requests": 10799998,
+   "ok_200": 10799998,
+   "non_200": 0,
+   "errors": 0,
+   "error_kinds": {},
+   "rps": 3000.0,
+   "rps_requested": 3000,
+   "p50_ms": 0.041,
+   "p99_ms": 0.082,
+   "p999_ms": 0.444,
+   "cpu_ms_per_1k_req": 15.996,
+   "startup_s": 0.1271,
+   "toolchain": {
+    "node --version": "v24.20.0"
+   },
+   "drift": "drifted",
+   "drift_line": "`node-single`: RSS 72,496 -> 94,128 KiB over minutes 10-60 (+29.8%), slope +369.6 KiB/min (R^2 0.68), peak 94,396 KiB: **drifted**"
+  },
+  "php-builtin": {
+   "server": "php-builtin",
+   "duration_min": 59.98,
+   "samples": 722,
+   "error": null,
+   "window_min": [
+    10.0,
+    60.0
+   ],
+   "rss_at": {
+    "1": 66352.0,
+    "10": 142256.0,
+    "30": 311088.0,
+    "60": 564400.0
+   },
+   "rss_end": 564400.0,
+   "rss_peak": 564784.0,
+   "threads_at": {
+    "1": 1.0,
+    "10": 1.0,
+    "30": 1.0,
+    "60": 1.0
+   },
+   "threads_end": 1.0,
+   "threads_peak": 1.0,
+   "procs_at": {
+    "1": 1.0,
+    "10": 1.0,
+    "30": 1.0,
+    "60": 1.0
+   },
+   "procs_end": 1.0,
+   "procs_peak": 1.0,
+   "hwm_parent_kib": 565048.0,
+   "rss_slope_kib_per_min": 8437.59,
+   "rss_slope_r2": 1.0,
+   "rss_window_start_kib": 143024.0,
+   "rss_window_mean_kib": 353663,
+   "pcpu_mean": 35.31,
+   "pcpu_peak": 38.97,
+   "cpu_s": 1270.95,
+   "requests": 10799997,
+   "ok_200": 10799997,
+   "non_200": 0,
+   "errors": 1,
+   "error_kinds": {
+    "aborted due to deadline": 1
+   },
+   "rps": 3000.0,
+   "rps_requested": 3000,
+   "p50_ms": 0.318,
+   "p99_ms": 0.719,
+   "p999_ms": 1.699,
+   "cpu_ms_per_1k_req": 117.681,
+   "startup_s": 0.0584,
+   "toolchain": {
+    "php --version": "PHP 8.4.25 (cli) (built: Aug 27 2026 15:39:11) (NTS)"
+   },
+   "drift": "drifted",
+   "drift_line": "`php-builtin`: RSS 143,024 -> 564,400 KiB over minutes 10-60 (+294.6%), slope +8437.6 KiB/min (R^2 1.00), peak 564,784 KiB: **drifted**"
+  },
+  "py-uvicorn": {
+   "server": "py-uvicorn",
+   "duration_min": 0.0,
+   "samples": 0,
+   "error": "server did not answer 200 within 90 s (exit 2)",
+   "window_min": [
+    -0.0,
+    0.0
+   ],
+   "rss_at": {
+    "1": null,
+    "10": null,
+    "30": null,
+    "60": null
+   },
+   "rss_end": null,
+   "rss_peak": null,
+   "threads_at": {
+    "1": null,
+    "10": null,
+    "30": null,
+    "60": null
+   },
+   "threads_end": null,
+   "threads_peak": null,
+   "procs_at": {
+    "1": null,
+    "10": null,
+    "30": null,
+    "60": null
+   },
+   "procs_end": null,
+   "procs_peak": null,
+   "hwm_parent_kib": null,
+   "rss_slope_kib_per_min": null,
+   "rss_slope_r2": null,
+   "rss_window_start_kib": null,
+   "rss_window_mean_kib": null,
+   "pcpu_mean": null,
+   "pcpu_peak": null,
+   "cpu_s": null,
+   "requests": 0,
+   "ok_200": 0,
+   "non_200": 0,
+   "errors": 0,
+   "error_kinds": {},
+   "rps": null,
+   "rps_requested": 3000,
+   "p50_ms": null,
+   "p99_ms": null,
+   "p999_ms": null,
+   "cpu_ms_per_1k_req": null,
+   "startup_s": null,
+   "toolchain": {
+    "python3 --version": "Python 3.12.14",
+    "python3 -m uvicorn --version": "Running uvicorn 0.39.0 with CPython 3.12.14 on Linux"
+   },
+   "drift": "n/a",
+   "drift_line": "`py-uvicorn`: no RSS window (server did not answer 200 within 90 s (exit 2))"
+  },
+  "rb-puma": {
+   "server": "rb-puma",
+   "duration_min": 59.98,
+   "samples": 722,
+   "error": null,
+   "window_min": [
+    10.0,
+    60.0
+   ],
+   "rss_at": {
+    "1": 46280.0,
+    "10": 46536.0,
+    "30": 47048.0,
+    "60": 47304.0
+   },
+   "rss_end": 47304.0,
+   "rss_peak": 47304.0,
+   "threads_at": {
+    "1": 11.0,
+    "10": 11.0,
+    "30": 11.0,
+    "60": 11.0
+   },
+   "threads_end": 11.0,
+   "threads_peak": 12.0,
+   "procs_at": {
+    "1": 1.0,
+    "10": 1.0,
+    "30": 1.0,
+    "60": 1.0
+   },
+   "procs_end": 1.0,
+   "procs_peak": 1.0,
+   "hwm_parent_kib": 47516.0,
+   "rss_slope_kib_per_min": 12.8,
+   "rss_slope_r2": 0.91,
+   "rss_window_start_kib": 46536.0,
+   "rss_window_mean_kib": 47063,
+   "pcpu_mean": 21.14,
+   "pcpu_peak": 23.78,
+   "cpu_s": 760.97,
+   "requests": 10799988,
+   "ok_200": 10799988,
+   "non_200": 0,
+   "errors": 11,
+   "error_kinds": {
+    "aborted due to deadline": 11
+   },
+   "rps": 3000.0,
+   "rps_requested": 3000,
+   "p50_ms": 0.163,
+   "p99_ms": 38.476,
+   "p999_ms": 41.994,
+   "cpu_ms_per_1k_req": 70.46,
+   "startup_s": 0.6719,
+   "toolchain": {
+    "ruby --version": "ruby 3.3.12 (2026-07-16 revision 0581089df9) [x86_64-linux]",
+    "puma --version": "puma version 6.6.1"
+   },
+   "drift": "flat",
+   "drift_line": "`rb-puma`: RSS 46,536 -> 47,304 KiB over minutes 10-60 (+1.7%), slope +12.8 KiB/min (R^2 0.91), peak 47,304 KiB: **flat**"
+  },
+  "rust-axum": {
+   "server": "rust-axum",
+   "duration_min": 59.98,
+   "samples": 721,
+   "error": null,
+   "window_min": [
+    10.0,
+    60.0
+   ],
+   "rss_at": {
+    "1": 3832.0,
+    "10": 3832.0,
+    "30": 3832.0,
+    "60": 3832.0
+   },
+   "rss_end": 3832.0,
+   "rss_peak": 3832.0,
+   "threads_at": {
+    "1": 3.0,
+    "10": 3.0,
+    "30": 3.0,
+    "60": 3.0
+   },
+   "threads_end": 3.0,
+   "threads_peak": 3.0,
+   "procs_at": {
+    "1": 1.0,
+    "10": 1.0,
+    "30": 1.0,
+    "60": 1.0
+   },
+   "procs_end": 1.0,
+   "procs_peak": 1.0,
+   "hwm_parent_kib": 4076.0,
+   "rss_slope_kib_per_min": 0.0,
+   "rss_slope_r2": 1.0,
+   "rss_window_start_kib": 3832.0,
+   "rss_window_mean_kib": 3832,
+   "pcpu_mean": 6.36,
+   "pcpu_peak": 7.39,
+   "cpu_s": 229.19,
+   "requests": 10799997,
+   "ok_200": 10799997,
+   "non_200": 0,
+   "errors": 1,
+   "error_kinds": {
+    "aborted due to deadline": 1
+   },
+   "rps": 3000.0,
+   "rps_requested": 3000,
+   "p50_ms": 0.057,
+   "p99_ms": 0.081,
+   "p999_ms": 0.322,
+   "cpu_ms_per_1k_req": 21.221,
+   "startup_s": 0.1002,
+   "toolchain": {
+    "rustc --version": "rustc 1.96.0 (ac68faa20 2026-05-25)",
+    "cargo --version": "cargo 1.96.0 (30a34c682 2026-05-25)"
+   },
+   "drift": "flat",
+   "drift_line": "`rust-axum`: RSS 3,832 -> 3,832 KiB over minutes 10-60 (+0.0%), slope +0.0 KiB/min (R^2 1.00), peak 3,832 KiB: **flat**"
+  },
+  "rust-threads": {
+   "server": "rust-threads",
+   "duration_min": 59.98,
+   "samples": 721,
+   "error": null,
+   "window_min": [
+    10.0,
+    60.0
+   ],
+   "rss_at": {
+    "1": 2436.0,
+    "10": 2436.0,
+    "30": 2436.0,
+    "60": 2436.0
+   },
+   "rss_end": 2436.0,
+   "rss_peak": 2436.0,
+   "threads_at": {
+    "1": 17.0,
+    "10": 17.0,
+    "30": 17.0,
+    "60": 17.0
+   },
+   "threads_end": 17.0,
+   "threads_peak": 17.0,
+   "procs_at": {
+    "1": 1.0,
+    "10": 1.0,
+    "30": 1.0,
+    "60": 1.0
+   },
+   "procs_end": 1.0,
+   "procs_peak": 1.0,
+   "hwm_parent_kib": 2512.0,
+   "rss_slope_kib_per_min": 0.0,
+   "rss_slope_r2": 1.0,
+   "rss_window_start_kib": 2436.0,
+   "rss_window_mean_kib": 2436,
+   "pcpu_mean": 6.75,
+   "pcpu_peak": 7.59,
+   "cpu_s": 243.2,
+   "requests": 10799998,
+   "ok_200": 10799998,
+   "non_200": 0,
+   "errors": 2,
+   "error_kinds": {
+    "aborted due to deadline": 2
+   },
+   "rps": 3000.0,
+   "rps_requested": 3000,
+   "p50_ms": 0.073,
+   "p99_ms": 0.116,
+   "p999_ms": 0.148,
+   "cpu_ms_per_1k_req": 22.519,
+   "startup_s": 0.0091,
+   "toolchain": {
+    "rustc --version": "rustc 1.96.0 (ac68faa20 2026-05-25)"
+   },
+   "drift": "flat",
+   "drift_line": "`rust-threads`: RSS 2,436 -> 2,436 KiB over minutes 10-60 (+0.0%), slope +0.0 KiB/min (R^2 1.00), peak 2,436 KiB: **flat**"
+  },
+  "zig-threads": {
+   "server": "zig-threads",
+   "duration_min": 59.98,
+   "samples": 721,
+   "error": null,
+   "window_min": [
+    10.0,
+    60.0
+   ],
+   "rss_at": {
+    "1": 12480.0,
+    "10": 12480.0,
+    "30": 12480.0,
+    "60": 12480.0
+   },
+   "rss_end": 12480.0,
+   "rss_peak": 12480.0,
+   "threads_at": {
+    "1": 17.0,
+    "10": 17.0,
+    "30": 17.0,
+    "60": 17.0
+   },
+   "threads_end": 17.0,
+   "threads_peak": 17.0,
+   "procs_at": {
+    "1": 1.0,
+    "10": 1.0,
+    "30": 1.0,
+    "60": 1.0
+   },
+   "procs_end": 1.0,
+   "procs_peak": 1.0,
+   "hwm_parent_kib": 12664.0,
+   "rss_slope_kib_per_min": 0.0,
+   "rss_slope_r2": 1.0,
+   "rss_window_start_kib": 12480.0,
+   "rss_window_mean_kib": 12480,
+   "pcpu_mean": 6.76,
+   "pcpu_peak": 7.79,
+   "cpu_s": 243.29,
+   "requests": 10800000,
+   "ok_200": 10800000,
+   "non_200": 0,
+   "errors": 4,
+   "error_kinds": {
+    "aborted due to deadline": 4
+   },
+   "rps": 3000.0,
+   "rps_requested": 3000,
+   "p50_ms": 0.07,
+   "p99_ms": 0.114,
+   "p999_ms": 0.151,
+   "cpu_ms_per_1k_req": 22.527,
+   "startup_s": 0.0085,
+   "toolchain": {
+    "zig version": "0.16.0"
+   },
+   "drift": "flat",
+   "drift_line": "`zig-threads`: RSS 12,480 -> 12,480 KiB over minutes 10-60 (+0.0%), slope +0.0 KiB/min (R^2 1.00), peak 12,480 KiB: **flat**"
+  }
+ }
+}
