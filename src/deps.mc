@@ -273,7 +273,18 @@ i64 ver_major(uptr a) {
 #define PK_LIB  24                    // what a bare `<pack>` means, 0 when none
 #define PK_DIR  32                    // resolved, normalised, trailing '/'
 #define PK_MAN  40                    // the cache manifest, 0 when vendored
-#define PK_SIZE 48
+// M48 § 4.3: what the lock records beyond the tree. `kind` is written only for
+// a tool, so 0 here means `lib` and every lock written before this milestone
+// reads as one; `permissions` is the set the developer ACCEPTED, in canonical
+// form (§ 1.4), and a row without the key is an empty accepted set.
+#define PK_KIND  48
+#define PK_NPERM 56
+#define PK_PERMS 64                   // uptr per entry, sorted
+// The index of this package's include root, or -1 for a tool: a tool is not
+// compiled into the consumer, so it registers no root at all (§ 4.3) and the
+// two tables stop being parallel the moment one row is a tool.
+#define PK_ROOT  72
+#define PK_SIZE  80
 
 #define FL_PKG  0
 #define FL_NAME 8
@@ -295,6 +306,27 @@ uptr dp_hash(i64 i)     { return ld64(dp_at(i) + PK_HASH); }
 uptr dp_lib(i64 i)      { return ld64(dp_at(i) + PK_LIB); }
 uptr dp_dir(i64 i)      { return ld64(dp_at(i) + PK_DIR); }
 uptr dp_man(i64 i)      { return ld64(dp_at(i) + PK_MAN); }
+// absent in the lock means `lib`, which is what every row written before M48
+// says and what every library says now
+uptr dp_kind(i64 i) {
+    uptr k = ld64(dp_at(i) + PK_KIND);
+    if (k == 0) return "lib";
+    return k;
+}
+i64  dp_is_tool(i64 i)      { return str_eq(dp_kind(i), "tool"); }
+i64  dp_nperm(i64 i)        { return ld64(dp_at(i) + PK_NPERM); }
+// how many rows are trees this build reads: `verify` and `vendor` count what
+// they touched, and a tool is not one of them
+i64 dp_nlib() {
+    i64 n = 0;
+    i64 i = 0;
+    while (i < dp_npkg()) {
+        if (!dp_is_tool(i)) n = n + 1;
+        i = i + 1;
+    }
+    return n;
+}
+uptr dp_perm(i64 i, i64 j)  { return ld64(ld64(dp_at(i) + PK_PERMS) + j * 8); }
 
 // the package's directory and the lexer's root for it are one value written in
 // two places: the record is what libs_open joins against, the root is what
@@ -306,7 +338,10 @@ void dp_set_dir(i64 i, uptr dir) {
     // of nothing and the closure rule would silently never fire.
     dir = tm_cat(path_norm(dir), "/");
     st64(dp_at(i) + PK_DIR, dir);
-    lex_set_root_dir(i, dir);
+    // M48: a tool row has no root (PK_ROOT is -1) -- nothing it carries is
+    // included by anything, so there is nothing to attribute a path to.
+    i64 r = ld64(dp_at(i) + PK_ROOT);
+    if (r >= 0) lex_set_root_dir(r, dir);
 }
 
 i64 dp_find(uptr name) {
@@ -433,6 +468,204 @@ i64 dep_under(uptr dir, uptr rel) {
     i64 n = cstrlen(base);
     if (cstrlen(p) <= n) return 0;
     return mem_eq(p, base, n);
+}
+
+// ---- M48 § 1: what a package says about itself, beyond its files ----
+// Three questions a manifest answers, read HERE and nowhere else so that the
+// lock writer (`mc pkg sync`) and the registry gate (`mc pkg check`) cannot
+// drift apart: what KIND of package this is, what its binary is called, and
+// which permissions it asks for. Each of them reads the table the caller has
+// already parsed (toml_push / toml_parse / toml_pop), so every refusal comes
+// out at the offending key's own file:line:col -- inside the PACKAGE's mc.toml,
+// which is the file that got it wrong.
+//
+// The compiler does not enforce a permission: it reads it, prints it, records
+// what was accepted, and refuses a manifest that says something it cannot mean.
+// Enforcement is `mc tool run`'s box (M48 C3) and, for a library, nothing at
+// all -- a library runs inside your program (§ 4.4).
+
+// bytewise `a < b`: the total order every set written into a lock, a plan or an
+// index row is sorted by (rule 2 of docs/determinism.md -- a total order over
+// unique keys, so there is no tie to break).
+i64 dep_str_lt(uptr a, uptr b) {
+    i64 i = 0;
+    loop {
+        i64 x = ld8(a + i);
+        i64 y = ld8(b + i);
+        if (x != y) return x < y;
+        if (x == 0) return 0;
+        i = i + 1;
+    }
+}
+
+// At most 32 rows: a set a person reads at an install prompt, not a policy
+// file. The bound is the manifest's, not the lock's -- the lock only ever
+// carries what a manifest declared.
+#define DEP_MAXPERM 32
+
+// `[package].bin` (§ 1.2): [a-z][a-z0-9_-]*, at most 32 bytes. A hyphen is
+// allowed here and in no other name, because this is a FILE name in ~/.mc/bin
+// (`mc-lsp`) and not an identifier.
+i64 dep_bin_ok(uptr s) {
+    i64 c = ld8(s);
+    if (c < 'a' || c > 'z') return 0;
+    i64 i = 1;
+    loop {
+        c = ld8(s + i);
+        if (c == 0) break;
+        if (i >= DEP_NAMEMAX) return 0;
+        if ((c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '_' && c != '-') return 0;
+        i = i + 1;
+    }
+    return 1;
+}
+
+// A permission path (§ 1.4). No absolute path is ever accepted: the registry
+// cannot verify one, it leaks a host's layout into a published manifest, and
+// the box cannot promise what it would map to. The four forms are `workspace`,
+// `tmp`, `workspace/<rel>` and `home/<rel>`, and `<rel>` is dep_rel_ok's --
+// ONE containment rule for every path in every manifest.
+i64 dep_perm_path_ok(uptr p) {
+    if (str_eq(p, "workspace")) return 1;
+    if (str_eq(p, "tmp")) return 1;
+    uptr rel = opt_val(p, "workspace/");
+    if (rel == 0) rel = opt_val(p, "home/");
+    if (rel == 0) return 0;
+    return dep_rel_ok(rel, 0);
+}
+
+// The `name` of an `exec` or `env` row: a program's basename or a variable's
+// name. A space is what makes this a rule and not taste -- the canonical form
+// is `<kind> <name>` on one line, so a name carrying a space would be two
+// permissions to a reader and one to a comparison.
+i64 dep_perm_word_ok(uptr s) {
+    i64 n = cstrlen(s);
+    if (n == 0 || n > 64) return 0;
+    i64 i = 0;
+    while (i < n) {
+        i64 c = ld8(s + i);
+        if ((c < 'a' || c > 'z') && (c < 'A' || c > 'Z') && (c < '0' || c > '9')
+            && c != '_' && c != '.' && c != '-') return 0;
+        i = i + 1;
+    }
+    return 1;
+}
+
+uptr dep_perm_key(i64 i, uptr k) {
+    return tm_cat(tm_cat(tm_cat("permission.", tm_num_str(i)), "."), k);
+}
+
+// One row, as the canonical one-liner the lock, the index and the install table
+// all carry: `fs.read workspace`, `fs.write workspace/build`, `net`, `exec mc`,
+// `env HOME`. `reason` is read only to bound it: it is shown, never compared,
+// and never hashed into a decision (§ 1.4).
+uptr dep_perm_line(i64 i) {
+    uptr kkey = dep_perm_key(i, "kind");
+    uptr kind = toml_get(kkey);
+    if (kind == 0) toml_err_key(kkey, "missing key");
+    uptr pkey = dep_perm_key(i, "path");
+    uptr nkey = dep_perm_key(i, "name");
+    uptr path = toml_get(pkey);
+    uptr name = toml_get(nkey);
+    uptr rkey = dep_perm_key(i, "reason");
+    uptr reason = toml_get(rkey);
+    if (reason != 0 && cstrlen(reason) > 120)
+        toml_err_key(rkey, "a permission reason is at most 120 bytes");
+    // the kind decides everything else, so it is asked first: `fs.delete` is
+    // an unknown KIND, not a kind that takes no path
+    i64 isfs = str_eq(kind, "fs.read") || str_eq(kind, "fs.write");
+    i64 isword = str_eq(kind, "exec") || str_eq(kind, "env");
+    if (!isfs && !isword && !str_eq(kind, "net"))
+        toml_err_key(kkey, "a permission kind is fs.read, fs.write, net, exec or env");
+    if (isfs) {
+        if (name != 0) toml_err_key(nkey, "a fs permission takes a path, not a name");
+        if (path == 0) toml_err_key(kkey, tm_cat(kind, " needs a path"));
+        if (!dep_perm_path_ok(path))
+            toml_err_key(pkey, "a permission path is workspace, tmp, workspace/<rel> or home/<rel>");
+        return tm_cat(tm_cat(kind, " "), path);
+    }
+    if (path != 0) toml_err_key(pkey, tm_cat(kind, " takes no path"));
+    if (isword) {
+        if (name == 0) toml_err_key(kkey, tm_cat(kind, " needs a name"));
+        if (!dep_perm_word_ok(name)) toml_err_key(nkey, "invalid permission name");
+        return tm_cat(tm_cat(kind, " "), name);
+    }
+    if (name != 0) toml_err_key(nkey, "net takes no name");
+    return "net";
+}
+
+// The whole set of the manifest already parsed: canonical, duplicates
+// collapsed, sorted bytewise. The array comes back through `pout` and the count
+// is the answer, which is dep_read_files' shape.
+i64 dep_read_perms(uptr pout) {
+    i64 n = toml_occurrences("permission");
+    if (n > DEP_MAXPERM)
+        toml_err_key(dep_perm_key(DEP_MAXPERM, "kind"), "at most 32 [[permission]] rows");
+    uptr set = xalloc(n * 8 + 8);
+    i64 m = 0;
+    i64 i = 0;
+    while (i < n) {
+        uptr line = dep_perm_line(i);
+        i64 dup = 0;
+        i64 j = 0;
+        while (j < m) {
+            if (str_eq(ld64(set + j * 8), line)) dup = 1;
+            j = j + 1;
+        }
+        if (!dup) {
+            st64(set + m * 8, line);
+            m = m + 1;
+        }
+        i = i + 1;
+    }
+    i = 1;
+    while (i < m) {                             // insertion sort, unique keys
+        i64 k = i;
+        while (k > 0 && dep_str_lt(ld64(set + k * 8), ld64(set + (k - 1) * 8))) {
+            uptr t = ld64(set + k * 8);
+            st64(set + k * 8, ld64(set + (k - 1) * 8));
+            st64(set + (k - 1) * 8, t);
+            k = k - 1;
+        }
+        i = i + 1;
+    }
+    st64(pout, set);
+    return m;
+}
+
+// the index of the first `[project]` key of the manifest already parsed, -1
+i64 dep_project_at() {
+    i64 i = 0;
+    while (i < toml_entries()) {
+        if (opt_val(toml_path_at(i), "project.") != 0) return i;
+        i = i + 1;
+    }
+    return -1;
+}
+
+// The kind rule (§ 1.1), in one place: no `[project]` at all -- which is every
+// manifest published or fixtured before M48 -- is a library; `kind = "obj"` is
+// a library that also builds an object of its own; `kind = "exe"` is a tool.
+// A `[project]` with NO kind is refused, because `mc build` defaults it to
+// `exe` and a library carrying a `[project]` for its own tests would otherwise
+// be classified as a tool in silence.
+uptr dep_kind_of() {
+    i64 pi = dep_project_at();
+    if (pi < 0) return "lib";
+    uptr k = toml_get("project.kind");
+    if (k == 0)
+        toml_err_at(pi, "a package's [project] must say kind = \"obj\" or \"exe\"");
+    if (str_eq(k, "obj")) return "lib";
+    if (str_eq(k, "exe")) return "tool";
+    toml_err_key("project.kind", "a package's [project] must say kind = \"obj\" or \"exe\"");
+    return 0;
+}
+
+// `[package].bin`, checked; 0 when the manifest does not name one.
+uptr dep_bin_of() {
+    uptr b = toml_get("package.bin");
+    if (b != 0 && !dep_bin_ok(b)) toml_err_key("package.bin", "invalid binary name");
+    return b;
 }
 
 // `geo 1.2.0` for a locked package, the directory for a tree nobody locked
@@ -752,6 +985,10 @@ uptr libs_open(uptr name, i64 stage, uptr pcanon, uptr plen) {
     if (dp == 0) return 0;
     i64 pk = dp_find(dep_first(name));
     if (pk < 0) return 0;
+    // M48: a tool is a program, not a library. It has no root, so lex.mc never
+    // asks -- and it has no resolved directory either, which is why the guard
+    // is here and not only in the caller.
+    if (dp_is_tool(pk)) return 0;
     uptr rest = 0;
     i64 n = cstrlen(dp_name(pk));
     if (ld8(name + n) == '/') rest = name + n + 1;
@@ -805,6 +1042,20 @@ void dep_read_lock(uptr cfg) {
         st64(e + PK_VER, vr);
         st64(e + PK_HASH, toml_get(tm_cat(key, "sha256")));
         st64(e + PK_LIB, toml_get(tm_cat(key, "lib")));
+        // M48 § 4.3: the two keys a lock written before this milestone does not
+        // have. No `kind` is `lib`, and no `permissions` is an EMPTY ACCEPTED
+        // SET -- which is what makes every checked-in lock read as it did.
+        st64(e + PK_KIND, toml_get(tm_cat(key, "kind")));
+        uptr pmk = tm_cat(key, "permissions");
+        i64 npm = toml_count(pmk);
+        uptr pms = xalloc(npm * 8 + 8);
+        i64 pj = 0;
+        while (pj < npm) {
+            st64(pms + pj * 8, toml_get_array(pmk, pj));
+            pj = pj + 1;
+        }
+        st64(e + PK_NPERM, npm);
+        st64(e + PK_PERMS, pms);
         uptr dk = tm_cat(key, "deps");
         i64 nd = toml_count(dk);
         i64 j = 0;
@@ -819,11 +1070,28 @@ void dep_read_lock(uptr cfg) {
     toml_pop(frame);
     st64(s + DP_NPKG, n);
     st64(s + DP_PKG, pkgs);
-    // the roots and the edges are sized once, from the lock, and never grow
-    lex_pkg_reserve(n, ne);
+    // The roots and the edges are sized once, from the lock, and never grow.
+    // M48: a TOOL row is not one of them -- it is a program the developer
+    // installs, never a tree this build reads -- so it takes no root, its
+    // edges are dropped, and the two tables are no longer index-parallel with
+    // the package table (PK_ROOT is the map, -1 for a tool).
+    i64 nroot = 0;
     i = 0;
     while (i < n) {
-        lex_add_root(dp_name(i), 0);        // the directory is filled in below
+        if (!dp_is_tool(i)) nroot = nroot + 1;
+        i = i + 1;
+    }
+    lex_pkg_reserve(nroot, ne);
+    i64 r = 0;
+    i = 0;
+    while (i < n) {
+        if (dp_is_tool(i)) {
+            st64(dp_at(i) + PK_ROOT, -1);
+        } else {
+            st64(dp_at(i) + PK_ROOT, r);
+            lex_add_root(dp_name(i), 0);    // the directory is filled in below
+            r = r + 1;
+        }
         i = i + 1;
     }
     i = 0;
@@ -831,7 +1099,9 @@ void dep_read_lock(uptr cfg) {
         i64 to = dp_find(ld64(ename + i * 8));
         if (to < 0)
             dep_die("mc.lock is stale", ld64(ename + i * 8), "mc pkg sync --yes");
-        lex_add_edge(ld64(efrom + i * 8), to);
+        i64 rf = ld64(dp_at(ld64(efrom + i * 8)) + PK_ROOT);
+        i64 rt = ld64(dp_at(to) + PK_ROOT);
+        if (rf >= 0 && rt >= 0) lex_add_edge(rf, rt);
         i = i + 1;
     }
 }
@@ -906,6 +1176,14 @@ void deps_apply(uptr cfg) {
         }
         k = opt_val(toml_path_at(i), "replace.");
         if (k != 0) dep_check_name("replace.", k);
+        // M48 § 1.3: `[tools]` is `[deps]`' shape and a tool is resolved in the
+        // same MVS graph -- by `mc pkg sync`. A BUILD asks nothing of it: no
+        // root, no tree, no lock row consulted, so a project that declares one
+        // and never runs `mc pkg` still builds, and one that has both emits the
+        // same bytes it emitted before the `[tools]` line was written (D24).
+        // The name is still checked at its own position, as `[replace]`'s is.
+        k = opt_val(toml_path_at(i), "tools.");
+        if (k != 0) dep_check_name("tools.", k);
         i = i + 1;
     }
     if (nd == 0) return;
@@ -923,9 +1201,15 @@ void deps_apply(uptr cfg) {
         }
         i = i + 1;
     }
-    // 4. each tree resolved, then REHASHED (D7): checked, not trusted
+    // 4. each tree resolved, then REHASHED (D7): checked, not trusted. A tool
+    //    row is skipped whole: its tree lives under ~/.mc/tools, `mc tool`
+    //    owns it, and this build neither opens nor hashes it.
     i = 0;
     while (i < dp_npkg()) {
+        if (dp_is_tool(i)) {
+            i = i + 1;
+            continue;
+        }
         dep_resolve(i, cfg);
         dep_replace(i, cfg);
         uptr got = dep_scan(i);

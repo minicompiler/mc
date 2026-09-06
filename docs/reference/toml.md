@@ -280,11 +280,12 @@ A project never shadows a relative include that already resolved; the roots only
 otherwise fail. With no root registered the lexer behaves exactly as it did before this key
 existed — not even an extra `open` happens.
 
-## `[deps]`, `[replace]` and `[registry]` — packages
+## `[deps]`, `[tools]`, `[replace]` and `[registry]` — packages
 
 | key | type | meaning |
 |---|---|---|
-| `deps.<name>` | string | the MINIMUM version of a package this project needs |
+| `deps.<name>` | string | the MINIMUM version of a LIBRARY this project needs |
+| `tools.<name>` | string | the MINIMUM version of a TOOL this project needs |
 | `replace.<name>` | string | a directory to use for `<name>` instead of a locked tree, relative to the config |
 | `registry.url` | string | where `mc pkg` looks a package up; a URL or a directory |
 
@@ -300,6 +301,15 @@ lock cannot meet is `mc.lock is stale`, exit 2.
 
 `[deps]` is what turns on `#include <pack/file.mc>`; with no `[deps]` section `mc build` reads no
 lock at all and every `<name>` resolves exactly as it did before packages existed.
+
+`[tools]` has exactly `[deps]`' shape and is resolved in exactly the same MVS graph — a tool's own
+`[deps]` are libraries — but what it names is a PROGRAM, not a tree the compiler reads:
+`mc pkg sync` writes it into the lock with `kind = "tool"`, and `mc build` registers no include
+root for it, opens nothing under it and emits the same bytes it would emit with the table deleted.
+A name may be in one table or the other and never in both, and the registry says which it is: a
+library named under `[tools]` is `net: is a library: name it under [deps]`, a tool named under
+`[deps]` the mirror of that, both exit 1. Installing and running one is `mc tool`, which does not
+exist yet.
 
 `[registry].url` is where `mc pkg` looks a name up, and it takes a URL **or a directory**: a
 private registry is a `git clone` of a tap plus one line here, at no cost in code. `--registry` on
@@ -326,12 +336,48 @@ rule — is in [packages.md](packages.md).
 | `package.files` | array of strings | every file the package ships, in the order that fixes the hash |
 | `package.lib` | string | optional: the file a bare `#include <name>` means |
 | `package.module` | string | optional: the file a COMPILER includes; it exports `<name>_init()` |
+| `package.bin` | string | optional: the name a TOOL takes in `~/.mc/bin`; default the basename of `project.out` |
+| `package.licence` | string | optional: an SPDX identifier. The compiler reads it only to compare a registry row against the archive it describes |
 | `package.repo` | string | read out of a REGISTRY INDEX file, not out of a package: where the source lives |
 
-The first four keys are read out of a DEPENDENCY's `mc.toml`, not out of your own — a project's `mc.toml`
+The first keys are read out of a DEPENDENCY's `mc.toml`, not out of your own — a project's `mc.toml`
 without `[package]` is not a package, and a package that is also a program simply carries both
 tables. `files` is the hash's input, the vendor-copy list and the boundary a package may not read
 outside of; see [packages.md](packages.md) § 3.
+
+`bin` is the one name in this file that may carry a hyphen (`[a-z][a-z0-9_-]*`, at most 32 bytes):
+it is a FILE name, not an identifier. `mc build` ignores it.
+
+**A package's kind is `[project]`'s** and is written nowhere else: no `[project]` at all — every
+package published so far — or `kind = "obj"` is a library, `kind = "exe"` is a tool, and a
+`[project]` with no `kind` line is refused with `a package's [project] must say kind = "obj" or
+"exe"` at its own position, because `mc build` defaults that key to `exe` and a library carrying a
+`[project]` for its own tests would otherwise be classified as a program to install.
+
+## `[[permission]]` — what a package asks to be allowed to do
+
+| key | type | meaning |
+|---|---|---|
+| `kind` | string | `fs.read`, `fs.write`, `net`, `exec` or `env` |
+| `path` | string | `fs.*` only: `workspace`, `tmp`, `workspace/<rel>` or `home/<rel>` |
+| `name` | string | `exec` and `env` only: a program's basename, or a variable's name |
+| `reason` | string | optional, at most 120 bytes: shown by `mc pkg list --long` and on the package's page |
+
+An array of tables, at most 32 rows, in a PACKAGE's `mc.toml` — a project's own rows mean nothing
+to anybody. No rows at all means stdio only. Each row becomes one canonical line —
+`fs.read workspace`, `fs.write workspace/build`, `net`, `exec mc`, `env HOME` — and the set,
+duplicates collapsed and sorted bytewise, is what a registry row carries, what `mc pkg sync` prints
+before it downloads anything and what `mc.lock` records as accepted.
+
+**No absolute path is ever accepted**: the registry cannot verify one, it leaks a host's layout
+into a published manifest, and a sandbox cannot promise what it would map to. `<rel>` obeys the one
+containment rule every path in every manifest obeys (no `..`, no empty component, no backslash, no
+control byte, none of the characters Windows reserves). A path on `net`, a name on `fs.*` and a
+kind outside the five are each refused at the offending key's own `file:line:col`.
+
+What enforces them is the sandbox around a tool (`mc tool`, not built yet); a library is compiled
+into your program, so what it declares is its author's statement and the install table says so in
+those words. See [packages.md](packages.md) § Permissions.
 
 ## `[limits]`
 

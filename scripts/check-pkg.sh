@@ -55,7 +55,10 @@ cleanup() {
            "$here/tests/pkg/sync/build" "$here/tests/pkg/sync/deps" \
            "$here/tests/pkg/sync/mc.lock" "$here/tests/pkg/major/build" \
            "$here/tests/pkg/major/mc.lock" "$here/tests/pkg/add/build" \
-           "$here/tests/pkg/add/mc.lock" "$here/tests/pkg/add/deps"
+           "$here/tests/pkg/add/mc.lock" "$here/tests/pkg/add/deps" \
+           "$here/tests/pkg/perm/build" "$here/tests/pkg/perm/deps" \
+           "$here/tests/pkg/perm/mc.lock" "$here/tests/pkg/perm/wider.toml" \
+           "$here/tests/pkg/perm/wrong.toml"
     git -C "$here" checkout -- tests/pkg/add/add.toml 2> /dev/null
 }
 trap cleanup EXIT INT TERM
@@ -408,6 +411,12 @@ index_open() {                        # index_open NAME
       echo "description = \"a fixture package\""
     } > "$tmp/registry/index/$1.toml"
 }
+# $ixx, when set, is written verbatim after `deps`: the M48 keys a row gained
+# (kind, bin, permissions, tools, licence). They are written HERE, by the shell,
+# and re-derived by the compiler from the archive -- `mc pkg check --yes` is
+# what compares the two, so a row that disagrees with its own tree is a red run
+# and not a mystery at the consumer.
+ixx=""
 index_row() {                         # index_row NAME VERSION SRCDIR DEPS YANKED
     { echo
       echo '[[versions]]'
@@ -416,9 +425,11 @@ index_row() {                         # index_row NAME VERSION SRCDIR DEPS YANKE
       echo "strip   = 1"
       echo "sha256  = \"$(sh scripts/pkg-hash.sh "$3")\""
       echo "deps    = [$4]"
+      [ -z "$ixx" ] || printf '%s\n' "$ixx"
       [ -z "$5" ] || echo "yanked  = true"
     } >> "$tmp/registry/index/$1.toml"
     mkarchive "$3" "$1" "$2"
+    ixx=""
 }
 
 index_open mathx
@@ -435,6 +446,20 @@ index_row heavy 1.0.0 tests/pkg/src/heavy-1.0.0 '"mathx 2.0.0"'
 index_open geo
 index_row geo 1.0.0 tests/pkg/src/geo-1.0.0 '"mathx 1.0.0"'
 index_row geo 1.2.0 tests/pkg/src/geo-1.2.0 '"mathx 1.0.0"'
+# M48: a tool and a library that declares a permission. `net` is published
+# twice, and 1.1.0 asks for one thing more than 1.0.0 -- the accept rule's case.
+index_open tool
+ixx='kind        = "tool"
+bin         = "hello-tool"
+permissions = ["fs.read workspace", "net"]
+licence     = "MIT"'
+index_row tool 0.1.0 tests/pkg/src/tool-0.1.0 ""
+index_open net
+ixx='kind        = "lib"
+permissions = ["net"]'
+index_row net 1.0.0 tests/pkg/src/net-1.0.0 ""
+ixx='permissions = ["exec sh", "net"]'
+index_row net 1.1.0 tests/pkg/src/net-1.1.0 ""
 reg="$tmp/registry"
 
 # ---- 17. `mc pkg hash` is the same rule as the shell and as the lock ----
@@ -648,7 +673,7 @@ if [ "$rc" != 0 ]; then
     fail "pkg add @rc" "exit $rc: $(cat "$tmp/o")"
 elif ! grep -q 'mathx = "2.1.0-rc1"' tests/pkg/add/add.toml; then
     fail "pkg add @rc" "$(grep mathx tests/pkg/add/add.toml)"
-elif ! grep -q '^version = "2.1.0-rc1"$' tests/pkg/add/mc.lock; then
+elif ! grep -q '^version *= *"2.1.0-rc1"$' tests/pkg/add/mc.lock; then
     fail "pkg add @rc" "the lock does not carry the suffix: $(cat tests/pkg/add/mc.lock)"
 else
     ok "mc pkg add mathx@2.1.0-rc1: asked for by name, and mc.lock carries the suffix verbatim"
@@ -675,7 +700,7 @@ pkg add mathx@2.0.0 tests/pkg/add --config tests/pkg/add/add.toml \
         --registry "$reg" --libs-dir "$tmp/c1" --yes
 if [ "$rc" != 0 ]; then
     fail "sync at a released minimum" "exit $rc: $(cat "$tmp/o")"
-elif ! grep -q '^version = "2.0.0"$' tests/pkg/add/mc.lock; then
+elif ! grep -q '^version *= *"2.0.0"$' tests/pkg/add/mc.lock; then
     fail "sync at a released minimum" "$(cat tests/pkg/add/mc.lock)"
 elif grep -q 'rc1' tests/pkg/add/mc.lock; then
     fail "sync at a released minimum" "the candidate reached the lock"
@@ -1038,6 +1063,239 @@ for entry in "../canary.txt" "/etc/hosts" "./a.mc" "a/../../canary.txt"; do
         *) fail "\`.\` as the base refuses $entry" "exit $rc: $msg" ;;
     esac
 done
+
+# ---- 31. M48 C1: the kind, the permissions and what the lock records ----
+# Acceptance § 9 items 2 and 3. The fixtures are a TOOL (`[project] kind =
+# "exe"`, a `bin`, two permissions) and a LIBRARY published twice, the second
+# time asking for one thing more than the first.
+
+# 31a. the install table, and nothing fetched without --yes
+pkg sync tests/pkg/perm --registry "$reg" --libs-dir "$tmp/p1"
+tbl="$tmp/o"
+if [ "$rc" != 0 ]; then
+    fail "the install table" "exit $rc: $(cat "$tbl")"
+elif ! grep -q '^fetch  tool 0.1.0 *tool  bin hello-tool$' "$tbl"; then
+    fail "the install table" "no tool fetch line: $(cat "$tbl")"
+elif ! grep -q '^  tool 0.1.0       fs.read workspace     may read files under the directory it is run from$' "$tbl"; then
+    fail "the install table" "no fs.read sentence: $(cat "$tbl")"
+elif ! grep -q '^                   net                   may open network connections to any host and port$' "$tbl"; then
+    fail "the install table" "no net sentence: $(cat "$tbl")"
+elif ! grep -q '(declared by the author; a library runs inside your program)' "$tbl"; then
+    fail "the install table" "no library caveat: $(cat "$tbl")"
+elif ! grep -q '^tools required by this project$' "$tbl" || ! grep -q '^  tool >= 0.1.0$' "$tbl"; then
+    fail "the install table" "no tools block: $(cat "$tbl")"
+elif ! grep -q '^nothing was downloaded: re-run with --yes to fetch and to accept the permissions above$' "$tbl"; then
+    fail "the install table" "the last line is: $(tail -1 "$tbl")"
+elif [ -f tests/pkg/perm/mc.lock ] || [ -n "$(ls -A "$tmp/p1" 2> /dev/null)" ]; then
+    fail "the install table" "something was written without --yes"
+else
+    ok "the install table: the tool's fetch line, both sentences, the caveat, the tools block, nothing fetched"
+fi
+grep -q 'these permissions were declared by each package.s author and checked by the registry where the package runs a test; a library runs inside your program and is held to nothing at run time' "$tbl" \
+    && ok "the table carries the trust sentence, and it does not say safe" \
+    || fail "the trust sentence" "$(cat "$tbl")"
+
+# 31b. --yes fetches and locks, with kind, bin and the two sets
+pkg sync tests/pkg/perm --registry "$reg" --libs-dir "$tmp/p1" --yes
+[ -z "$MC_FREEZE" ] || cp tests/pkg/perm/mc.lock tests/pkg/perm/mc.lock.expect
+if [ "$rc" != 0 ]; then
+    fail "sync --yes (perm)" "exit $rc: $(cat "$tmp/o")"
+elif ! cmp -s tests/pkg/perm/mc.lock tests/pkg/perm/mc.lock.expect; then
+    fail "the perm lock" "differs: $(diff tests/pkg/perm/mc.lock.expect tests/pkg/perm/mc.lock | head -8)"
+else
+    ok "sync --yes: the lock is mc.lock.expect -- kind = \"tool\", bin, and both permission sets"
+fi
+grep -q '^permissions = \["fs.read workspace", "net"\]$' tests/pkg/perm/mc.lock \
+    && grep -q '^permissions = \["net"\]$' tests/pkg/perm/mc.lock \
+    && grep -q '^permissions = \[\]$' tests/pkg/sync/mc.lock.expect \
+    && ok "the lock's sets are canonical and sorted, and a package that asks for nothing writes []" \
+    || fail "the lock's permissions" "$(cat tests/pkg/perm/mc.lock)"
+cp tests/pkg/perm/mc.lock "$tmp/out/perm.lock"
+
+# 31c. a second sync has nothing to fetch and nothing new to accept
+pkg sync tests/pkg/perm --registry "$reg" --libs-dir "$tmp/p1"
+if [ "$rc" != 0 ]; then
+    fail "the second sync" "exit $rc: $(cat "$tmp/o")"
+elif grep -q 'permissions' "$tmp/o" || grep -q 'nothing was downloaded' "$tmp/o"; then
+    fail "the second sync" "it asked again: $(cat "$tmp/o")"
+elif ! cmp -s "$tmp/out/perm.lock" tests/pkg/perm/mc.lock; then
+    fail "the second sync" "the lock moved"
+else
+    ok "a second sync needs no --yes: the accepted sets cover what is required"
+fi
+
+# 31d. one permission MORE stops it, and prints only the package that changed
+sed 's/^net = "1.0.0"/net = "1.1.0"/' tests/pkg/perm/mc.toml > "$tmp/out/perm11.toml"
+cp "$tmp/out/perm11.toml" tests/pkg/perm/wider.toml
+pkg sync tests/pkg/perm --config tests/pkg/perm/wider.toml --registry "$reg" --libs-dir "$tmp/p1"
+if [ "$rc" != 0 ]; then
+    fail "a wider set" "exit $rc: $(cat "$tmp/o")"
+elif ! grep -q '^  net 1.1.0        exec sh               may run the program `sh` found on your PATH$' "$tmp/o"; then
+    fail "a wider set" "$(cat "$tmp/o")"
+elif grep -q '^  tool 0.1.0' "$tmp/o"; then
+    fail "a wider set" "it printed a package whose set was already accepted"
+elif ! grep -q 'to fetch and to accept the permissions above' "$tmp/o"; then
+    fail "a wider set" "$(tail -1 "$tmp/o")"
+elif ! cmp -s "$tmp/out/perm.lock" tests/pkg/perm/mc.lock; then
+    fail "a wider set" "the lock was rewritten without --yes"
+else
+    ok "a version that adds one permission stops the sync and prints only the package that changed"
+fi
+rm -f tests/pkg/perm/wider.toml
+
+# 31e. the tool is inert at build time: no root, no tree, no byte
+build tests/pkg/perm tests/pkg/perm/obj.toml "$tmp/p1"
+want_exit "perm builds with the tool locked" 0 && cp tests/pkg/perm/build/perm.o "$tmp/out/perm1.o"
+build tests/pkg/perm tests/pkg/perm/notools.toml "$tmp/p1"
+if want_exit "perm builds with no [tools] table" 0; then
+    cmp -s "$tmp/out/perm1.o" tests/pkg/perm/build/perm-nt.o \
+        && ok "the [tools] table changes no byte: the two objects are identical" \
+        || fail "the [tools] table" "the objects differ"
+fi
+mv "$tmp/p1/tool" "$tmp/out/tool-away"
+build tests/pkg/perm tests/pkg/perm/obj.toml "$tmp/p1"
+if want_exit "perm builds with the tool's tree GONE" 0; then
+    cmp -s "$tmp/out/perm1.o" tests/pkg/perm/build/perm.o \
+        && ok "a build never opens the tool's tree: it is not there and nothing noticed" \
+        || fail "the tool's tree" "the object moved"
+fi
+mv "$tmp/out/tool-away" "$tmp/p1/tool"
+build tests/pkg/perm "" "$tmp/p1"
+if want_exit "the perm program builds" 0; then
+    out=$(tests/pkg/perm/build/perm > /dev/null 2>&1; echo $?)
+    [ "$out" = 42 ] && ok "<net/net.mc> through the lock: exit 42" \
+                    || fail "the perm program" "exit $out"
+fi
+
+# 31f. mc pkg list gains the column, and --long the reasons
+PATH="$tmp/bin2:$realpath_env" "$mc" pkg list tests/pkg/perm --libs-dir "$tmp/p1" > "$tmp/o" 2>&1
+if grep -q '^net          1.0.0    .\{12\} cache    net$' "$tmp/o" \
+   && grep -q '^tool         0.1.0    .\{12\} tool     fs.read workspace, net$' "$tmp/o"; then
+    ok "mc pkg list: the permissions column, and tool as the road of a row no build opens"
+else
+    fail "mc pkg list" "$(cat "$tmp/o")"
+fi
+PATH="$tmp/bin2:$realpath_env" "$mc" pkg list tests/pkg/perm --libs-dir "$tmp/p1" --long > "$tmp/o" 2>&1
+grep -q '^    net                   sends what it measured to a collector$' "$tmp/o" \
+    && ok "mc pkg list --long: the reason, read out of the tree and not out of the lock" \
+    || fail "mc pkg list --long" "$(cat "$tmp/o")"
+
+# 31g. `mc pkg check` re-derives the five new keys from the archive
+pkg check "$reg/index/tool.toml" --registry "$reg" --libs-dir "$tmp/chk3" --yes
+if [ "$rc" = 0 ] && grep -q "^ok     tool 0.1.0" "$tmp/o"; then
+    ok "mc pkg check tool.toml --yes: kind, bin, permissions, tools and licence re-derived"
+else
+    fail "pkg check, a tool row" "exit $rc: $(cat "$tmp/o")"
+fi
+sed 's/^permissions = \["fs.read workspace", "net"\]/permissions = ["net"]/' "$reg/index/tool.toml" > "$tmp/out/tool-liar.toml"
+pkg check "$tmp/out/tool-liar.toml" --libs-dir "$tmp/chk4" --yes
+if [ "$rc" = 1 ] && grep -q "the row's permissions are not the archive's" "$tmp/o"; then
+    ok "mc pkg check refuses a row that under-declares its archive's permissions"
+else
+    fail "pkg check, a lying row" "exit $rc: $(cat "$tmp/o")"
+fi
+
+# 31h. the four refusals, each at the offending key's own file:line:col
+badpkg() {                            # badpkg LABEL MANIFEST EXPECT
+    rm -rf "$tmp/badp/x-1.0.0"
+    mkdir -p "$tmp/badp/x-1.0.0"
+    printf '%s' "$2" > "$tmp/badp/x-1.0.0/mc.toml"
+    printf 'i64 x_f() { return 1; }\n' > "$tmp/badp/x-1.0.0/x.mc"
+    ( cd "$tmp/badp" && PATH="$realpath_env" tar -czf "$tmp/archives/x-1.0.0.tar.gz" x-1.0.0 )
+    mkdir -p "$tmp/badreg2/index"
+    printf '[package]\nname = "x"\n\n[[versions]]\nversion = "1.0.0"\nurl     = "%s"\nstrip   = 1\nsha256  = "%s"\ndeps    = []\n' \
+        "$tmp/archives/x-1.0.0.tar.gz" "$(sh scripts/pkg-hash.sh "$tmp/badp/x-1.0.0")" \
+        > "$tmp/badreg2/index/x.toml"
+    rm -rf "$tmp/bp"
+    pkg check "$tmp/badreg2/index/x.toml" --libs-dir "$tmp/bp" --yes
+    if [ "$rc" != 1 ]; then
+        fail "$1" "exit $rc: $(cat "$tmp/o")"
+    elif ! grep -q "$3" "$tmp/o"; then
+        fail "$1" "$(cat "$tmp/o")"
+    elif [ -f "$tmp/bp/x/v1.0.0.toml" ]; then
+        fail "$1" "the refused tree was blessed anyway"
+    else
+        ok "$1: $(grep -m1 "$3" "$tmp/o" | sed 's|^.*/mc.toml:|mc.toml:|')"
+    fi
+}
+badpkg "an absolute permission path" \
+    '[package]
+name  = "x"
+files = ["x.mc"]
+
+[[permission]]
+kind = "fs.read"
+path = "/etc"
+' 'mc.toml:7:8: a permission path is workspace, tmp, workspace/<rel> or home/<rel>: permission.0.path'
+badpkg "a permission path that escapes" \
+    '[package]
+name  = "x"
+files = ["x.mc"]
+
+[[permission]]
+kind = "fs.write"
+path = "workspace/../x"
+' 'mc.toml:7:8: a permission path is workspace, tmp, workspace/<rel> or home/<rel>: permission.0.path'
+badpkg "an unknown permission kind" \
+    '[package]
+name  = "x"
+files = ["x.mc"]
+
+[[permission]]
+kind = "fs.delete"
+path = "workspace"
+' 'mc.toml:6:8: a permission kind is fs.read, fs.write, net, exec or env: permission.0.kind'
+badpkg "a [project] with no kind" \
+    '[package]
+name  = "x"
+files = ["x.mc"]
+
+[project]
+entry = "x.mc"
+out   = "build/x"
+' 'mc.toml:6:9: a package.s .project. must say kind = "obj" or "exe": project.entry'
+
+# 31i. a name is a library or a tool, and the registry says which
+cat > tests/pkg/perm/wrong.toml <<'EOF'
+[project]
+name  = "perm"
+entry = "main.mc"
+out   = "build/w.o"
+kind  = "obj"
+
+[deps]
+net  = "1.0.0"
+tool = "0.1.0"
+EOF
+pkg sync tests/pkg/perm --config tests/pkg/perm/wrong.toml --registry "$reg" --libs-dir "$tmp/p1"
+if [ "$rc" = 1 ] && grep -q "^mc: tool: is a tool: name it under \[tools\]$" "$tmp/o"; then
+    ok "a tool under [deps]: $(tail -1 "$tmp/o")"
+else
+    fail "a tool under [deps]" "exit $rc: $(cat "$tmp/o")"
+fi
+cat > tests/pkg/perm/wrong.toml <<'EOF'
+[project]
+name  = "perm"
+entry = "main.mc"
+out   = "build/w.o"
+kind  = "obj"
+
+[tools]
+net = "1.0.0"
+EOF
+pkg sync tests/pkg/perm --config tests/pkg/perm/wrong.toml --registry "$reg" --libs-dir "$tmp/p1"
+if [ "$rc" = 1 ] && grep -q "^mc: net: is a library: name it under \[deps\]$" "$tmp/o"; then
+    ok "a library under [tools]: $(tail -1 "$tmp/o")"
+else
+    fail "a library under [tools]" "exit $rc: $(cat "$tmp/o")"
+fi
+rm -f tests/pkg/perm/wrong.toml
+
+# 31j. a lock written before M48 -- no `kind`, no `permissions` -- still builds
+# and asks nothing. tests/pkg/app/mc.lock is that lock, checked in as it was.
+grep -q 'permissions' tests/pkg/app/mc.lock \
+    && fail "the old lock" "tests/pkg/app/mc.lock has been rewritten" \
+    || ok "tests/pkg/app/mc.lock still has neither kind nor permissions, and § 2 built with it"
 
 echo "check-pkg: $((total - fails))/$total"
 [ "$fails" -eq 0 ]

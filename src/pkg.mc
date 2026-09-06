@@ -63,7 +63,10 @@ uptr pkg_default_registry() { return "https://pkg.minicompiler.dev"; }
 #define PKS_NPLAN    88                // what a fetch would download
 #define PKS_PLANCAP  96
 #define PKS_PLAN     104               // PL_SIZE records
-#define PKS_SIZE     112
+#define PKS_NACC     112               // the OLD lock's accepted permissions
+#define PKS_ACC      120               // AC_SIZE records
+#define PKS_LONG     128               // --long: print the reasons too
+#define PKS_SIZE     136
 
 #define IX_NAME 0                     // the package this index file is about
 #define IX_REPO 8
@@ -77,19 +80,40 @@ uptr pkg_default_registry() { return "https://pkg.minicompiler.dev"; }
 #define VR_YANK  40
 #define VR_DEPN  48                   // requirements, as written: "mathx 1.1.0"
 #define VR_DEPP  56
-#define VR_SIZE  64
+// M48 § 5.3: what a row gained. `kind` is `lib` or `tool` and is what decides
+// whether a selected package registers an include root; `permissions` is the
+// canonical set the install table shows BEFORE a byte is fetched; `bin`,
+// `tools` and `licence` are the row's own record of the archive's manifest, and
+// `mc pkg check` re-derives all five from the archive (§ 9, acceptance 3).
+// A row written before M48 has none of them: the reader defaults `kind` to
+// `lib` and every set to empty, which is what every published row means.
+#define VR_KIND  64
+#define VR_BIN   72
+#define VR_PERMN 80
+#define VR_PERMP 88
+#define VR_TOOLN 96
+#define VR_TOOLP 104
+#define VR_LIC   112
+#define VR_SIZE  120
 
 #define SL_NAME 0
 #define SL_VER  8                     // the maximum minimum: what MVS selects
 #define SL_LOW  16                    // the smallest minimum seen, for majors
 #define SL_DONE 24                    // 1 once its requirements were expanded
-#define SL_SIZE 32
+#define SL_TOOL 32                    // 1 when the PROJECT asked for it as a tool
+#define SL_SIZE 40
 
 #define PL_WHAT 0                     // "index geo" / "geo 1.2.0"
 #define PL_URL  8
 #define PL_SHA  16                    // 0 for an index file: it is not pinned
 #define PL_DEST 24
 #define PL_SIZE 32
+
+// one row of the OLD lock: the set this project has already accepted (§ 4.3)
+#define AC_NAME 0
+#define AC_N    8
+#define AC_SET  16
+#define AC_SIZE 24
 
 uptr pk = 0;
 
@@ -315,6 +339,28 @@ void pkg_index_read(uptr name, uptr file) {
             st64(dp8 + j * 8, toml_get_array(dk, j));
             j = j + 1;
         }
+        // M48: `tools` is `deps`' shape -- "<name> <minimum>" strings -- so the
+        // index needs no second grammar for it and neither does this reader.
+        uptr tk = tm_cat(key, "tools");
+        i64 nt = toml_count(tk);
+        uptr tp8 = xalloc(nt * 8 + 8);
+        j = 0;
+        while (j < nt) {
+            st64(tp8 + j * 8, toml_get_array(tk, j));
+            j = j + 1;
+        }
+        uptr pmk = tm_cat(key, "permissions");
+        i64 npm = toml_count(pmk);
+        uptr pms = xalloc(npm * 8 + 8);
+        j = 0;
+        while (j < npm) {
+            st64(pms + j * 8, toml_get_array(pmk, j));
+            j = j + 1;
+        }
+        uptr kind = toml_get(tm_cat(key, "kind"));
+        if (kind == 0) kind = "lib";
+        if (!str_eq(kind, "lib") && !str_eq(kind, "tool"))
+            toml_err_key(tm_cat(key, "kind"), "kind is lib or tool");
         uptr e = pk_add(PKS_VR, PKS_NVR, PKS_VRCAP, VR_SIZE);
         st64(e + VR_NAME, name);
         st64(e + VR_VER, ver);
@@ -325,6 +371,13 @@ void pkg_index_read(uptr name, uptr file) {
         st64(e + VR_YANK, yk != 0 && str_eq(yk, "true"));
         st64(e + VR_DEPN, nd);
         st64(e + VR_DEPP, dp8);
+        st64(e + VR_KIND, kind);
+        st64(e + VR_BIN, toml_get(tm_cat(key, "bin")));
+        st64(e + VR_PERMN, npm);
+        st64(e + VR_PERMP, pms);
+        st64(e + VR_TOOLN, nt);
+        st64(e + VR_TOOLP, tp8);
+        st64(e + VR_LIC, toml_get(tm_cat(key, "licence")));
         i = i + 1;
     }
     toml_pop(frame);
@@ -426,6 +479,7 @@ void pkg_require(uptr name, uptr ver) {
         st64(e + SL_VER, ver);
         st64(e + SL_LOW, ver);
         st64(e + SL_DONE, 0);
+        st64(e + SL_TOOL, 0);
         return;
     }
     uptr e = pk_sel(i);
@@ -506,8 +560,12 @@ i64 pkg_resolve() {
     return ok;
 }
 
-// the project's [deps], validated at their own file:line:col and turned into
-// the first requirements
+// the project's [deps] and [tools], validated at their own file:line:col and
+// turned into the first requirements. M48 § 1.3: they are ONE graph -- a tool's
+// own [deps] are libraries, and a library and a tool of the same name would be
+// the same package -- so the only thing that distinguishes them here is the
+// mark that says which table asked, which is what decides the lock's `kind` and
+// what the install table's last block lists.
 i64 pkg_read_deps() {
     i64 n = 0;
     i64 i = 0;
@@ -520,9 +578,49 @@ i64 pkg_read_deps() {
         }
         k = opt_val(toml_path_at(i), "replace.");
         if (k != 0) dep_check_name("replace.", k);
+        k = opt_val(toml_path_at(i), "tools.");
+        if (k != 0) {
+            dep_check_name("tools.", k);
+            pkg_require(k, toml_val_at(i));
+            i64 s = pkg_sel_find(k);
+            st64(pk_sel(s) + SL_TOOL, 1);
+            n = n + 1;
+        }
         i = i + 1;
     }
     return n;
+}
+
+// One name in both tables is a contradiction the project has to fix, not one
+// MVS can average out.
+void pkg_check_tables() {
+    i64 i = 0;
+    while (i < toml_entries()) {
+        uptr k = opt_val(toml_path_at(i), "tools.");
+        if (k != 0 && toml_get(tm_cat("deps.", k)) != 0)
+            toml_err_key(tm_cat("tools.", k), "already a dependency: a name is a library or a tool, not both");
+        i = i + 1;
+    }
+}
+
+// The kind the REGISTRY published, against the table the project wrote it in
+// (§ 5.2's dependency rule, on the consumer's side): a library in [tools]
+// would be installed as a program that does not exist, and a tool in [deps]
+// would be an include root over a program's source.
+void pkg_check_kinds() {
+    i64 i = 0;
+    while (i < pk_nsel()) {
+        uptr e = pk_sel(i);
+        i64 r = pkg_row(ld64(e + SL_NAME), ld64(e + SL_VER));
+        if (r >= 0) {
+            i64 istool = str_eq(ld64(pk_vr(r) + VR_KIND), "tool");
+            if (ld64(e + SL_TOOL) && !istool)
+                pkg_die1(ld64(e + SL_NAME), "is a library: name it under [deps]");
+            if (!ld64(e + SL_TOOL) && istool)
+                pkg_die1(ld64(e + SL_NAME), "is a tool: name it under [tools]");
+        }
+        i = i + 1;
+    }
 }
 
 // ---- where a tree is, and whether it is already there ----
@@ -605,6 +703,33 @@ void pkg_write_manifest(uptr name, uptr ver, uptr url, uptr sha, uptr dir) {
     write_file(pkg_libs_manifest(name, ver), b);
 }
 
+// `[package].bin` (§ 1.2) of the manifest already parsed, with § 5.2's default
+// for a tool: the basename of `[project].out`, which is the file `mc build`
+// writes and therefore the program there is to install. A library has none.
+uptr pkg_bin_of(uptr kind) {
+    uptr bin = dep_bin_of();
+    if (bin != 0 || !str_eq(kind, "tool")) return bin;
+    uptr out = toml_get("project.out");
+    if (out == 0)
+        toml_err_key("project.entry", "a tool needs [project].out: it is the binary that gets installed");
+    bin = fetch_basename(out);
+    if (!dep_bin_ok(bin)) toml_err_key("project.out", "invalid binary name");
+    return bin;
+}
+
+// The three questions of § 1, asked of a tree and answered by nothing: it is
+// the VALIDATION, and every refusal inside comes out at the offending key's own
+// file:line:col inside that tree's mc.toml.
+void pkg_read_meta(uptr dir) {
+    uptr frame = toml_push();
+    toml_parse(tm_cat(dir, "mc.toml"));
+    uptr kind = dep_kind_of();
+    pkg_bin_of(kind);
+    uptr perms = 0;
+    dep_read_perms(&perms);
+    toml_pop(frame);
+}
+
 // A refused tree must not go on looking like a package: every file it listed is
 // unlinked and no manifest is written, so the next `mc build` says `is not
 // fetched` instead of reading debris (§ 4, sysroot_unbless's idea).
@@ -677,6 +802,12 @@ void pkg_fetch_one(uptr name, uptr ver, uptr url, i64 strip, uptr want) {
         out_str(2, "\n");
         _exit(2);
     }
+    // M48: the manifest's own claims -- the kind, the binary, the permissions
+    // -- asked BEFORE the tree is blessed. A refusal here leaves no manifest,
+    // so the next build says `is not fetched` rather than reading a tree whose
+    // mc.toml says something the compiler could not mean (§ 4, pkg_unbless's
+    // rule read forwards).
+    pkg_read_meta(dir);
     pkg_write_manifest(name, ver, url, got, dir);
     out_str(1, "package ");
     out_str(1, pkg_what(name, ver));
@@ -692,16 +823,10 @@ void pkg_fetch_one(uptr name, uptr ver, uptr url, i64 strip, uptr want) {
 // `sha256` is the tree hash: what the lock records is the tree that is here,
 // never what the index claimed about it.
 // bytewise `a < b`, the total order the lock's rows are sorted by
-i64 pkg_name_lt(uptr a, uptr b) {
-    i64 i = 0;
-    loop {
-        i64 x = ld8(a + i);
-        i64 y = ld8(b + i);
-        if (x != y) return x < y;
-        if (x == 0) return 0;
-        i = i + 1;
-    }
-}
+// M48: one bytewise comparison for every ordered set in a lock -- the rows
+// here and the permissions src/deps.mc sorts -- so a second spelling cannot
+// disagree with the first about what "sorted" means.
+i64 pkg_name_lt(uptr a, uptr b) { return dep_str_lt(a, b); }
 
 void pkg_sort_sel(uptr order) {
     i64 n = pk_nsel();
@@ -738,13 +863,18 @@ void pkg_write_lock(uptr path) {
         uptr ver = ld64(e + SL_VER);
         uptr dir = pkg_tree_dir(name, ver);
         uptr rep = pkg_replace_path(name);
-        // the tree's own manifest is the truth about `lib` and about the edges
+        // the tree's own manifest is the truth about `lib`, about the edges
+        // and -- since M48 -- about the kind, the binary and the permissions
         uptr lib = 0;
         i64 nd = 0;
         uptr dnames = 0;
         uptr frame = toml_push();
         toml_parse(tm_cat(dir, "mc.toml"));
         lib = toml_get("package.lib");
+        uptr kind = dep_kind_of();
+        uptr bin = pkg_bin_of(kind);
+        uptr perms = 0;
+        i64 nperm = dep_read_perms(&perms);
         dnames = xalloc(toml_entries() * 8 + 8);
         i64 i = 0;
         while (i < toml_entries()) {
@@ -756,33 +886,56 @@ void pkg_write_lock(uptr path) {
             i = i + 1;
         }
         toml_pop(frame);
-        drv_put(b, "\n[[package]]\nname    = \"");
+        // every key padded to the width of `permissions`, which is the widest
+        drv_put(b, "\n[[package]]\nname        = \"");
         drv_put(b, name);
-        drv_put(b, "\"\nversion = \"");
+        drv_put(b, "\"\nversion     = \"");
         drv_put(b, ver);
         drv_put(b, "\"\n");
+        // `kind` and `bin` are written for a TOOL only: absent is `lib`, which
+        // is what every row of every lock written before M48 says (§ 4.3)
+        if (str_eq(kind, "tool")) {
+            drv_put(b, "kind        = \"tool\"\n");
+            if (bin != 0) {
+                drv_put(b, "bin         = \"");
+                drv_put(b, bin);
+                drv_put(b, "\"\n");
+            }
+        }
         if (lib != 0) {
-            drv_put(b, "lib     = \"");
+            drv_put(b, "lib         = \"");
             drv_put(b, lib);
             drv_put(b, "\"\n");
         }
         if (rep != 0) {
             // D11: a replaced package is not pinned and not hashed, exactly as
             // go.sum omits a path-replaced module
-            drv_put(b, "path    = \"");
+            drv_put(b, "path        = \"");
             drv_put(b, rep);
             drv_put(b, "\"\n");
         } else {
-            drv_put(b, "sha256  = \"");
+            drv_put(b, "sha256      = \"");
             drv_put(b, dep_hash_tree(dir, -1));
             drv_put(b, "\"\n");
         }
-        drv_put(b, "deps    = [");
+        drv_put(b, "deps        = [");
         i = 0;
         while (i < nd) {
             if (i > 0) drv_put(b, ", ");
             drv_put(b, "\"");
             drv_put(b, ld64(dnames + i * 8));
+            drv_put(b, "\"");
+            i = i + 1;
+        }
+        // the ACCEPTED set, always written and always sorted: an empty array
+        // says "this package asks for nothing", which is not the same claim as
+        // a row that predates the key and says nothing at all
+        drv_put(b, "]\npermissions = [");
+        i = 0;
+        while (i < nperm) {
+            if (i > 0) drv_put(b, ", ");
+            drv_put(b, "\"");
+            drv_put(b, ld64(perms + i * 8));
             drv_put(b, "\"");
             i = i + 1;
         }
@@ -792,14 +945,222 @@ void pkg_write_lock(uptr path) {
     write_file(path, b);
 }
 
+// ---- permissions: the union, and the confirmation (§ 4.2, § 4.3) ----
+// `mc` has no isatty and therefore no prompt: the plan IS the prompt, and
+// since M48 the plan carries what each package in the build list may do. The
+// set shown comes from the INDEX ROW, so it is on the screen before a byte is
+// fetched; the set written into the lock comes from the tree's own mc.toml
+// after the fetch, and the two cannot disagree without the tree hash
+// disagreeing too, which is refused first (D7).
+//
+// `--yes` accepts what was printed. There is no second flag: --yes already
+// means "I read the plan", and the lock diff in the project's git history is
+// the review record (D7, risk 7).
+
+// what `workspace`, `tmp`, `workspace/<rel>` and `home/<rel>` mean in words
+uptr pkg_perm_where(uptr path) {
+    if (str_eq(path, "workspace")) return "under the directory it is run from";
+    if (str_eq(path, "tmp")) return "in a scratch directory of its own";
+    uptr rel = opt_val(path, "workspace/");
+    if (rel != 0) return tm_cat(tm_cat("under ", rel), " in the directory it is run from");
+    rel = opt_val(path, "home/");
+    if (rel != 0) return tm_cat(tm_cat("under ", rel), " in your home directory");
+    return tm_cat("under ", path);
+}
+
+// The fourth column of § 1.4's table: ONE fixed sentence per kind, so the same
+// permission reads the same way on every machine and in every registry page.
+uptr pkg_perm_sentence(uptr line) {
+    uptr a = opt_val(line, "fs.read ");
+    if (a != 0) return tm_cat("may read files ", pkg_perm_where(a));
+    a = opt_val(line, "fs.write ");
+    if (a != 0) return tm_cat("may create, change and delete files ", pkg_perm_where(a));
+    a = opt_val(line, "exec ");
+    if (a != 0) return tm_cat(tm_cat("may run the program `", a), "` found on your PATH");
+    a = opt_val(line, "env ");
+    if (a != 0) return tm_cat("may read the environment variable ", a);
+    if (str_eq(line, "net")) return "may open network connections to any host and port";
+    return "";
+}
+
+// The OLD lock, read for its `permissions` keys alone. A row with no key at all
+// -- every lock written before M48 -- is an empty ACCEPTED set, which is what
+// makes an existing project silent (§ 1.8).
+void pkg_load_accepted(uptr lock) {
+    uptr s = pk_state();
+    st64(s + PKS_NACC, 0);
+    st64(s + PKS_ACC, 0);
+    if (!lex_readable(lock)) return;
+    uptr frame = toml_push();
+    toml_parse(lock);
+    i64 n = toml_occurrences("package");
+    uptr t = xalloc(n * AC_SIZE + AC_SIZE);
+    i64 i = 0;
+    while (i < n) {
+        uptr key = tm_cat(tm_cat("package.", tm_num_str(i)), ".");
+        uptr pmk = tm_cat(key, "permissions");
+        i64 np = toml_count(pmk);
+        uptr set = xalloc(np * 8 + 8);
+        i64 j = 0;
+        while (j < np) {
+            st64(set + j * 8, toml_get_array(pmk, j));
+            j = j + 1;
+        }
+        uptr e = t + i * AC_SIZE;
+        st64(e + AC_NAME, toml_get(tm_cat(key, "name")));
+        st64(e + AC_N, np);
+        st64(e + AC_SET, set);
+        i = i + 1;
+    }
+    toml_pop(frame);
+    st64(s + PKS_NACC, n);
+    st64(s + PKS_ACC, t);
+}
+
+// 1 when every permission of this set is already in the old lock's row of the
+// same name, whatever version that row pinned: a version that ADDS one asks
+// again, a version that drops one is silent, and a name the old lock does not
+// carry at all was never accepted.
+i64 pkg_accepted(uptr name, i64 n, uptr set) {
+    uptr s = pk_state();
+    i64 na = ld64(s + PKS_NACC);
+    i64 i = 0;
+    while (i < na) {
+        uptr e = ld64(s + PKS_ACC) + i * AC_SIZE;
+        if (str_eq(ld64(e + AC_NAME), name)) {
+            i64 j = 0;
+            while (j < n) {
+                i64 found = 0;
+                i64 k = 0;
+                while (k < ld64(e + AC_N)) {
+                    if (str_eq(ld64(ld64(e + AC_SET) + k * 8), ld64(set + j * 8))) found = 1;
+                    k = k + 1;
+                }
+                if (!found) return 0;
+                j = j + 1;
+            }
+            return 1;
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+// the index row of a selected package, or -1
+i64 pkg_sel_row(i64 i) {
+    uptr e = pk_sel(i);
+    return pkg_row(ld64(e + SL_NAME), ld64(e + SL_VER));
+}
+
+i64 pkg_sel_unaccepted(i64 i) {
+    i64 r = pkg_sel_row(i);
+    if (r < 0) return 0;
+    uptr row = pk_vr(r);
+    return !pkg_accepted(ld64(row + VR_NAME), ld64(row + VR_PERMN), ld64(row + VR_PERMP));
+}
+
+// 1 when something with an actual permission has not been accepted yet. An
+// EMPTY set is nothing to accept -- a new dependency that asks for nothing
+// never turns a silent `sync` into one that needs --yes -- so it is what
+// decides whether the block is printed at all, and the block then lists every
+// unaccepted row, `(none: stdio only)` included, so the picture is whole.
+i64 pkg_perm_ask() {
+    i64 i = 0;
+    while (i < pk_nsel()) {
+        i64 r = pkg_sel_row(i);
+        if (r >= 0 && ld64(pk_vr(r) + VR_PERMN) > 0 && pkg_sel_unaccepted(i)) return 1;
+        i = i + 1;
+    }
+    return 0;
+}
+
+// left-justified in a column: the install table and `mc pkg list` are both
+// columns of names, and neither may carry an absolute path
+uptr pkg_col(uptr s, i64 w) {
+    i64 n = w - cstrlen(s);
+    while (n > 0) {
+        s = tm_cat(s, " ");
+        n = n - 1;
+    }
+    return s;
+}
+
+void pkg_pad(uptr s, i64 w) {
+    out_str(1, s);
+    i64 n = w - cstrlen(s);
+    while (n > 0) {
+        out_str(1, " ");
+        n = n - 1;
+    }
+}
+
+void pkg_perm_row(uptr what, uptr line) {
+    out_str(1, "  ");
+    pkg_pad(what, 17);
+    pkg_pad(line, 22);
+    out_str(1, pkg_perm_sentence(line));
+    out_str(1, "\n");
+}
+
+void pkg_print_perms() {
+    out_str(1, "\npermissions\n");
+    i64 i = 0;
+    while (i < pk_nsel()) {
+        if (pkg_sel_unaccepted(i)) {
+            uptr row = pk_vr(pkg_sel_row(i));
+            uptr what = pkg_what(ld64(row + VR_NAME), ld64(row + VR_VER));
+            i64 np = ld64(row + VR_PERMN);
+            if (np == 0) {
+                out_str(1, "  ");
+                pkg_pad(what, 17);
+                out_str(1, "(none: stdio only)\n");
+            }
+            i64 j = 0;
+            while (j < np) {
+                pkg_perm_row(what, ld64(ld64(row + VR_PERMP) + j * 8));
+                what = "";
+                j = j + 1;
+            }
+            // § 4.4: there is no process to box for a library, so what it
+            // declares is a statement and the table says which it is.
+            if (np > 0 && !str_eq(ld64(row + VR_KIND), "tool")) {
+                out_str(1, "  ");
+                pkg_pad("", 17);
+                out_str(1, "(declared by the author; a library runs inside your program)\n");
+            }
+        }
+        i = i + 1;
+    }
+    // risk 4: the sentence that says what was checked, and does not say "safe"
+    out_str(1, "these permissions were declared by each package's author and checked by the registry where the package runs a test; a library runs inside your program and is held to nothing at run time\n");
+    i64 nt = 0;
+    i = 0;
+    while (i < toml_entries()) {
+        uptr k = opt_val(toml_path_at(i), "tools.");
+        if (k != 0) {
+            if (nt == 0) out_str(1, "tools required by this project\n");
+            out_str(1, "  ");
+            out_str(1, k);
+            out_str(1, " >= ");
+            out_str(1, toml_val_at(i));
+            out_str(1, "\n");
+            nt = nt + 1;
+        }
+        i = i + 1;
+    }
+}
+
 // ---- sync ----
 // `go mod tidy` + `go mod download`: read [deps], read the index rows it needs,
 // run MVS, fetch what is missing, write the lock. Rows nothing requires are
 // dropped, because the lock is written from the build list and from nothing
 // else.
 i64 pkg_sync() {
+    pkg_check_tables();
     i64 nd = pkg_read_deps();
     uptr lock = drv_path("mc.lock");
+    // read BEFORE the lock is rewritten: what the project accepted last time
+    pkg_load_accepted(lock);
     if (nd == 0) {
         pkg_write_lock(lock);
         out_str(1, "sync: no dependencies\n");
@@ -814,6 +1175,8 @@ i64 pkg_sync() {
         out_str(1, "nothing was downloaded: re-run with --yes\n");
         return 0;
     }
+    // a name is a library or a tool, and the registry said which
+    pkg_check_kinds();
     // what is not on the disk yet
     i64 i = 0;
     while (i < pk_nsel()) {
@@ -825,15 +1188,29 @@ i64 pkg_sync() {
             uptr row = pk_vr(r);
             if (ld64(row + VR_URL) == 0)
                 pkg_die1(pkg_what(name, ver), "the index row has no url");
-            pkg_plan(pkg_what(name, ver), ld64(row + VR_URL), ld64(row + VR_SHA),
+            // a tool's row says so on its fetch line, with the binary it
+            // installs: it is the one thing in the plan that is not a library
+            uptr what = pkg_what(name, ver);
+            if (str_eq(ld64(row + VR_KIND), "tool")) {
+                what = tm_cat(pkg_col(what, 24), "tool");
+                if (ld64(row + VR_BIN) != 0)
+                    what = tm_cat(tm_cat(what, "  bin "), ld64(row + VR_BIN));
+            }
+            pkg_plan(what, ld64(row + VR_URL), ld64(row + VR_SHA),
                      pkg_libs_dir(name, ver));
         }
         i = i + 1;
     }
-    if (pk_nplan() > 0) {
+    // § 4.2: a set nobody has accepted stops a sync even when there is nothing
+    // to download, which is the case a lock that already names every tree hits
+    i64 ask = pkg_perm_ask();
+    if (pk_nplan() > 0 || ask) {
         pkg_print_plan();
+        if (ask) pkg_print_perms();
         if (!pk_yes()) {
-            out_str(1, "nothing was downloaded: re-run with --yes\n");
+            out_str(1, "nothing was downloaded: re-run with --yes");
+            if (ask) out_str(1, " to fetch and to accept the permissions above");
+            out_str(1, "\n");
             return 0;
         }
         i = 0;
@@ -898,13 +1275,28 @@ i64 pkg_sync() {
 // One line per lock row: name, version, the first 12 characters of the hash,
 // and which road served it. No absolute path anywhere, which is what makes it a
 // golden (tests/golden/pkg-list.txt).
-void pkg_pad(uptr s, i64 w) {
-    out_str(1, s);
-    i64 n = w - cstrlen(s);
-    while (n > 0) {
-        out_str(1, " ");
-        n = n - 1;
+// The reasons, which live in the TREE and never in the lock: a reason is shown
+// and never compared, so the lock has no business carrying it (§ 1.4). A tool's
+// tree is not resolved by a build, so `--long` has nothing to read for one and
+// says the canonical line alone.
+void pkg_list_reasons(i64 i) {
+    uptr dir = dp_dir(i);
+    if (dir == 0 || !lex_readable(tm_cat(dir, "mc.toml"))) return;
+    uptr frame = toml_push();
+    toml_parse(tm_cat(dir, "mc.toml"));
+    i64 n = toml_occurrences("permission");
+    i64 j = 0;
+    while (j < n) {
+        uptr line = dep_perm_line(j);
+        uptr why = toml_get(dep_perm_key(j, "reason"));
+        out_str(1, "    ");
+        pkg_pad(line, 22);
+        if (why != 0) out_str(1, why);
+        else          out_str(1, pkg_perm_sentence(line));
+        out_str(1, "\n");
+        j = j + 1;
     }
+    toml_pop(frame);
 }
 
 i64 pkg_list() {
@@ -919,10 +1311,25 @@ i64 pkg_list() {
         if (h == 0) pkg_pad("-", 12);
         else        pkg_pad(xstrdup(h, 12), 12);
         out_str(1, " ");
-        if (pkg_replace_path(dp_name(i)) != 0) out_str(1, "path");
-        else if (dp_man(i) != 0)               out_str(1, "cache");
-        else                                   out_str(1, "vendored");
+        // where the tree came from -- and `tool` for a row this build never
+        // opens at all, which is the honest answer to the same question
+        uptr road = "vendored";
+        if (dp_is_tool(i))                          road = "tool";
+        else if (pkg_replace_path(dp_name(i)) != 0) road = "path";
+        else if (dp_man(i) != 0)                    road = "cache";
+        pkg_pad(road, 8);
+        out_str(1, " ");
+        // M48 § 4.3: what this project accepted for this package
+        i64 np = dp_nperm(i);
+        if (np == 0) out_str(1, "stdio");
+        i64 j = 0;
+        while (j < np) {
+            if (j > 0) out_str(1, ", ");
+            out_str(1, dp_perm(i, j));
+            j = j + 1;
+        }
         out_str(1, "\n");
+        if (ld64(pk_state() + PKS_LONG)) pkg_list_reasons(i);
         i = i + 1;
     }
     return 0;
@@ -935,7 +1342,7 @@ i64 pkg_list() {
 i64 pkg_verify() {
     deps_apply(cfg_file());
     out_str(1, "verified ");
-    out_str(1, tm_num_str(dp_npkg()));
+    out_str(1, tm_num_str(dp_nlib()));
     out_str(1, " packages against mc.lock\n");
     return 0;
 }
@@ -974,6 +1381,12 @@ i64 pkg_vendor() {
     deps_apply(cfg_file());
     i64 i = 0;
     while (i < dp_npkg()) {
+        // M48: a tool has no tree here to copy -- `mc build` never reads one,
+        // which is the whole point of vendoring -- so it is not counted either
+        if (dp_is_tool(i)) {
+            i = i + 1;
+            continue;
+        }
         uptr name = dp_name(i);
         uptr dst = pkg_vendor_dir(name);
         uptr src = dp_dir(i);
@@ -985,7 +1398,7 @@ i64 pkg_vendor() {
         i = i + 1;
     }
     out_str(1, "vendored ");
-    out_str(1, tm_num_str(dp_npkg()));
+    out_str(1, tm_num_str(dp_nlib()));
     out_str(1, " packages into deps/\n");
     return 0;
 }
@@ -1242,6 +1655,52 @@ void pkg_check_archive(uptr name, uptr row) {
     uptr aname = toml_get("package.name");
     if (aname == 0 || !str_eq(aname, name))
         pkg_die1(pkg_what(name, ver), "the archive's mc.toml names another package");
+    // M48: the five keys a row gained are re-derived from the archive, exactly
+    // as `deps` always was. The row is what a consumer reads BEFORE fetching
+    // anything -- the kind it will install, the permissions it will be asked to
+    // accept -- so a row that says something the tree does not is a row that
+    // asks for consent to the wrong thing.
+    uptr akind = dep_kind_of();
+    uptr abin = pkg_bin_of(akind);
+    uptr aperm = 0;
+    i64 nap = dep_read_perms(&aperm);
+    if (!str_eq(akind, ld64(row + VR_KIND)))
+        pkg_die1(pkg_what(name, ver),
+                 tm_cat(tm_cat("the archive is a ", akind), tm_cat(", the row says ", ld64(row + VR_KIND))));
+    if (!pkg_check_same(abin, ld64(row + VR_BIN)))
+        pkg_die1(pkg_what(name, ver), "the row's bin is not the archive's");
+    if (!pkg_check_same(toml_get("package.licence"), ld64(row + VR_LIC)))
+        pkg_die1(pkg_what(name, ver), "the row's licence is not the archive's");
+    if (nap != ld64(row + VR_PERMN))
+        pkg_die1(pkg_what(name, ver), "the row's permissions are not the archive's");
+    i64 p = 0;
+    while (p < nap) {
+        // both sides are canonical and sorted, so equality is position by
+        // position and needs no search
+        if (!str_eq(ld64(aperm + p * 8), ld64(ld64(row + VR_PERMP) + p * 8)))
+            pkg_die1(pkg_what(name, ver), "the row's permissions are not the archive's");
+        p = p + 1;
+    }
+    i64 nat = 0;
+    i64 t = 0;
+    while (t < toml_entries()) {
+        uptr tk = opt_val(toml_path_at(t), "tools.");
+        if (tk != 0) {
+            i64 found = 0;
+            i64 m = 0;
+            while (m < ld64(row + VR_TOOLN)) {
+                if (str_eq(pkg_req_name(ld64(ld64(row + VR_TOOLP) + m * 8)), tk)) found = 1;
+                m = m + 1;
+            }
+            if (!found)
+                pkg_die1(pkg_what(name, ver),
+                         tm_cat("the archive requires a tool the row does not list: ", tk));
+            nat = nat + 1;
+        }
+        t = t + 1;
+    }
+    if (nat != ld64(row + VR_TOOLN))
+        pkg_die1(pkg_what(name, ver), "the row lists a tool the archive does not require");
     i64 nd = 0;
     i64 j = 0;
     while (j < toml_entries()) {
@@ -1326,7 +1785,7 @@ void pkg_open_config(uptr dir, uptr cfg) {
 }
 
 void pkg_usage() {
-    out_str(2, "usage: mc pkg sync|add|list|vendor|verify [DIR] [--config FILE] [--yes] [--registry URL|DIR] [--libs-dir DIR]\n");
+    out_str(2, "usage: mc pkg sync|add|list|vendor|verify [DIR] [--config FILE] [--yes] [--long] [--registry URL|DIR] [--libs-dir DIR]\n");
     out_str(2, "       mc pkg hash DIR\n");
     out_str(2, "       mc pkg check INDEX.toml [--yes] [--registry URL|DIR] [--libs-dir DIR]\n");
 }
@@ -1345,6 +1804,7 @@ i64 pkg_cmd(i64 argc, uptr argv) {
     while (i < argc) {
         uptr a = ld64(argv + i * 8);
         if (str_eq(a, "--yes")) pk_set_yes(1);
+        else if (str_eq(a, "--long")) st64(pk_state() + PKS_LONG, 1);
         else if (str_eq(a, "--config")) {
             if (i + 1 >= argc) die("--config requires an argument");
             i = i + 1;

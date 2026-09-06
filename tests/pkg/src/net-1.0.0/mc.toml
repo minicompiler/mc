@@ -1,0 +1,12 @@
+# net 1.0.0 -- a LIBRARY that declares a permission (M48 § 1.4). It is compiled
+# into the consumer's program, so nothing holds it to this at run time: the
+# install table says `declared by the author` for exactly this row, and § 4.4
+# says why that is the honest word.
+[package]
+name  = "net"
+files = ["net.mc"]
+lib   = "net.mc"
+
+[[permission]]
+kind   = "net"
+reason = "sends what it measured to a collector"

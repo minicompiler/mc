@@ -1,0 +1,21 @@
+# tests/pkg/perm -- the project M48 C1's acceptance is measured on.
+#
+# `[deps]` is a library that declares `net`; `[tools]` is a tool that declares
+# `fs.read workspace` and `net`. Both are resolved by ONE MVS graph and both
+# land in mc.lock; only the library is an include root, and `mc build` never
+# opens the tool's tree (tests/pkg/perm/notools.toml is the same project with
+# the `[tools]` table removed, and the two objects are byte for byte the same).
+[project]
+name  = "perm"
+entry = "main.mc"
+out   = "build/perm"
+kind  = "exe"
+
+[deps]
+net = "1.0.0"
+
+[tools]
+tool = "0.1.0"
+
+[limits]
+tolerance = 1.0

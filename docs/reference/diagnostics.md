@@ -476,6 +476,14 @@ the source or about the config.
 | `geo/extra.mc:1: not declared in geo's [package].files` | 1 | the build read a file inside a package that the package did not list | the package's bug, unless the file was planted: `files` is the boundary |
 | `mc.toml:8:6: reserved package name: deps.mc` | 1 | `mc`, `deps` or `build` in `[deps]` or `[replace]`. `mc` is the compiler's own package and can never be pinned | pick another name |
 | `mc.toml:8:7: invalid package name: deps.Geo` | 1 | the name is not `[a-z][a-z0-9_]*` of at most 32 bytes | lower case, digits and `_` |
+| `mc.toml:6:9: a package's [project] must say kind = "obj" or "exe": project.entry` | 1 | a PACKAGE's manifest carries a `[project]` with no `kind` line, or one that is neither. Raised at the first `[project]` key, or at `kind` itself when it is there but wrong | say which it is: a library is `obj`, a tool is `exe` ([packages.md](packages.md) § 3) |
+| `mc.toml:7:8: a permission path is workspace, tmp, workspace/<rel> or home/<rel>: permission.0.path` | 1 | an absolute path, or a `<rel>` that escapes, in a `[[permission]]` row | no absolute path is ever accepted: nobody can verify one |
+| `mc.toml:6:8: a permission kind is fs.read, fs.write, net, exec or env: permission.0.kind` | 1 | a `kind` outside the five | the vocabulary is closed on purpose ([packages.md](packages.md) § 3) |
+| `mc.toml:6:8: fs.read needs a path: permission.0.kind` | 1 | a `fs.*` row with no `path`, or an `exec`/`env` row with no `name` (`exec needs a name`) | give the row the key its kind requires |
+| `mc.toml:7:8: net takes no path: permission.0.path` | 1 | a key the kind does not use: a `path` on `net`/`exec`/`env`, a `name` on `fs.*` (`a fs permission takes a path, not a name`) | delete it; it would be read by nobody |
+| `mc.toml:9:10: a permission reason is at most 120 bytes: permission.0.reason` | 1 | a `reason` longer than a sentence | it is shown at an install prompt, not a policy document |
+| `mc.toml:4:11: invalid binary name: package.bin` | 1 | `[package].bin` is not `[a-z][a-z0-9_-]*` of at most 32 bytes; the same message at `project.out` when a tool's binary name is derived from it | it is a file name in `~/.mc/bin` |
+| `mc.toml:8:8: already a dependency: a name is a library or a tool, not both: tools.geo` | 1 | one name in `[deps]` and in `[tools]` | one table or the other |
 | `prog.mc:1: unknown bundled include: geo/geo` | 1 | none of the three resolution steps had the name. In the single-file CLI there is no lock and therefore no step 1 at all | `mc build` with a `[deps]` entry, or `--include=DIR` and a quote include |
 | `mc: --libs-dir requires an argument` | 1 | the flag was last on the command line | give it a directory |
 
@@ -493,6 +501,8 @@ environment is not ready" -- a transfer that failed, a checksum that did not mat
 |---|---|---|---|
 | `mc: cannot open: /path/to/geo-1.2.0.tar.gz` | 2 | the row's `url` has no scheme, so it is a local path, and it does not open | fix the row, or the directory the registry points at |
 | `mc: the download failed (exit 22): URL` | 2 | the downloader ran and refused; the code is `curl`'s or `wget`'s | the URL, the network, the proxy |
+| `mc: geo: is a tool: name it under [tools]` | 1 | the registry publishes this name as a tool and the project asked for it under `[deps]`; `is a library: name it under [deps]` is the mirror | move the line to the other table |
+| `mc: tool 0.1.0: the row's permissions are not the archive's` | 1 | `mc pkg check --yes`: the index row and the archive's `mc.toml` disagree about `permissions` (or `kind`, `bin`, `licence`, `tools`, each with its own wording) | the row is what a consumer consents to before fetching: regenerate it from the tree |
 | `mc: no downloader on this PATH (tried curl, wget)` | 2 | neither program is installed | install one, or fetch by hand and use `--libs-dir` |
 | `mc: tar could not extract geo-1.2.0.tar.gz` | 2 | the archive is not what its name says | the row's `url` |
 | `mc: v1.2.0.tar.gz: archive member is a link: geo-1.2.0/x` | 2 | the archive carries a symbolic or hard link. Nothing is extracted and the archive is unlinked | a package tree is files and directories; a link is a way to read what is outside it |
