@@ -60,7 +60,13 @@ env:
   DOTNET_VERSION: "10.0.x"
   NODE_VERSION: "24"
   PYTHON_VERSION: "3.12"
-  UVICORN_VERSION: "0.39.0"
+  # NOT "UVICORN_VERSION": uvicorn's own CLI is a click app with
+  # auto_envvar_prefix="UVICORN", so an env var named UVICORN_VERSION is read
+  # by uvicorn itself as the value of its --version flag (a boolean) --
+  # "'0.39.0' is not a valid boolean", and the server never starts (measured
+  # in run 34062566194, py-uvicorn). Named PY_ so it cannot collide with any
+  # uvicorn option, present or future.
+  PY_UVICORN_VERSION: "0.39.0"
   RUBY_VERSION: "3.3"
   PUMA_VERSION: "6.6.1"
   PHP_VERSION: "8.4"
@@ -171,10 +177,10 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: Install uvicorn ${{ env.UVICORN_VERSION }}
+      - name: Install uvicorn ${{ env.PY_UVICORN_VERSION }}
         if: matrix.server == 'py-uvicorn'
         run: |
-          python3 -m pip install --disable-pip-version-check "uvicorn==$UVICORN_VERSION"
+          python3 -m pip install --disable-pip-version-check "uvicorn==$PY_UVICORN_VERSION"
           python3 -m uvicorn --version
 
       - name: Set up Ruby ${{ env.RUBY_VERSION }}

@@ -302,7 +302,12 @@ nblocks=$(grep -c . "$tmp/manifest")
 echo "ok samples: $nblocks fenced mc blocks"
 
 # ------------------------------------------------------------------- 3. links
-# Relative markdown links only; http(s) and bare anchors are out of scope.
+# Relative markdown links only; http(s) and bare anchors are out of scope. A
+# target starting with /static/ is a site-root path into site/static/ (what
+# [site].base_url = "/" and [site].static = "static" mean, site/site.toml) --
+# the one way a doc page embeds an asset mcsite serves verbatim rather than a
+# rendered page, e.g. a chart under docs/comparison.md § "The hour under load".
+# Any other /-prefixed target is a literal filesystem path from the repo root.
 while read -r md; do
     d=$(dirname "$md")
     grep -oE '\]\([^)]+\)' "$md" | sed -E 's/^\]\(//; s/\)$//' | while read -r target; do
@@ -312,6 +317,7 @@ while read -r md; do
         path="${target%%#*}"
         [ -n "$path" ] || continue
         case "$path" in
+            /static/*) p="site${path}" ;;
             /*) p="$path" ;;
             *)  p="$d/$path" ;;
         esac

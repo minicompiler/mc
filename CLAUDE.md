@@ -4748,3 +4748,16 @@ agents (`.claude/agents/`): `stage0-dev` (C23), `mc-dev` (`.mc` code), `reviewer
   tables in `docs/comparison.md`. `py-stdlib`'s `ab -k` run failed on all 3 attempts (0 requests
   in warm-up); its `oha` keep-alive and its no-keep-alive `ab` runs both succeeded, so the failure
   is specific to that combination, not to keep-alive itself.
+  First soak hour recorded (2026-09-06, run 34062566194, tree `7d01b3a`): `docs/comparison.md`
+  § "The hour under load" — 13 of 14 servers ran their full hour at a fixed 3,000 req/s, one
+  GitHub Actions runner each; every compiled/AOT server (`mc` both shapes, C, Go, Rust both, Zig)
+  held RSS flat to a few KiB, C# JIT and Ruby's Puma flat by the drift rule despite a small
+  non-zero slope, while C# NativeAOT (+5.9%), Node (both shapes, +30%/+8%) and PHP's built-in
+  server (+295% over the hour) drifted by it. `py-uvicorn` did not run: its own `UVICORN_VERSION`
+  env var collided with uvicorn's `click` `auto_envvar_prefix="UVICORN"`, read as the value of
+  `--version`, a boolean — fixed by renaming it `PY_UVICORN_VERSION` in `bench-soak.yml`; the
+  hour has not been re-run. Results archived at `bench/soak/results/2026-09-06-34062566194/`;
+  `rss.svg`/`cpu.svg` embedded in the page from `site/static/` (the one way a doc page gets a
+  real `<img>` past mcsite's own link check, not a GitHub blob link) — `scripts/check-docs.sh`
+  gained the `/static/*` -> `site/static/*` mapping its naive relative-link scan needed to see
+  them.
