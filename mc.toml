@@ -32,13 +32,20 @@ check = ["src/mc_linux_x86_64.mc"]
 
 # Generated from tools/bundle.list -- `cut -f2 tools/bundle.list | LC_ALL=C sort -u`
 # (byte order: under a UTF-8 locale macOS collates `_` before `.`, and the
-# manifest order is what the tree hash is over) -- plus two files that list
+# manifest order is what the tree hash is over) -- plus four files that list
 # cannot carry and the tree is useless without:
 #
 #   src/bundle_data.mc  the blob. The bundle cannot contain itself, so it has no
 #                       bundle.list row; src/core_bundle.mc includes it by path.
 #   tools/bundle.list   the NAME<TAB>PATH map. `#include <name>` served from an
 #                       installed tree (packages.md § 2, step 3) reads it.
+#   src/mc_linux_x86_64.mc  the unit `check` above names, and
+#   src/user.mc             the one line it includes that no bundle row carries
+#                       (an entry point and an extension point are files a
+#                       compiler is BUILT from, not names it serves). A `check`
+#                       entry has to be in `files`: the tree hash covers `files`
+#                       and nothing else, so a unit the package does not ship is
+#                       one no consumer -- and no validator -- would receive.
 #
 # scripts/check-pkg.sh regenerates this array and fails when it drifts.
 files = [
@@ -118,6 +125,7 @@ files = [
     "src/machine_x86_64.mc",
     "src/macho.mc",
     "src/main.mc",
+    "src/mc_linux_x86_64.mc",
     "src/objmodel.mc",
     "src/parse.mc",
     "src/pkg.mc",
@@ -133,6 +141,7 @@ files = [
     "src/sysroot.mc",
     "src/sysroots.mc",
     "src/toml.mc",
+    "src/user.mc",
     "src/version.mc",
     "tests/mc/bundle/embed_demo.mc",
     "tests/mc/bundle/embed_demo.txt",

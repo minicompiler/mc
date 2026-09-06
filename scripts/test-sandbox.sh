@@ -17,6 +17,10 @@
 #   2b tests/sandbox/linkbomb/  a hostile project: mc.toml names a fork bomb as
 #                               its [linker].cmd, so the bomb runs in the
 #                               COMPILE step
+#   2c tests/sandbox/objproj/   a box with NO run step: a project that builds an
+#                               object, and a `--dump-*`. The compile is the
+#                               last step and its `compile: exit 0` is the
+#                               box's terminal status
 #   3  tests/*.mc                the whole suite, compiled AND run inside the box
 #   4  mc sandbox exec           on binaries built outside it, one of them
 #                                dynamic (it reaches libc through the bind of
@@ -256,6 +260,46 @@ if [ "$mem_lost" -lt 64 ]; then
 else
     say_fail "the host lost ${mem_lost} MiB of available memory"
 fi
+
+# ---- 2c. a box with no run step --------------------------------------------
+# Two shapes end after the compile: a project whose [project].kind is not "exe"
+# and a `--dump-*`, which IS the output (§ 5). Both used to print
+# `the box ended without a status` and exit 126 after a compile that SUCCEEDED,
+# because the box's step loop and the supervisor's terminal status disagreed
+# (docs/specs/M43.md § Implementation notes -- the compile-only box; found by
+# the registry's validator, mc-registry spec M47 § 22.4). Asserted here in both
+# directions: the two one-step boxes end 0 with `compile: exit 0` as their last
+# line and no `ended without a status` anywhere, the same project with
+# kind = "exe" still gets its run step, and a compile that FAILS in a one-step
+# box is still the compile's own exit code.
+echo "-- a box with no run step"
+norun_case() {   # norun_case NAME WANT_EXIT ARGS...
+    ncase="$1"; nexit="$2"; shift 2
+    "$mc" sandbox run --report "$out/$ncase.report" "$@" \
+          > "$out/$ncase.out" 2> "$out/$ncase.err"
+    nrc=$?
+    nok=1
+    [ "$nrc" = "$nexit" ] || { nok=0; echo "     exit $nrc, want $nexit"; }
+    grep -q "ended without a status" "$out/$ncase.report" && {
+        nok=0; echo "     the report says 'the box ended without a status'"; }
+    nlast=$(tail -1 "$out/$ncase.report")
+    [ "$nlast" = "sandbox: $want_last" ] || {
+        nok=0; echo "     last report line [$nlast], want [sandbox: $want_last]"; }
+    [ "$nok" = 1 ] || sed 's|^|       |' "$out/$ncase.report"
+    if [ "$nok" = 1 ]; then say_ok "$ncase"; else say_fail "$ncase"; fi
+}
+want_last="compile: exit 0"
+norun_case objproj-obj  0 tests/sandbox/objproj
+norun_case objproj-dump 0 --dump-ast tests/sandbox/objproj/main.mc
+if grep -q '^FUNC type=i64 name=answer$' "$out/objproj-dump.out"; then
+    say_ok "objproj-dump wrote the tree on stdout"
+else
+    say_fail "objproj-dump wrote no tree on stdout"; sed 's|^|     |' "$out/objproj-dump.out"
+fi
+want_last="exit 0"
+norun_case objproj-exe  0 --config exe.toml tests/sandbox/objproj
+want_last="compile: exit 1"
+norun_case objproj-fail 1 --config bad.toml tests/sandbox/objproj
 
 # ---- 3. the suite ----------------------------------------------------------
 # Every tests/*.mc, compiled AND run inside the box: the source goes in, the

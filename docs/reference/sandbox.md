@@ -388,7 +388,7 @@ sandbox: cannot mount /: EACCES (apparmor restricts unprivileged user namespaces
 
 | line | when |
 |---|---|
-| `compile: exit N` | the compile step ended on its own; always printed, including `exit 0` |
+| `compile: exit N` | the compile step ended on its own; always printed, including `exit 0`. When there is no run step it is the box's **terminal** status and `mc sandbox` exits with that same N |
 | `exit N` | the run step ended on its own. `mc sandbox` exits with that same N |
 | `killed: cpu limit (S s)` | a signal ended a step that had spent its whole `--time`. Exit **124** |
 | `killed: wall clock (S s)` | `--wall` expired and P killed the box. Exit **124** |
@@ -420,6 +420,27 @@ filter`, `fetch the seccomp listener`.
 
 A compile failure ends the box with that exit code and no run step, and the report says
 `compile: exit 1`.
+
+Two of the four rows have **no run step at all**: a `--dump-*`, and a project whose
+`[project].kind` is not `"exe"`. There the compile is the last step and `compile: exit 0` is the
+whole report — no `exit 0` line follows it, because none ran. `mc sandbox` exits with the
+compile's own code:
+
+```
+$ mc sandbox run p            # [project] kind = "obj"
+compile main.mc -> build/p.o
+sandbox: compile: exit 0
+$ echo $?
+0
+```
+
+Until 0.15.5 both of those printed `sandbox: the box ended without a status` and exited **126**
+after a compile that had succeeded: the box stopped correctly and the supervisor was never told
+that stopping was the plan. One predicate, `sb_has_run_step()`, now answers the question for both
+of them (`src/sandbox.mc`, read by `src/sandbox_box.mc`'s step loop and by `sb_note_exit`), and
+`scripts/test-sandbox.sh` § 2c asserts all four corners: the two one-step shapes end 0, the same
+project with `kind = "exe"` still gets its run step, and a compile that fails in a one-step box is
+still that compile's exit code.
 
 Two options widen `/src` beyond the source's own directory, and both were needed by this
 repository's own corpus:

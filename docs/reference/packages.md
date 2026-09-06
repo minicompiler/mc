@@ -106,6 +106,30 @@ arrives inside a downloaded tree and is then handed to `open`, to `write` and (b
 to `unlink`: `files = ["../../../../.ssh/id_rsa"]` used to be read on every build, and
 `mc pkg vendor` used to write it outside the project.
 
+### `[package].check` -- what the registry compiles
+
+A registry validates a tag by compiling the package, and a package that carries **alternatives**
+-- a host layer per system, a machine per architecture, a data file that is not source -- has no
+single translation unit that holds all of it. `check` names the ones it does have:
+
+```toml
+[package]
+name  = "geo"
+lib   = "geo.mc"
+files = ["geo.mc", "geo_linux.mc", "geo_macos.mc"]
+check = ["geo_linux.mc", "geo_macos.mc"]
+```
+
+Each entry is a translation unit, compiled **on its own**. A path is relative to the package root,
+may not leave it (the rule `[package].files` entries obey, above), and must be listed in `files`
+-- the tree hash covers `files` and nothing else, so a unit the package does not ship is one no
+consumer would receive. With no `check` key the unit is `lib`, which is what a package with one
+answer per platform already is.
+
+**The compiler does not read this key**: it is a manifest key for whoever validates the package,
+and `mc build`, `mc pkg hash` and `mc pkg sync` behave exactly as they do without it. It does take
+part in the tree hash, like every other byte of `mc.toml`.
+
 **A package never defines `user_init`.** It exports `<name>_init()` and the project's own module
 calls it, because a compiler holds exactly one `user_init` and the order of initialisation is the
 project's decision:
@@ -523,8 +547,9 @@ installation instead of from a blob (§ 2, step 3).
 
 ```toml
 [package]
-name = "mc"
-lib  = "src/core.mc"
+name  = "mc"
+lib   = "src/core.mc"
+check = ["src/mc_linux_x86_64.mc"]
 files = [ "lib/backend_arm64.mc", …, "tools/bundle.list" ]
 ```
 
@@ -535,12 +560,23 @@ files = [ "lib/backend_arm64.mc", …, "tools/bundle.list" ]
   `user_init`: what `[compiler].core` defaults to, and what every taught
   compiler in this tree includes. It carries its own `main()`, so a consumer
   adds a host layer and a `user_init` and nothing else.
+* **`check = ["src/mc_linux_x86_64.mc"]`** — one translation unit, because the
+  bundle carries alternatives: two host layers are `duplicate #define O_CREAT`,
+  two system layers the same, `tools/bundle.list` is not source at all, and
+  `src/core.mc` alone needs a host layer chosen first. The unit named is the
+  entry point for the architecture the registry's worker runs
+  (`linux/x86_64`); a unit that cannot be compiled there fails there.
 * **`files`** is `cut -f2 tools/bundle.list | LC_ALL=C sort -u` (byte order: a UTF-8
   locale collates `_` before `.` on macOS, and the manifest order is what the
-  tree hash is over) plus two files that list
+  tree hash is over) plus **four** files that list
   cannot name — `src/bundle_data.mc` (the blob has no row in a bundle of
-  itself) and `tools/bundle.list` (the `NAME<TAB>PATH` map an installed tree
-  reads). `scripts/check-pkg.sh` fails when the array drifts from the manifest.
+  itself), `tools/bundle.list` (the `NAME<TAB>PATH` map an installed tree
+  reads), and the two the `check` entry needs: `src/mc_linux_x86_64.mc` itself
+  and the `src/user.mc` it includes, neither of which is a name the bundle
+  serves (a compiler is BUILT from them). A `check` entry that is not in `files`
+  is refused by the validator, since the tree hash covers `files` and nothing
+  else. `scripts/check-pkg.sh` fails when the array drifts from the manifest,
+  and asserts that every `check` unit is on disk and declared.
 * There is **no `[project]`**: `make` builds this repository, not `mc build`, and
   the five real project configs are `src/mc.<target>.toml`. `mc build .` at the
   root is `mc.toml: missing key: project.entry`, on purpose.

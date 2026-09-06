@@ -650,7 +650,18 @@ an install snippet (macOS, Linux and Windows) and the checksums, and calls
       - uses: minicompiler/register-action@v1
         with:
           tag: ${{ inputs.tag || github.ref_name }}
+          registry: https://next.minicompiler.dev
+          index: https://pkg.minicompiler.dev
 ```
+
+**The two explicit inputs are temporary and the workflow says so.** The action's
+own defaults are the apex (`https://minicompiler.dev`) and
+`https://pkg.minicompiler.dev`; until the apex flips from GitHub Pages to the
+registry, `POST /poll` at the apex is answered **405** by Pages (measured on
+v0.15.4's run), so the job names `next.minicompiler.dev` — the same server, its
+pre-flip host — instead. `index` is passed with it so that both halves are
+written down in one place rather than one being a default and the other an
+override. At the flip both lines are deleted and nothing else in the job changes.
 
 This repository is the mc package registry's first registered repository, and the
 package it publishes is `mc` itself — the whole bundle at the compiler's version

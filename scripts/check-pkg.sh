@@ -951,19 +951,24 @@ fi
 cd "$here" || exit 1
 
 # 30a. `files` is exactly `cut -f2 tools/bundle.list | LC_ALL=C sort -u` plus the
-# two files that list cannot name: the blob (which cannot be in a bundle of
-# itself) and the NAME<TAB>PATH map itself.
+# four files that list cannot name: the blob (which cannot be in a bundle of
+# itself), the NAME<TAB>PATH map itself, and the two the [package].check entry
+# needs -- the entry point src/mc_linux_x86_64.mc and the src/user.mc it
+# includes, neither of which has a bundle row (a compiler is BUILT from them;
+# they are not names it serves). A check entry that is not in `files` is
+# refused by the registry's validator, since the tree hash covers `files` alone.
 #
 # LC_ALL=C is not decoration. Under a UTF-8 locale macOS collates `_` BEFORE
 # `.`, so `lib/float_rt.mc` sorts above `lib/float.mc` and `lib/sys_linux.mc`
 # above `lib/sys.mc` -- a developer with LANG unset and a runner with it set
 # disagree about the order of the array, and the manifest order is what the tree
 # hash is over. The byte order is the only one that is the same everywhere.
-{ cut -f2 tools/bundle.list; echo "src/bundle_data.mc"; echo "tools/bundle.list"; } \
+{ cut -f2 tools/bundle.list; echo "src/bundle_data.mc"; echo "tools/bundle.list"
+  echo "src/mc_linux_x86_64.mc"; echo "src/user.mc"; } \
     | LC_ALL=C sort -u > "$tmp/out/want-files"
 sed -n 's/^    "\(.*\)",$/\1/p' mc.toml > "$tmp/out/got-files"
 if cmp -s "$tmp/out/want-files" "$tmp/out/got-files"; then
-    ok "mc.toml [package].files == tools/bundle.list + bundle_data.mc + bundle.list"
+    ok "mc.toml [package].files == tools/bundle.list + the four it cannot name"
 else
     fail "mc.toml [package].files drifted from tools/bundle.list" \
          "$(diff "$tmp/out/want-files" "$tmp/out/got-files" | head -6 | tr '\n' '|')"
@@ -979,6 +984,27 @@ if [ -z "$missing" ]; then
     ok "every [package].files entry of the root manifest is on disk"
 else
     fail "root manifest files" "missing:$missing"
+fi
+
+# 30b'. every [package].check entry is in [package].files and on disk. The
+# registry compiles those units and refuses one the package does not ship
+# (`[package].check names a file [package].files does not declare`), so the
+# drift this catches is one nobody would see until a tag failed to publish.
+sed -n 's/^check *= *\[\(.*\)\]$/\1/p' mc.toml | tr ',' '\n' \
+    | sed -n 's/^ *"\(.*\)" *$/\1/p' > "$tmp/out/check-units"
+if [ ! -s "$tmp/out/check-units" ]; then
+    fail "root manifest check" "[package].check is empty or unreadable"
+else
+    bad=""
+    while IFS= read -r f; do
+        [ -f "$f" ] || bad="$bad $f(missing)"
+        grep -qx "$f" "$tmp/out/got-files" || bad="$bad $f(not-in-files)"
+    done < "$tmp/out/check-units"
+    if [ -z "$bad" ]; then
+        ok "every [package].check unit is on disk and in [package].files ($(tr '\n' ' ' < "$tmp/out/check-units"))"
+    else
+        fail "root manifest check units" "$bad"
+    fi
 fi
 
 # 30c/30d. the compiler and the shell agree, and `.` is the same package as the
