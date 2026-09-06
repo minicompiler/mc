@@ -771,6 +771,18 @@ void gen_callp(i64 n, i64 depth) {
         a = nd_next(a);
     }
     callp(mach(MTASK_CALLP), depth, i);
+    // The result is what the CAST around the call declared (gen_resolve typed
+    // the node from it); with no cast it is TY_I64 and nothing is emitted here,
+    // which is why every program written before this line is byte-identical.
+    // The rest is gen_call's M45 half, for the same reason and in the same
+    // order: set_walk_depth_type first, because after MTASK_CALLP dtype[depth]
+    // still describes the POINTER -- argument 0 -- and a derived machine's
+    // MTASK_CAST reads that as the source type.
+    i64 rt = res_type(n);
+    if (walk_narrow(rt)) {
+        set_walk_depth_type(depth, rt);
+        callp(mach(MTASK_CAST), rt, depth);
+    }
 }
 
 // call: args at depths cur..cur+n-1, then the machine's call sequence

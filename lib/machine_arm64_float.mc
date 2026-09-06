@@ -62,7 +62,7 @@
 #define FI_CVT_SD   129
 #define FI_SCVTF_D  130               // scvtf d, x
 #define FI_UCVTF_D  131
-#define FI_SCVTF_S  132
+#define FI_SCVTF_S  132               // scvtf s, x -- an X source, like the D form
 #define FI_UCVTF_S  133
 #define FI_FCVTZS_D 134               // fcvtzs x, d
 #define FI_FCVTZU_D 135
@@ -98,7 +98,7 @@ u32 fa_base[] = {
     0x1E602000, 0x1E202000, 0x1E602008, 0x1E202008,
     0x9E670000, 0x9E660000, 0x1E270000, 0x1E260000,
     0x1E22C000, 0x1E624000,
-    0x9E620000, 0x9E630000, 0x1E220000, 0x1E230000,
+    0x9E620000, 0x9E630000, 0x9E220000, 0x9E230000,
     0x9E780000, 0x9E790000, 0x9E380000, 0x9E390000,
     0xFD400000, 0xFD000000, 0xBD400000, 0xBD000000 };
 uptr fa_name[] = {
@@ -194,6 +194,11 @@ i64 fa_w(i64 dop, i64 ty) {
     if (fa_single(ty)) {
         if (dop >= FI_ADD_D && dop <= FI_MAX_D) return dop + 6;
         if (dop >= FI_NEG_D && dop <= FI_MOV_DD) return dop + 4;
+        // the four conversions: scvtf/ucvtf take a double or a single
+        // DESTINATION, fcvtzs/fcvtzu a double or single SOURCE, and both pairs
+        // sit two rows above their own double form
+        if (dop >= FI_SCVTF_D  && dop <= FI_UCVTF_D)  return dop + 2;
+        if (dop >= FI_FCVTZS_D && dop <= FI_FCVTZU_D) return dop + 2;
         if (dop == FI_CMP_D)   return FI_CMP_S;
         if (dop == FI_CMP0_D)  return FI_CMP0_S;
         if (dop == FI_LDR_D)   return FI_LDR_S;

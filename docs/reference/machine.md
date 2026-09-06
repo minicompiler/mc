@@ -516,6 +516,16 @@ back. `walk_ret_type()` is saved and restored around each child for the same rea
 a `MTASK_CALL` handler can still ask what the call returns while `dtype[d]` holds argument 0's
 type. Every depth is reset to `TY_I64` at the top of each function.
 
+**Where a `callp`'s answer comes from.** `MTASK_CALLP(d, na)` reads `walk_ret_type()` exactly as
+`MTASK_CALL` does, and an indirect call has no callee to read a signature from — so the answer is
+what the **cast around the call** declared: `(f64) callp(p, x)` types the call node `f64` and the
+handler is told `f64` (`docs/reference/language.md` § 7). With no cast the node is `i64` and the
+handler is told `i64`, which is what every `callp` has been told since M10. A machine that reads
+`walk_ret_type()` in `MTASK_CALLP` therefore needs no new slot and no new rule; before this
+contract it was told `i64` unconditionally and a float result was never moved out of `d0`/`xmm0`.
+The narrow half follows the same rule: `(i32) callp(...)` extends at the call, the way M45 extends
+a direct call, and `walk_depth_type(d)` holds `i32` when the written cast's own `MTASK_CAST` runs.
+
 **What this buys.** `MTASK_BIN(MOP_ADD, d, d2)` with `walk_depth_type(d) == f64` is an `fadd`;
 `MTASK_RET(d)` returns in `v0`; `MTASK_CALL(d, na, sym)` walks `walk_depth_type(d + i)` and runs
 the AAPCS64 NGRN/NSRN split — the whole float ABI, with no task added. A stale entry is wrong code

@@ -512,6 +512,23 @@ void res_expr(i64 n) {
     }
     if (k == N_CAST) {                           // the written type, from the parser
         res_expr(nd_a(n));
+        // A cast applied DIRECTLY to a callp DECLARES what the indirect call
+        // returns. `callp` has no callee to read a signature from, so the node
+        // was typed TY_I64 unconditionally and walk_ret_type() said "integer"
+        // for every indirect call -- which is what kept <float>'s MTASK_CALLP
+        // from ever moving d0 into the destination. There is nowhere else to
+        // put the declaration: a cast is the only syntax in the language that
+        // names a type in an expression.
+        //
+        // The walker still issues its MTASK_CAST for the written cast, and for
+        // a float that costs nothing: <float>'s fa_cast/fx_cast return at once
+        // on `src == ty`, and the core's gen_cast has nothing to emit for a
+        // width of 8. For a NARROW one -- `(i32) callp(...)` -- gen_callp has
+        // already done the M45 extension and the cast repeats it, which is one
+        // idempotent `sxtw` on a construct nothing wrote before this line.
+        i64 a = nd_a(n);
+        if (nd_kind(a) == N_CALL && res_kind(a) == RK_INTRIN && res_decl(a) == IN_CALLP)
+            set_res_type(a, nd_type(n));
         set_res_type(n, nd_type(n));
         return;
     }

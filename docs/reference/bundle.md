@@ -173,6 +173,13 @@ and `examples/lang` are.
 | `<mc_float>` | `lib/mc_float.mc` | the same as a standalone compiler entry, for `mc --exe` |
 | `<float_rt>` | `lib/float_rt.mc` | the RUN-TIME half, which a **program** includes: `putf64`, `fmt_f64`, `puthexf`. It is the one bundled file the frozen seed cannot lex (it spells float literals) and it carries a `seed-skip` header saying so |
 
+Both machines carry the two widths in one table and pick the single-precision row of an operation
+from the double one (`fa_w` on AArch64, `fx_w2` on x86-64): the arithmetic pair, `fneg`/`fabs`/
+`fsqrt`/`fmov`, the compares, the load, the store **and the four conversions** — `scvtf`, `ucvtf`,
+`fcvtzs`, `fcvtzu`. An indirect call returns a float when the cast says so, `(f64) callp(p, x)`
+([language.md](language.md) § 7): `MTASK_CALLP` reads `walk_ret_type()`, which is the type of the
+call node.
+
 ### The generality proofs (M24 step 2)
 
 Three modules the core has never heard of, each with an empty `git diff src/`.

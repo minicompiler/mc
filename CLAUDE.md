@@ -4074,6 +4074,105 @@ agents (`.claude/agents/`): `stage0-dev` (C23), `mc-dev` (`.mc` code), `reviewer
   none beside `pk` and `fx`. The cheap diets left are elsewhere and bigger -- the three object
   writers, `backend_elf_exe.mc` 38, `backend_exe.mc` 27 and `backend_elf.mc` 17, which is the 82
   the M43 step A entry already named.
+- A cast on a `callp` declares its return type; `<float>`'s arm64 machine maps the four
+  single-precision conversions (coop patch for the teko/ngen consumer, owner-approved). Two
+  defects, one in `src/` and one in `lib/`, plus a third the second one uncovered.
+  `stage0/` untouched (2848/3000, `git diff origin/main -- stage0/` empty).
+  1. **`callp` was typed `TY_I64` unconditionally** (`src/gen_resolve.mc`), so `walk_ret_type()`
+     said "integer" for every indirect call and `<float>`'s `fa_result`/`fx_result` never moved
+     `d0`/`xmm0` into the destination -- the pointer's own bits stayed at the depth and the
+     arithmetic around the call read them. Measured before anything changed, with a `mc-float`
+     built from `origin/main` 900c569: `f64 dbl(f64 x) { return x * 2.0; }` and
+     `f64 nested = 1.0 + callp(&dbl, 2.0);` printed **`3.0` / `0x4008000000000000`** where 5.0 was
+     the answer. **The contract is that a cast applied DIRECTLY to a `callp` DECLARES what the
+     call returns**: there is no callee to read a signature from, and a cast is the only syntax in
+     the language that names a type inside an expression. Three code lines in the `N_CAST` arm of
+     `res_expr` -- if the operand is an `N_CALL` bound to `RK_INTRIN`/`IN_CALLP`, `set_res_type` it
+     to the written type -- and `1.0 + (f64) callp(&dbl, 2.0)` is `0x4014000000000000`. A `callp`
+     with no cast is still `TY_I64`, which is what makes the change inert.
+     The narrow half follows from it, in `gen_callp` (`src/gen_walk.mc`): `walk_narrow(res_type(n))`
+     then `set_walk_depth_type(depth, rt)` + `MTASK_CAST`, gen_call's M45 block verbatim and in the
+     same order, because after `MTASK_CALLP` the depth still describes the POINTER -- argument 0 --
+     and a derived machine reads that as the cast's source type. On the value it changes nothing
+     today (`lower_expr`'s `N_CAST` arm issues its own `MTASK_CAST` whatever the operand's type is,
+     and both the core cast and `fa_cast`'s delegation narrow correctly); what it buys is that the
+     call's own depth carries its declared type the way a direct call's has since M45. It costs one
+     idempotent `sxtw` on `(i32) callp(...)`, a construct nothing in the corpus writes.
+  2. **`fa_w` did not map the single-precision conversions** (`lib/machine_arm64_float.mc`). The
+     AArch64 machine picks the single form of an operation by walking a fixed distance in its own
+     opcode table; the arithmetic pair, the neg/abs/sqrt/mov range, the compares, the load and the
+     store were mapped and the four conversions were not, so `FI_SCVTF_S`/`FI_UCVTF_S`/
+     `FI_FCVTZS_S`/`FI_FCVTZU_S` existed and were never chosen. Measured pre-fix:
+     `i64 main() { f32 y = 2.5f; return (i64)(y * 10.0f); }` emitted **`fcvtzs x9, d16`** on a
+     register holding a single and exited **0** instead of 25. Both pairs sit two rows above their
+     own double form, so the fix is two lines; after it the same source is `fcvtzs x9, s16`,
+     exit 25. `fx_w2` in `lib/machine_x86_64_float.mc` already mapped `FX_CVTSI_D -> FX_CVTSI_S`
+     and `FX_CVTT_D -> FX_CVTT_S`, which is why the x86-64 leg was right -- **no omission there**,
+     confirmed by dumping the two new tests with `--machine=x86_64` (`cvtsi2ss`, `cvttss2si`).
+  3. **Uncovered by (2): the two `_S` cvtf rows carried the wrong encoding.** `FI_SCVTF_S` and
+     `FI_UCVTF_S` were `0x1E220000`/`0x1E230000` -- `scvtf s, w` and `ucvtf s, w`, a 32-bit SOURCE
+     -- while their `fa_rdk`/`fa_rnk` columns (and therefore `--dump-asm`) said `s, x`. Invisible
+     while the rows were unreachable; the first run of the fixed mapping printed `(f32) 0xffff...`
+     as `0x4f800000` (2^32, the low half converted) instead of `0x5f800000` (2^64).
+     `llvm-mc -triple=arm64-apple-darwin` says `scvtf s16, x9` is `0x9E220000` and `ucvtf s16, x9`
+     `0x9E230000`; with those two words the sweep re-assembles every one of them byte for byte,
+     which is exactly the check that would have caught the original error had the rows been live.
+  Proofs. `tests/float/023-callp-f64.mc` (the consumer's repro; a `callp` at a SPILLED float depth
+  -- eight live float depths, so `v16..v23` are saved around the `blr` and the result goes to the
+  frame with `str d`; two float arguments; and an `f32` result through `(f32) callp(...)`),
+  `tests/float/024-f32-cvt.mc` (all six conversions naming an f32 -- `(i64)`, `(u64)`, `(f32) i64`,
+  `(f32) u64`, `(f64) f32`, `(f32) f64` -- each bit-recorded, with `(i64)(2.5f * 10.0f) == 25` as
+  the exit code) and `tests/mc/096-callp-i32.mc` (`(i32)`/`(u32)` on a callp whose callee returns
+  `0x12345678_0000002a`; a regression guard, not a repro, and it says so in its header). The two
+  float tests run on all five legs through `scripts/check-float.sh`, 096 on all five through
+  `check-mc`/`test-linux`/`test-windows`.
+  -- cost (`git diff --numstat`, added lines / added lines that are neither comment nor blank):
+  `src/gen_resolve.mc` +17/3, `src/gen_walk.mc` +12/5, `lib/machine_arm64_float.mc` +7/4 =
+  **36 added lines, 12 of them code**. **Zero new globals**: `check-limits` reports
+  `globals 443/512, 86%`, the same row the globals-diet entry above left.
+  `make bundle` re-run BEFORE bootstrapping (93 files, raw 1201128 -> LZ 561071, blob 562233 B).
+  `make check` green end to end (**RC 0, zero FAIL**, 21m25s): `budget` 2848/3000, `test` 32/32,
+  `check-lex` 163/163 (3 skipped), `check-ast`/`check-asm` 164/164, `check-obj` **32/32 identical
+  to the frozen seed**, `check-bundle` (lz round trip 117 cases), `bootstrap` at a fixed point
+  (`mc2.o == mc3.o`, 1285176 bytes; the `--dump-asm` diff between `mc1` and `mc2` is **empty**),
+  `check-surface` 32/32 + 185 ok lines + inert, `test-exe` 32/32, `check-mc` **16/16**,
+  `check-standalone`, `check-parts`, `check-toml` 10/10, `check-build` 53/53, `check-pkg` 94/94,
+  `check-stubs` 9/9, `check-sysroots`, `check-limits` **17/17 under 90%**, `check-minimal`,
+  `test-linux` 42/42 and `test-linux-x86_64` 40/40, the four `--exe` cells 45/45 (aarch64 musl),
+  45/45 (aarch64 gnu), 43/43 (x86_64 musl) and 43/43 (x86_64 gnu), `test-windows` 43/43 objects
+  and 43 linked, `test-windows-x86_64` 41/41 and 41 linked, `check-examples`, `check-lang`,
+  `check-conc`, `check-desktop`, **`check-float` ok on all five legs** (macos/aarch64 15/15,
+  linux/aarch64 15/15, linux/x86_64 15/15, windows/aarch64 13/13 objects, windows/x86_64 13/13,
+  2 skipped each), `check-wide` ok, `check-kernel`, `check-avr`, `test-sandbox` 60 ok / 0 failed /
+  1 skipped, `check-docs` (199 symbols, 36 flags, 27 TOML keys, 10 directives, 52 samples,
+  384 links), `site` 91 pages + `check-site` 0 link problems + `check-site-linux` 11/11.
+  **The llvm-mc sweep is the gate for (2) and (3)** and it moved: measured on the unmodified tree
+  (13 float tests) **37 (mach-o arm64), 37 (elf aarch64), 182 (elf x86_64), 166 (coff x86_64)**;
+  with the two new tests and the fixed machine, **58, 58, 230, 213 distinct instructions
+  re-assemble byte for byte, 0 mismatches**, `scvtf s, x` / `ucvtf s, x` / `fcvtzs x, s` /
+  `fcvtzu x, s` among them.
+  `scripts/check-inert.sh build/mc1.pre build/mc1` (pre = a `mc1` built from `origin/main` 900c569
+  before the first edit): **33 objects identical** (`tests/*.mc` and `src/mc.mc`) plus
+  byte-identical artefacts for `examples/api`, `lang`, `conc`, `desktop` and `kernel` through the
+  taught compiler each side builds -- the corpus writes no cast on a `callp`, so nothing it emits
+  could move. `make check-linux-host` RC 0 over all four cells (aarch64 musl: suite 42/42, `check-mc` 12/12,
+  `test-exe` 31/31 via `--exe --libc=musl`; aarch64 gnu 43/43 native; x86_64 musl 40/40, 12/12,
+  29/29; x86_64 gnu 41/41 native), each after its own `mc2l.o == mc3l.o` (1612704 B and
+  1511480 B) and with the cross proof against the macOS `build/mc2.o` green.
+  The five goldens rewritten **once**, each only after its own criterion: `mc2.sha256`
+  `38470e10...d6de2a` -> `ec50f3e7fc6ad3b9793f2d9d18c54488a8f6a63ec4adab4966bf6a3fbde67723`
+  (after the empty `--dump-asm` diff and `cmp build/mc2.o build/mc3.o`); the Linux pair deleted and
+  re-recorded by `make check-linux-host` -- `mc2-linux-arm64.sha256` `5cfac08fd359eeebaaf74c09175e0f586a2b8ddeb577b9671a222f8c5e5be702`,
+  `mc2-linux-x86_64.sha256` `67374f73001de2115e7acb89e7147f8bd535b58fb8b9366231cb16a1f57f577c`, each after its own `mc2l.o == mc3l.o` and with the cross
+  proof green; the Windows pair cross-computed per `tests/golden/README.md` --
+  `mc2-windows-arm64.sha256`
+  `2c16fdd6dd8e0986a46c6d19109b2a8712d18507f134a54cdb4902317c9770f9` (1311785 B),
+  `mc2-windows-x86_64.sha256`
+  `406f23e154ed35c388ef97d4108f352a433d90e63ca3878d393c55355125e9fb` (1348945 B).
+  Docs: `docs/reference/language.md` § 6 and § 7 (the cast contract, with a sample that runs),
+  `docs/reference/machine.md` § 3 ("Where a `callp`'s answer comes from", next to
+  `walk_ret_type`), `docs/reference/bundle.md` § `<float>` (what the two machines map, the four
+  conversions named). No message was added, so `docs/reference/diagnostics.md` is untouched.
 - Next: the **site + registry server, M47 S4-S6**, in `minicompiler/mc-registry`; then **M44 steps 4-5**
   (slim / install / upgrade), then **M42 step 2** (PE `--exe`, CI-gated on the Windows runners).
   **M46** only on the owner's request; **M43 Layer 2** after 1.0.0. M13 and M18 stay in the backlog
