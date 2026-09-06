@@ -25,6 +25,36 @@ SHA-256 of `build/mc2.o` against `tests/golden/mc2.sha256`, and finally runs
 (depends on `stage0`, i.e. on `build/mc0` existing) calls the script; `make check` runs
 `bootstrap` after all the other targets.
 
+## The optimized chain, and the cross-road identity (M49)
+
+`--opt=1` is a second road through the same compiler ([cli.md](reference/cli.md)), and it has a
+fixed point of its own. `scripts/bootstrap.sh` runs it right after the plain one:
+
+```
+build/mc1  --opt=1 src/mc.mc -o build/mc2o.o   # the optimized compiler
+scripts/link.sh build/mc2o build/mc2o.o
+
+build/mc2o --opt=1 src/mc.mc -o build/mc3o.o
+
+cmp build/mc2o.o build/mc3o.o                  # the optimized road's fixed point
+sha256 build/mc2o.o == tests/golden/mc2-opt.sha256
+
+build/mc2o         src/mc.mc -o build/mc2o-plain.o
+cmp build/mc2o-plain.o build/mc2.o             # the CROSS-ROAD IDENTITY
+```
+
+The last line is the strongest correctness statement this milestone can make, and it costs one
+compile: **an optimized compiler computes exactly the compiler the unoptimized one computes.** The
+optimizer runs over all 1745 functions of `src/mc.mc` on the way to writing `mc2o`, so a register
+allocation that changes any decision anywhere shows up as a byte difference here — with
+`diff <(build/mc2 --dump-asm src/mc.mc) <(build/mc2o --dump-asm src/mc.mc)` as the bisection tool.
+The two roads have two goldens: `tests/golden/mc2.sha256` and `tests/golden/mc2-opt.sha256`, each
+rewritten under the rules in [tests/golden/README.md](../tests/golden/README.md).
+
+The whole block is **skipped, with a printed message**, when `build/mc1` does not accept `--opt=` —
+the frozen seed does not, and neither does any release older than M49, so a bootstrap from an old
+seed still runs stages 1 to 3 exactly as before.
+
 ## The criterion is `mc2.o == mc3.o`, not `mc1.o` vs `mc2.o`
 
 `mc1.o` is produced by `mc0` (clang) compiling `src/mc.mc`; `mc2.o` is produced by `mc1` (the

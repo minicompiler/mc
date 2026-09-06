@@ -4808,6 +4808,94 @@ agents (`.claude/agents/`): `stage0-dev` (C23), `mc-dev` (`.mc` code), `reviewer
   `<mc/core_pkg>` row), `docs/reference/diagnostics.md` (a `mc install` table),
   `docs/build.md` § M44 (the two flavours), `docs/bootstrap.md` (why a seed is the full flavour),
   `docs/ci.md` (ten tarballs), `docs/specs/M44.md` § Implementation notes -- step 4.
+- M49 step A ✔ (`docs/specs/M49.md` § 10, step 1; the spec is the owner-ratified one, copied in
+  verbatim): **the flag, the walker's own record, the second golden and the two roads.** All in
+  `src/`; `stage0/` untouched (2848/3000, `git diff origin/main -- stage0/` empty). The optimizer
+  itself is a NO-OP in this step, and that is the point: `--opt=1` has to be provably inert before
+  anything hangs off it.
+  * **`--opt=N` and `-O`** (`src/cli.mc` +25/-3, 12 code): `N` in {0, 1}, `-O` an alias for
+    `--opt=1` parsed as its own `str_eq` (a bare `-O` is not a `--` literal, so
+    `scripts/check-docs.sh` cannot enumerate it and it is documented by hand), the last one wins,
+    `--opt=2` is `mc: --opt must be 0 or 1: 2`. Applied ONCE, `set_walk_opt(optn)` right after the
+    `no machine registered` check, so the three roads below it -- `--dump-asm`, `--dump-syms` and
+    the backend -- all honour it and a backend a module registered gets it through the same
+    `gen_lower`.
+  * **`[project].opt = 0|1`** (`src/driver.mc` +35/-2, 22 code): the flag wins over the key
+    (`DRV_OPT`, -1 = not given, `DRV_SIZE` 96 -> 104 -- zero new globals), and it applies to the
+    ENTRY and to nothing else. The taught compiler is a TOOL this build runs, not the artefact it
+    was asked for, so it is always built on the plain road -- which is what makes the compiler
+    `mc build` writes reproducible whatever the key says. A `--opt=` written on the command line is
+    forwarded to the child that compiles the entry (`av` 10 -> 12 slots); the key needs no
+    forwarding, the child re-reads the same TOML.
+  * **The walker diet, and where the level lives** (`src/gen_walk.mc` +101/-21, 60 code): the four
+    `reloc()`-pending globals -- `pend_type`, `pend_sym`, `pend_node`, `prel_base`, read by no
+    other file (`grep -rlw` over `src lib examples`) -- became one arena record, `wk`, behind one
+    pointer. **`globals` 445 -> 442** on the seed's row (`sh scripts/check-limits.sh`), which is
+    what pays for D1's own record. `walk_opt()` is a FIELD of that record and a FUNCTION, not a
+    task slot: the M24 precedent, no signature moves.
+  * **Contract version 5, six null slots** (`docs/reference/machine.md`): `MTASK_REG_COUNT`,
+    `REG_LOAD`, `REG_STORE`, `REG_SAVE`, `REG_RESTORE`, `PARAM_REG`, `MTASK_COUNT` 31 -> 37, six
+    names in `mtask_names[]`, and the **null-slot rule** -- for slots 31 and up the walker reads
+    the entry itself (`mach_opt`) and treats 0 as "this machine does not do this". `walk_reg_count()`
+    answers 0 when the slot is null OR when `walk_opt()` is 0. `--dump-machine` prints `-` for a
+    null slot, which is neither `bundled` nor `taught`; measured on the stock compiler: six `-`
+    rows per machine, three machines.
+  * **The second golden and the cross-road identity** (`scripts/bootstrap.sh` +60): after the plain
+    chain, `mc1 -O -> mc2o.o`, `mc2o -O -> mc3o.o`, `cmp`, `tests/golden/mc2-opt.sha256`, and then
+    the line that makes the milestone falsifiable -- `mc2o src/mc.mc` (plain) `cmp`-equal to
+    `build/mc2.o`. The whole block self-skips with a message when the compiler under test does not
+    accept `--opt=`, so a bootstrap from a pre-M49 seed still runs stages 1-3.
+    **The step-A proof is a number: `mc2-opt.sha256` and `mc2.sha256` hold the SAME hash**,
+    `49cde6dc655fa7367304406ac120b19e6faa3017048bfce7f88071b1094e2d97` -- the optimized road wrote
+    byte for byte the plain object.
+  * **`scripts/check-opt.sh`** (`make check-opt`, inside `make check`, 66/66): every
+    `tests/*.mc` and `tests/mc/*.mc` compiled plain AND with `--opt=1`, both linked, both RUN, exit
+    code and stdout compared with each other and with the source's `expect-*` header; the 16
+    `tests/float/*.mc` through a `--opt=1` float compiler; `examples/lang` and `examples/conc`
+    built both ways and run, `examples/api` and `examples/desktop` built both ways; and the
+    null-slot proof -- `examples/kernel`'s image (3304 B) and `examples/avr`'s ELF (15255 B)
+    **`cmp`-identical on both roads with no edit to either machine**. It also prints the
+    `--dump-asm` identity: at this step **44 of 44 corpus programs are byte-identical between
+    `--dump-asm` and `--dump-asm --opt=1`**, and 0 changed.
+    `scripts/check-inert.sh` gained the second road (both compilers probed with `--opt=0 --version`
+    first, so a PRE from before M49 makes it the one-road script it was).
+  -- cost in `src/`: **161 added lines, 94 of them neither comment nor blank**
+  (`gen_walk.mc` +101/60, `driver.mc` +35/22, `cli.mc` +25/12), against the spec's ~140 estimate.
+  `make bundle` re-run BEFORE bootstrapping (93 files, raw 1265800 -> LZ 586908, blob 588070 B).
+  `make check` green end to end (**RC 0, zero FAIL**, 12m04s): `budget` 2848/3000, `test` 32/32,
+  `check-lex`/`check-ast`/`check-asm` at their counts, `check-obj` **32/32 identical to the frozen
+  seed**, `check-bundle`, `bootstrap` at a fixed point on BOTH roads (`mc2.o == mc3.o`,
+  `mc2o.o == mc3o.o`, and `mc2o-plain.o == mc2.o`; the `--dump-asm` diff between `mc1` and `mc2` is
+  **empty**), `check-surface` 32/32 + the nine ABI assertions + inert, **`check-opt` 66/66**,
+  `test-exe` 32/32, `check-mc` 17/17, `check-standalone`, `check-parts`, `check-toml`,
+  `check-build`, `check-pkg`, `check-sysroots`, `check-stubs`, `check-limits` **17/17 under 90%
+  (`globals` 442/512 = 86%, `funcs` 1777/2048 = 86%)**, `check-minimal`, `test-linux` 42/42 and
+  `test-linux-x86_64` 40/40, the four `--exe` cells 45/45 + 45/45 + 43/43 + 43/43,
+  `test-windows` / `test-windows-x86_64`, `check-examples`, `check-lang`, `check-conc`,
+  `check-desktop`, `check-float`, `check-wide`, `check-kernel`, `check-avr`, `test-sandbox`
+  73 ok / 0 failed, `check-docs` (202 symbols, 43 flags, 32 TOML keys, 10 directives, 52 samples,
+  415 links), `site` 94 pages + `check-site` + `check-site-linux` 94 pages.
+  `make check-linux-host` RC 0 over all four cells (musl and gnu x aarch64 and x86_64), each after
+  its own `mc2l.o == mc3l.o` and with the cross proof green.
+  `scripts/check-inert.sh build/mc1.pre build/mc1` (pre = a `mc1` built from `origin/main`
+  63e3e86): **33 objects identical** (`tests/*.mc` and `src/mc.mc`) plus byte-identical artefacts
+  for `examples/api`, `lang`, `conc`, `desktop` and `kernel`.
+  **Six goldens** now, each rewritten once and only after its own criterion: `mc2.sha256`
+  `3f0cec7a...cefd6` -> `49cde6dc655fa7367304406ac120b19e6faa3017048bfce7f88071b1094e2d97`, the NEW
+  `mc2-opt.sha256` with the same value, the Linux pair deleted and re-recorded by
+  `make check-linux-host` -- `mc2-linux-arm64.sha256`
+  `63592d3f02c8f70ae22b1b1ecd7d7dbd580a34c4293c3638171a14809e79f8e8`, `mc2-linux-x86_64.sha256`
+  `912777926828869fc91f8b759e0502ea2b07c0eef3e61d82986dc42a63fd14da` -- and the Windows pair
+  cross-computed per `tests/golden/README.md`, `mc2-windows-arm64.sha256`
+  `0e76d1c11f8dd128fc7576199ab45e6ce5d10acf8eb5bf9803cc97073fa09d86` (1378307 B) and
+  `mc2-windows-x86_64.sha256`
+  `e786e5fe5b43cdf2aa119e909e19df0341c6d21c6968a81fb5fc6e70cccbb9e4` (1419183 B), both also
+  written byte for byte by `build/mc2`.
+  Docs: `docs/specs/M49.md` (the ratified spec, verbatim, plus § Implementation notes),
+  `docs/reference/cli.md` (`--opt=N`, `-O`), `docs/reference/toml.md` (`project.opt`),
+  `docs/reference/machine.md` (version 5, the six slots, the null-slot rule, `walk_opt`/
+  `walk_reg_count`), `docs/bootstrap.md` § The optimized chain, `docs/determinism.md` § Two roads,
+  `tests/golden/README.md`.
 - Next: **M44 step 5** (`mc upgrade`, `LATEST`); the **site + registry server, M47 S4-S6**, in
   `minicompiler/mc-registry`; then **M42 step 2** (PE `--exe`, CI-gated on the Windows runners).
   **M46** only on the owner's request; **M43 Layer 2** after 1.0.0. M13 and M18 stay in the backlog

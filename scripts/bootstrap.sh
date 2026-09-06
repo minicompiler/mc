@@ -10,11 +10,27 @@
 #   SHA-256 of build/mc2.o compared against the golden checked into
 #   tests/golden/mc2.sha256 (recorded the first time the script runs).
 #
+# M49 adds a SECOND chain, the optimized road (docs/specs/M49.md § 3.3):
+#
+#   build/mc1  --opt=1 src/mc.mc -> build/mc2o.o  (+ link -> build/mc2o)
+#   build/mc2o --opt=1 src/mc.mc -> build/mc3o.o
+#   cmp build/mc2o.o build/mc3o.o       <- the optimized road's fixed point
+#   SHA-256 of build/mc2o.o against tests/golden/mc2-opt.sha256
+#   build/mc2o         src/mc.mc -> build/mc2o-plain.o
+#   cmp build/mc2o-plain.o build/mc2.o  <- the CROSS-ROAD IDENTITY: an
+#                                          optimized compiler computes exactly
+#                                          the compiler the plain one computes
+#
+# It is skipped, with a message, when the compiler under test does not
+# understand `--opt=` -- the frozen seed does not, and neither does any release
+# older than M49, so `scripts/bootstrap.sh` keeps working with an old seed.
+#
 # No "set -e": each step checks its own exit code and fails with a clear
 # message, so a failure in the middle of the chain never passes silently.
 
 mc0="build/mc0"
 golden="tests/golden/mc2.sha256"
+golden_opt="tests/golden/mc2-opt.sha256"
 
 if [ ! -x "$mc0" ]; then
     echo "FAIL: '$mc0' not found or not executable (run 'make stage0')" >&2
@@ -111,6 +127,64 @@ else
         exit 1
     fi
     echo "  ok: $got_hash matches $golden"
+fi
+
+# ---- M49: the optimized road, and the cross-road identity ------------------
+# The plain chain above is the reference and never takes a flag. This one is the
+# same three stages with `--opt=1`, plus the one line that makes the whole
+# milestone falsifiable: the optimized compiler, asked for the PLAIN road, has
+# to write byte for byte the object the plain compiler wrote. A miscompiled
+# allocator anywhere in the 1745 functions of src/mc.mc shows up there.
+if build/mc1 --opt=0 --version > /dev/null 2>&1; then
+    echo ""
+    echo "=== M49 -- the optimized road: mc1 -O -> mc2o -> mc3o ==="
+
+    echo "-- stage 2o: build/mc1 --opt=1 src/mc.mc -> build/mc2o.o --"
+    step "mc1 -O compiles mc.mc"   build/mc1 --opt=1 src/mc.mc -o build/mc2o.o
+    echo "  size build/mc2o.o: $(size_of build/mc2o.o) bytes"
+    step "link build/mc2o"        scripts/link.sh build/mc2o build/mc2o.o
+
+    echo "-- stage 3o: build/mc2o --opt=1 src/mc.mc -> build/mc3o.o --"
+    step "mc2o -O compiles mc.mc"  build/mc2o --opt=1 src/mc.mc -o build/mc3o.o
+    echo "  size build/mc3o.o: $(size_of build/mc3o.o) bytes"
+
+    echo "-- fixed-point criterion: cmp build/mc2o.o build/mc3o.o --"
+    if ! cmp build/mc2o.o build/mc3o.o; then
+        echo "FAIL: build/mc2o.o != build/mc3o.o -- no fixed point on the optimized road" >&2
+        echo "diagnosis: diff <(build/mc1 --dump-asm --opt=1 src/mc.mc) <(build/mc2o --dump-asm --opt=1 src/mc.mc)" >&2
+        exit 1
+    fi
+    echo "  ok: build/mc2o.o == build/mc3o.o"
+
+    echo "-- golden SHA-256 of build/mc2o.o --"
+    got_line=$(shasum -a 256 build/mc2o.o)
+    got_hash=$(printf '%s\n' "$got_line" | awk '{print $1}')
+    if [ ! -f "$golden_opt" ]; then
+        printf '%s\n' "$got_line" > "$golden_opt"
+        echo "  WARNING: $golden_opt did not exist -- recorded now with the current hash:"
+        echo "  $got_line"
+    else
+        want_hash=$(awk '{print $1}' "$golden_opt")
+        if [ "$got_hash" != "$want_hash" ]; then
+            echo "FAIL: build/mc2o.o diverges from the golden $golden_opt" >&2
+            echo "  expected: $want_hash" >&2
+            echo "  got:      $got_hash" >&2
+            exit 1
+        fi
+        echo "  ok: $got_hash matches $golden_opt"
+    fi
+
+    echo "-- cross-road identity: build/mc2o src/mc.mc == build/mc2.o --"
+    step "mc2o compiles mc.mc plain" build/mc2o src/mc.mc -o build/mc2o-plain.o
+    if ! cmp build/mc2o-plain.o build/mc2.o; then
+        echo "FAIL: the optimized compiler does not compute the plain compiler" >&2
+        echo "diagnosis: diff <(build/mc2 --dump-asm src/mc.mc) <(build/mc2o --dump-asm src/mc.mc)" >&2
+        exit 1
+    fi
+    echo "  ok: build/mc2o-plain.o == build/mc2.o"
+else
+    echo ""
+    echo "=== M49 -- the optimized road: SKIPPED (build/mc1 does not accept --opt=) ==="
 fi
 
 t_total1=$(now)

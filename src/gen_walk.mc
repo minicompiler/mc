@@ -92,7 +92,21 @@
 #define MTASK_DUMP         28            // (e)                   --dump-asm, one line
 #define MTASK_RELOC_KIND   29            // (e) -> R_* or -1      the implicit relocation
 #define MTASK_RELOC_OFF    30            // (e) -> bytes          where inside it the field sits
-#define MTASK_COUNT        31
+// M49, contract version 5: the six slots of the register allocator. They are
+// APPENDED and no signature above moved, and the rule that makes them free for
+// a machine that does not want them is the NULL-SLOT RULE: for slots 31 and up
+// the walker reads the table entry itself and treats 0 as "this machine does
+// not do this". A machine table is a zero-filled global of MTASK_COUNT entries
+// (examples/kernel/machine_riscv64.mc, examples/avr/machine_avr.mc), so a
+// machine that fills the first 31 answers 0 to MTASK_REG_COUNT and never sees
+// the other five -- byte for byte what it emitted before, with no edit.
+#define MTASK_REG_COUNT    31            // () -> n               allocatable callee-saved registers
+#define MTASK_REG_LOAD     32            // (d, r)                depth d = register r
+#define MTASK_REG_STORE    33            // (ty, d, r)            register r = depth d, extended by ty
+#define MTASK_REG_SAVE     34            // (r, off)              register r into the frame slot
+#define MTASK_REG_RESTORE  35            // (r, off)              and back out of it
+#define MTASK_PARAM_REG    36            // (ty, i, r)            argument i straight into r
+#define MTASK_COUNT        37
 
 // M24 (M9): the task names --dump-machine prints, in MTASK_* order. They live
 // here because the vocabulary is the walker's; the dump itself is in main.mc,
@@ -102,7 +116,9 @@ uptr mtask_names[] = {
     "bool", "cast", "load", "store", "local_addr", "local_load", "local_store",
     "sym_addr", "global_load", "global_store", "call", "callp", "ret", "jump",
     "jz", "jnz", "label", "word", "ins_size", "encode", "dump", "reloc_kind",
-    "reloc_off" };
+    "reloc_off",
+    "reg_count", "reg_load", "reg_store", "reg_save", "reg_restore",
+    "param_reg" };
 
 uptr mtask_name(i64 t) {
     if (t >= 0 && t < MTASK_COUNT) return ld64(mtask_names + t * 8);
@@ -161,6 +177,53 @@ uptr mtask_name(i64 t) {
 #define STR_SYM  16
 #define STR_SIZE 24
 
+// ---- M49 step A: the walker's own state, in one arena record ---------------
+// Four file-level globals used to live here -- the three fields a pending
+// `reloc()` carries and the index of the current function in the prel_* arrays
+// -- and none of them is read by any other file (grep over src lib examples).
+// They are one record now, for the reason src/driver.mc gives for drv_state and
+// src/sandbox.mc for sb_state: the frozen seed's MAXGLOBALS is 512 and
+// `mc limits src/mc.mc` has to stay under 460 (scripts/check-limits.sh fails at
+// 90%). Net -3 globals, which is what pays for the optimizer's own record.
+//
+// WK_OPT is the optimization level -- 0 or 1 -- written by the CLI or by the
+// driver before gen_lower and read through walk_opt(). It is a field and not a
+// global for the same reason, and a FUNCTION and not a task slot for M24's
+// reason: no signature moves, and a machine that never reads it emits byte for
+// byte what it emitted before.
+#define WK_PEND_TYPE  0       // reloc(): the type, until the next raw word; -1 = none
+#define WK_PEND_SYM   8       // its symbol
+#define WK_PEND_NODE 16       // the node that wrote it, for the error's position
+#define WK_PREL_BASE 24       // start of the current function in prel_*
+#define WK_OPT       32       // --opt=N / [project].opt: 0 = the plain road
+#define WK_SIZE      40
+
+uptr wk_state = 0;                    // the one global this record costs
+
+uptr wk_rec() {
+    if (wk_state == 0) {
+        wk_state = xalloc(WK_SIZE);
+        mem_zero(wk_state, WK_SIZE);
+        st64(wk_state + WK_PEND_TYPE, 0 - 1);   // the one non-zero starting value
+    }
+    return wk_state;
+}
+
+i64  pend_type()  { return ld64(wk_rec() + WK_PEND_TYPE); }
+i64  pend_sym()   { return ld64(wk_rec() + WK_PEND_SYM); }
+i64  pend_node()  { return ld64(wk_rec() + WK_PEND_NODE); }
+i64  prel_base()  { return ld64(wk_rec() + WK_PREL_BASE); }
+void set_pend_type(i64 v) { st64(wk_rec() + WK_PEND_TYPE, v); }
+void set_pend_sym(i64 v)  { st64(wk_rec() + WK_PEND_SYM, v); }
+void set_pend_node(i64 v) { st64(wk_rec() + WK_PEND_NODE, v); }
+void set_prel_base(i64 v) { st64(wk_rec() + WK_PREL_BASE, v); }
+
+// M49: the optimization level in effect. 0 is the plain road -- the reference
+// every determinism gate compares against -- and it is what a compiler answers
+// when nobody said otherwise (docs/reference/cli.md, `--opt`).
+i64  walk_opt()           { return ld64(wk_rec() + WK_OPT); }
+void set_walk_opt(i64 n)  { st64(wk_rec() + WK_OPT, n); }
+
 uptr ibuf;
 i64  nins = 0;
 i64  inscap = 0;
@@ -181,9 +244,6 @@ uptr prel_sym;
 uptr prel_type;
 i64 prelcap = 0;
 i64 nprel = 0;
-i64 pend_type = -1;
-i64 pend_sym = 0;
-i64 pend_node = 0;
 
 // ---- functions already lowered: ibuf is append-only and each function is a slice of it ----
 uptr fn_start;
@@ -196,7 +256,6 @@ uptr fn_pcount;
 i64 fncap = 0;
 i64 nfn = 0;
 i64 ins_base = 0;                     // start of the current function in ibuf
-i64 prel_base = 0;                    // start of the current function in prel_*
 
 // ---- module state: strings and the sections in fixed order ----
 uptr strs;
@@ -307,6 +366,27 @@ uptr mach(i64 task) {
     return ld64(mach_tab + task * 8);
 }
 
+// M49, the null-slot rule (contract version 5). Slots 0..30 are mandatory and a
+// missing one is a bug in the machine, which is what mach() above dies for.
+// Slots 31 and up are OPTIONAL: the walker reads the entry itself, and 0 means
+// "this machine does not do this". Only MTASK_REG_COUNT is ever asked of a
+// machine that may not have it -- the other five are reached only after it
+// answered a non-zero count.
+uptr mach_opt(i64 task) {
+    if (mach_tab == 0) return 0;
+    return ld64(mach_tab + task * 8);
+}
+
+// How many callee-saved registers the machine in effect lets the walker
+// allocate. 0 on the plain road, whatever the flag is: an optimizer that is off
+// asks nothing of the machine.
+i64 walk_reg_count() {
+    if (walk_opt() == 0) return 0;
+    uptr f = mach_opt(MTASK_REG_COUNT);
+    if (f == 0) return 0;
+    return callp(f);
+}
+
 // M24 (M8): the write side, for a module DERIVING a machine. It is here and not
 // in src/hooks.mc because the bound it checks is the MTASK_* list above -- the
 // walker's own vocabulary. Its companion, machine_tab(name), is in the registry
@@ -326,7 +406,7 @@ void machine_slot(uptr tab, i64 task, uptr fn) {
 void ins_add(i64 op, i64 rd, i64 rn, i64 rm, i64 imm, i64 label, i64 sym) {
     // the pending relocation only sticks to the raw word that gen_word puts in the
     // buffer; a label does not become a word and is transparent, everything else is an error
-    if (pend_type >= 0 && op != I_LABEL) err_node(pend_node, "reloc without an immediately following emit");
+    if (pend_type() >= 0 && op != I_LABEL) err_node(pend_node(), "reloc without an immediately following emit");
     ibuf = grow(T_INS, ibuf, nins, &inscap, INS_SIZE);
     uptr e = ins_at(nins);
     set_ins_op(e, op);
@@ -701,16 +781,16 @@ void gen_intrin(i64 n, i64 depth, i64 in) {
 // so a negative value is caught by the first half of the test.
 void gen_word(i64 n, i64 w) {
     if (w < 0 || w > 0xffffffff) err_node(n, "emitted word does not fit in 32 bits");
-    if (pend_type >= 0) {                        // the pending relocation sticks to this word
+    if (pend_type() >= 0) {                      // the pending relocation sticks to this word
         // UNSIGNED is 8 bytes (length 3) and would run over the next word
-        if (pend_type == R_UNSIGNED)
-            err_node(pend_node, "reloc UNSIGNED requires 8 bytes: use a global array initializer");
+        if (pend_type() == R_UNSIGNED)
+            err_node(pend_node(), "reloc UNSIGNED requires 8 bytes: use a global array initializer");
         prel_grow();
         set_prel_ins_at(nprel, nins - ins_base);  // index relative to the function
-        set_prel_sym_at(nprel, pend_sym);
-        set_prel_type_at(nprel, pend_type);
+        set_prel_sym_at(nprel, pend_sym());
+        set_prel_type_at(nprel, pend_type());
         nprel = nprel + 1;
-        pend_type = -1;
+        set_pend_type(0 - 1);
     }
     callp(mach(MTASK_WORD), w);
 }
@@ -737,10 +817,10 @@ void gen_reloc(i64 n) {
     i64 t = nd_val(a);
     if (t != R_UNSIGNED && t != R_BRANCH26 && t != R_PAGE21 && t != R_PAGEOFF12)
         err_node(n, "unknown relocation type");
-    if (pend_type >= 0) err_node(n, "two relocations for the same word");
-    pend_type = t;
-    pend_sym  = sym_ref(nd_name(b));
-    pend_node = n;
+    if (pend_type() >= 0) err_node(n, "two relocations for the same word");
+    set_pend_type(t);
+    set_pend_sym(sym_ref(nd_name(b)));
+    set_pend_node(n);
 }
 
 // M24: the arguments of a taught intrinsic, then its handler. The handler is
@@ -1072,7 +1152,7 @@ void gen_encode_one(i64 f) {
 // ---- functions ----
 void gen_func(i64 f, i64 text) {
     ins_base = nins; nlabels = 0; nlocals = 0; nloops = 0; frame_off = 0;
-    prel_base = nprel; pend_type = -1;
+    set_prel_base(nprel); set_pend_type(0 - 1);
     depth_types_reset();                          // M24: nothing announced yet
     walk_fn_ret = nd_type(f);                     // M45: what a `return` extends to
     if ((sec_flags(sec_at(text)) & 0xff) == S_ZEROFILL) err_node(f, "function in a zerofill section");
@@ -1092,7 +1172,7 @@ void gen_func(i64 f, i64 text) {
         p = nd_next(p);
     }
     gen_stmt(nd_b(f), lepi);
-    if (pend_type >= 0) err_node(pend_node, "reloc without an immediately following emit");
+    if (pend_type() >= 0) err_node(pend_node(), "reloc without an immediately following emit");
     callp(mach(MTASK_LABEL), lepi);
     callp(mach(MTASK_EPILOGUE));
 
@@ -1103,8 +1183,8 @@ void gen_func(i64 f, i64 text) {
     fn_grow();                                   // the function becomes a slice of ibuf
     set_fn_start_at(nfn, ins_base);
     set_fn_count_at(nfn, nins - ins_base);
-    set_fn_pstart_at(nfn, prel_base);
-    set_fn_pcount_at(nfn, nprel - prel_base);
+    set_fn_pstart_at(nfn, prel_base());
+    set_fn_pcount_at(nfn, nprel - prel_base());
     set_fn_labels_at(nfn, nlabels);
     set_fn_sec_at(nfn, text);
     // the symbol is born here (the symtab order is the lowering order); the value only in gen_encode_one

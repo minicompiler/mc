@@ -10,6 +10,15 @@ so **any** change to `lib/*.mc` or to a core module moves this hash twice: once 
 once for the blob. Run `make bundle` first — `make check` runs `check-bundle` before `bootstrap`
 precisely so a stale bundle is reported as a stale bundle and not as a golden mismatch.
 
+Since M49 there is a SIXTH, `mc2-opt.sha256`: the SHA-256 of `build/mc2o.o`, the object
+`build/mc1 --opt=1 src/mc.mc` writes -- the OPTIMIZED road's fixed point
+(`docs/bootstrap.md` § The optimized chain). It moves whenever `mc2.sha256` moves, and it also
+moves on its own whenever the optimizer changes while the plain road does not, which is what makes
+it worth having. `scripts/bootstrap.sh` records it when the file is absent and only after
+`cmp build/mc2o.o build/mc3o.o` holds; the chain's last step, `cmp build/mc2o-plain.o build/mc2.o`,
+is the cross-road identity and is not a golden -- it is an equality between two files the same run
+produced. To rewrite: delete the file and run `make bootstrap` again.
+
 Since M37 there are two more goldens, `mc2-linux-arm64.sha256` and `mc2-linux-x86_64.sha256`:
 the SHA-256 of `build/mc2l.o`, the object the Linux-hosted `mc` writes for `src/mc_linux.mc` on
 each host, recorded by `scripts/bootstrap-linux.sh` (`docs/bootstrap.md` § The Linux chain). They

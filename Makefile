@@ -208,6 +208,14 @@ bootstrap: stage0
 check-surface: build/mc0 build/mc1
 	scripts/check-surface.sh build/mc0 build/mc1
 
+# M49: the differential test of the two roads -- every program of the corpus
+# compiled plain and with --opt=1, linked, RUN, and the two results compared
+# with each other and with the source's own expect-* header. The taught examples
+# go through the same pair, and examples/kernel + examples/avr are the null-slot
+# rule's proof: their artefacts are byte for byte the same on both roads.
+check-opt: build/mc1
+	scripts/check-opt.sh build/mc1
+
 # M14: the TOML subset (src/toml.mc) through src/tomldump.mc, against
 # tests/toml/*.expect — well-formed files and the malformed ones, whose .expect
 # holds the exact file:line:col error.
@@ -594,6 +602,7 @@ check-skipped:
 	@echo "test-windows/test-windows-x86_64: SKIPPED (cross-compilation from macOS; here the suite is native)"
 	@echo "check-examples/check-lang/check-conc/check-desktop: SKIPPED (macOS dylibs and --exe)"
 	@echo "check-docs/site/check-site: SKIPPED (their samples are built with --exe)"
+	@echo "check-opt: SKIPPED (its corpus is linked and run through the macOS host toolchain)"
 	@echo "check-shim: SKIPPED (M43 acceptance 1 runs a Linux binary; the shim's words are asserted by check-parts and check-surface)"
 	@echo "test-sandbox: SKIPPED (the sandbox is a Linux feature; scripts/test-sandbox.sh delegates from macOS, not from Windows)"
 else
@@ -610,6 +619,7 @@ check-skipped:
 	@echo "test-windows-x86_64: SKIPPED (cross-compilation from macOS; the windows-2025 CI leg is the runtime oracle)"
 	@echo "check-examples/check-lang/check-conc/check-desktop: SKIPPED (macOS dylibs and --exe)"
 	@echo "check-docs/site/check-site: SKIPPED (their samples are built with --exe)"
+	@echo "check-opt: SKIPPED (its corpus is linked and run through the macOS host toolchain)"
 endif
 
 ifeq ($(HOST),Linux)
@@ -620,7 +630,7 @@ else ifneq (,$(WINHOST))
 # Docker or python3 -- and `check-skipped` prints the reason for each one.
 check: budget bootstrap-windows check-lex check-ast check-asm check-obj check-bundle check-mc check-toml check-sysroots check-limits check-skipped
 else
-check: budget test check-lex check-ast check-bundle check-asm check-obj bootstrap check-surface test-exe check-mc check-standalone check-parts check-toml check-build check-pkg check-sysroots check-stubs check-limits check-minimal test-linux test-linux-x86_64 test-windows test-windows-x86_64 check-examples check-lang check-conc check-desktop check-float check-wide check-kernel check-avr check-docs site check-site check-site-linux test-linux-exe test-linux-x86_64-exe test-sandbox
+check: budget test check-lex check-ast check-bundle check-asm check-obj bootstrap check-surface check-opt test-exe check-mc check-standalone check-parts check-toml check-build check-pkg check-sysroots check-stubs check-limits check-minimal test-linux test-linux-x86_64 test-windows test-windows-x86_64 check-examples check-lang check-conc check-desktop check-float check-wide check-kernel check-avr check-docs site check-site check-site-linux test-linux-exe test-linux-x86_64-exe test-sandbox
 endif
 
 budget:
@@ -643,7 +653,7 @@ bench: build/mc1
 .PHONY: check-site-linux
 .PHONY: check-linux-host check-skipped check-shim test-sandbox sandbox-trace sandbox-trace-check mc-linux-gnu mc-linux-x86_64-gnu
 .PHONY: bootstrap-windows mc-windows mc-windows-x86_64 mc-windows-obj mc-windows-x86_64-obj
-.PHONY: all stage0 stage0-san test check-lex check-ast check-asm check-obj mc1 bootstrap check-surface test-exe bundle check-bundle check-mc check-standalone check-parts check-toml check-build check-pkg check-sysroots check-stubs check-limits sysroot-linux sysroot-linux-x86_64 sysroot-windows sysroot-windows-x86_64 test-linux test-linux-x86_64 test-windows test-windows-x86_64 check-examples check-lang check-conc check-docs site check-site check budget clean check-desktop check-minimal mcrt-windows mcrt-windows-x86_64 check-float check-wide check-kernel check-avr test-linux-exe test-linux-x86_64-exe bench
+.PHONY: all stage0 stage0-san test check-lex check-ast check-asm check-obj mc1 bootstrap check-surface test-exe bundle check-bundle check-mc check-standalone check-parts check-toml check-build check-pkg check-sysroots check-stubs check-limits sysroot-linux sysroot-linux-x86_64 sysroot-windows sysroot-windows-x86_64 test-linux test-linux-x86_64 test-windows test-windows-x86_64 check-examples check-lang check-conc check-docs site check-site check budget clean check-desktop check-minimal mcrt-windows mcrt-windows-x86_64 check-float check-wide check-kernel check-avr check-opt test-linux-exe test-linux-x86_64-exe bench
 
 # M32: examples/desktop -- a GTK4 application written in mc, and the same
 # application with its widget tree written in a UI language taught by ui.mc.

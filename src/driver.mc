@@ -88,7 +88,9 @@
                               // verdict), 2 = --fix-limits (report + rewrite
                               // the [limits] section). `mc limits` is mode 1.
 #define DRV_TOL       88      // [limits].tolerance, in basis points
-#define DRV_SIZE      96
+#define DRV_OPT       96      // M49: --opt=N / -O on the command line, -1 = not
+                              // given (and then [project].opt, default 0)
+#define DRV_SIZE     104
 
 uptr drv_state = 0;                   // the one global of this file
 
@@ -98,6 +100,7 @@ uptr drv_rec() {
         mem_zero(drv_state, DRV_SIZE);
         st64(drv_state + DRV_TARGET, -1);
         st64(drv_state + DRV_TOL, 2500);
+        st64(drv_state + DRV_OPT, -1);
     }
     return drv_state;
 }
@@ -114,6 +117,7 @@ uptr drv_bname()       { return ld64(drv_rec() + DRV_BNAME); }
 i64  drv_static()      { return ld64(drv_rec() + DRV_STATIC); }
 i64  drv_lim_mode()    { return ld64(drv_rec() + DRV_LIMMODE); }
 i64  drv_tol()         { return ld64(drv_rec() + DRV_TOL); }
+i64  drv_opt_flag()    { return ld64(drv_rec() + DRV_OPT); }
 
 void set_cfg_file(uptr v)        { st64(drv_rec() + DRV_CFG, v); }
 void set_drv_sdk_cache(uptr v)   { st64(drv_rec() + DRV_SDK, v); }
@@ -127,6 +131,17 @@ void set_drv_bname(uptr v)       { st64(drv_rec() + DRV_BNAME, v); }
 void set_drv_static(i64 v)       { st64(drv_rec() + DRV_STATIC, v); }
 void set_drv_lim_mode(i64 v)     { st64(drv_rec() + DRV_LIMMODE, v); }
 void set_drv_tol(i64 v)          { st64(drv_rec() + DRV_TOL, v); }
+void set_drv_opt_flag(i64 v)     { st64(drv_rec() + DRV_OPT, v); }
+
+// M49: the level THIS build compiles the entry with. The flag wins over the
+// key, and with neither it is 0 -- the plain road, which every determinism gate
+// compares against (docs/reference/toml.md § [project]).
+i64 drv_opt_level() {
+    if (drv_opt_flag() >= 0) return drv_opt_flag();
+    i64 v = toml_int("project.opt", 0);
+    if (v != 0 && v != 1) toml_err_key("project.opt", "must be 0 or 1");
+    return v;
+}
                                       // stubs, and neither compile nor link
 
 // the backends that write for the target in effect. M17 replaced the whitelist
@@ -719,7 +734,7 @@ i64 drv_teach(uptr cout, uptr dir, i64 compiler_only) {
         return rc;
     }
     uptr comp = drv_runnable(drv_path(cbin));
-    u8 av[10 * 8];
+    u8 av[12 * 8];
     st64(av + 0,  comp);
     st64(av + 8,  "build");
     st64(av + 16, dir);
@@ -734,6 +749,11 @@ i64 drv_teach(uptr cout, uptr dir, i64 compiler_only) {
         st64(av + n * 8 + 8, dp_libs_opt);
         n = n + 2;
     }
+    // M49: a `--opt` written on the command line has to reach the child, which
+    // is the process that compiles the entry. `[project].opt` needs no
+    // forwarding -- the child re-reads the same TOML.
+    if (drv_opt_flag() == 0) { st64(av + n * 8, "--opt=0"); n = n + 1; }
+    if (drv_opt_flag() == 1) { st64(av + n * 8, "--opt=1"); n = n + 1; }
     if (drv_lim_mode() == 1) { st64(av + n * 8, "--limits"); n = n + 1; }
     if (drv_lim_mode() == 2) { st64(av + n * 8, "--fix-limits"); n = n + 1; }
     st64(av + n * 8, 0);
@@ -841,6 +861,12 @@ i64 drv_run(uptr dir, uptr cfg, i64 entry_only, i64 compiler_only) {
         return drv_teach(cout, dir, compiler_only);
     }
     if (compiler_only) toml_err_key("compiler.modules", "missing key");
+    // M49: the optimizer applies to the ENTRY. The taught compiler above is a
+    // TOOL this build runs, not the artefact it is asked for, and it is built
+    // on the plain road so that `[project].opt` changes exactly one thing --
+    // which is also what makes the compiler `mc build` writes reproducible
+    // whatever the key says (docs/reference/toml.md § [project]).
+    set_walk_opt(drv_opt_level());
     drv_entry(entry, out, kind);
     return drv_finish(entry);
 }
@@ -873,6 +899,13 @@ i64 drv_build(i64 argc, uptr argv) {
             if (i + 1 >= argc) die("--libs-dir requires an argument");
             i = i + 1;
             deps_set_libs_dir(ld64(argv + i * 8));
+        }
+        else if (str_eq(a, "-O"))              set_drv_opt_flag(1);
+        else if (opt_val(a, "--opt=") != 0) {
+            uptr v = opt_val(a, "--opt=");
+            if (str_eq(v, "0"))      set_drv_opt_flag(0);
+            else if (str_eq(v, "1")) set_drv_opt_flag(1);
+            else die2("--opt must be 0 or 1", v);
         }
         else if (str_eq(a, "--entry-only"))    entry_only = 1;
         else if (str_eq(a, "--compiler-only")) compiler_only = 1;

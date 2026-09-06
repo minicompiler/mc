@@ -3,7 +3,7 @@
 // `main()` that says which PARTS this compiler is made of.
 //
 // usage: mc [--dump-tokens|--dump-ast|--dump-asm|--dump-syms|--dump-rules|--dump-machine]
-//         [--backend=NAME|--exe] [--machine=NAME] [--include=DIR]
+//         [--backend=NAME|--exe] [--machine=NAME] [--include=DIR] [--opt=N|-O]
 //         [--libc=gnu|musl] [--interp=PATH] [--link=dynamic|static] input.mc [-o output]
 //        mc --host   ·   mc --version
 //        mc build [DIR]   ·   mc limits [DIR|FILE.mc]   ·   mc sysroot ...
@@ -129,7 +129,11 @@ void dump_machine() {
                 n = n - 1;
             }
             uptr from = mach_origin(i, t);
-            if (from) { out_str(1, "bundled "); out_str(1, from); }
+            // M49: a slot past 30 may be 0 -- the null-slot rule says the
+            // machine does not do this at all, which is neither bundled nor
+            // taught (docs/reference/machine.md § 5).
+            if (ld64(mach_tabs_at(i) + t * 8) == 0) out_str(1, "-");
+            else if (from) { out_str(1, "bundled "); out_str(1, from); }
             else        out_str(1, "taught");
             out_str(1, "\n");
             t = t + 1;
@@ -142,7 +146,7 @@ void dump_machine() {
 // compiler without <mc/core_build> has none and prints just the two -- which is
 // the honest answer, since `mc build` is not in it.
 void usage() {
-    out_str(2, "usage: mc [--dump-tokens|--dump-ast|--dump-asm|--dump-syms|--dump-rules|--dump-machine] [--backend=NAME|--exe] [--machine=NAME] [--include=DIR] [--libc=gnu|musl] [--interp=PATH] [--link=dynamic|static] source.mc [-o out]\n");
+    out_str(2, "usage: mc [--dump-tokens|--dump-ast|--dump-asm|--dump-syms|--dump-rules|--dump-machine] [--backend=NAME|--exe] [--machine=NAME] [--include=DIR] [--opt=N|-O] [--libc=gnu|musl] [--interp=PATH] [--link=dynamic|static] source.mc [-o out]\n");
     out_str(2, "       mc --host\n");
     out_str(2, "       mc --version\n");
     subcommand_usage();
@@ -164,6 +168,7 @@ i64 mc_main(i64 argc, uptr argv, uptr envp) {
     i64 mode = M_COMPILE;
     i64 want_exe = 0;                           // --exe: the HOST's exe backend
     uptr linkflag = 0;                          // the last of --libc/--interp/--link
+    i64 optn = 0;                               // M49: --opt=N / -O, 0 = the plain road
 
     // M17: the machines were registered before this call, so the HOST's is named
     // here -- when it exists: M41 made it machine_use_if, because a compiler for
@@ -205,6 +210,12 @@ i64 mc_main(i64 argc, uptr argv, uptr envp) {
         // registry below, after user_init(), so a module's registration counts
         // (M39.5). Both flags write the same decision, so the LAST one wins.
         else if (str_eq(a, "--exe"))        { want_exe = 1; bname = 0; }
+        // M49: `-O` is an alias for `--opt=1`, parsed as its own str_eq because
+        // scripts/check-docs.sh enumerates the `--` literals and a bare `-O`
+        // would not be one -- it is documented by hand in cli.md instead. Both
+        // spellings write the same variable, so the last one wins, like every
+        // other flag here.
+        else if (str_eq(a, "-O"))           optn = 1;
         else if (str_eq(a, "-o")) {
             if (i + 1 >= argc) die("-o requires an argument");
             i = i + 1;
@@ -227,7 +238,13 @@ i64 mc_main(i64 argc, uptr argv, uptr envp) {
             uptr lc = opt_val(a, "--libc=");
             uptr it = opt_val(a, "--interp=");
             uptr lk = opt_val(a, "--link=");
+            uptr op = opt_val(a, "--opt=");
             if (mn)      mname = mn;
+            else if (op) {
+                if (str_eq(op, "0"))      optn = 0;
+                else if (str_eq(op, "1")) optn = 1;
+                else die2("--opt must be 0 or 1", op);
+            }
             else if (bn) { bname = bn; want_exe = 0; }
             else if (ip) { }                    // applied after lex_init, below
             else if (lc) {
@@ -326,6 +343,11 @@ i64 mc_main(i64 argc, uptr argv, uptr envp) {
     // M41: everything below drives a machine through gen_lower. Said here, once,
     // instead of dereferencing a null table inside the first mach() call.
     if (mach_tab == 0) die("no machine registered");
+    // M49: the level, said once, before anything lowers. The dump modes honour
+    // it too -- `--dump-asm --opt=1` is how the optimized lowering is read --
+    // and a backend a module registered gets it through the same global,
+    // because it calls the same gen_lower.
+    set_walk_opt(optn);
     if (mode == M_ASM) { gen_lower(unit); gen_dump_asm(); return 0; }
     if (mode == M_SYMS) { gen_lower(unit); gen_encode_all(); dump_syms(); return 0; }
 

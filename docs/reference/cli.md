@@ -6,7 +6,7 @@
 prints exactly this and exits 1:
 
 ```
-usage: mc [--dump-tokens|--dump-ast|--dump-asm|--dump-syms|--dump-rules|--dump-machine] [--backend=NAME|--exe] [--machine=NAME] [--include=DIR] source.mc [-o out]
+usage: mc [--dump-tokens|--dump-ast|--dump-asm|--dump-syms|--dump-rules|--dump-machine] [--backend=NAME|--exe] [--machine=NAME] [--include=DIR] [--opt=N|-O] [--libc=gnu|musl] [--interp=PATH] [--link=dynamic|static] source.mc [-o out]
        mc --host
        mc --version
 usage: mc build [DIR] [--config FILE] [--compiler-only] [--limits|--fix-limits] [--sysroot-dir DIR]
@@ -20,8 +20,8 @@ usage: mc build [DIR] [--config FILE] [--compiler-only] [--limits|--fix-limits] 
 ## 1. The single-file compiler
 
 ```
-mc [MODE] [--backend=NAME | --exe] [--libc=gnu|musl] [--link=dynamic|static]
-   [--interp=PATH] SOURCE [-o OUT]
+mc [MODE] [--backend=NAME | --exe] [--opt=N | -O] [--libc=gnu|musl]
+   [--link=dynamic|static] [--interp=PATH] SOURCE [-o OUT]
 ```
 
 Arguments are read left to right. The first non-flag argument is the source; a second one is
@@ -39,6 +39,8 @@ Arguments are read left to right. The first non-flag argument is the source; a s
 | `--include=DIR` | add one `#include "…"` search root, exactly like a `[include].paths` entry does for `mc build`. Repeatable; roots are tried in the order given, after the includer's own directory. It is what lets one source tree carry two platform layers in different directories and pick one without a `mc.toml` (`examples/conc/lib/macos`, `lib/linux`). |
 | `--host` | print what this binary is and exit 0 — three lines, no source needed. |
 | `--version` | print `mc <version>` and exit 0 — one line, no source needed. |
+| `--opt=N` | the optimization level, `0` or `1`. **Default 0**, the plain road, on every host and in every release — the unoptimized lowering is the reference every determinism gate compares against ([determinism.md](../determinism.md)), so it does not move when the optimizer improves. `--opt=1` turns on the register allocator (M49): locals and parameters that qualify live in `x19..x28` for the length of the function instead of going through a frame slot on every read. It changes no observable behaviour — `scripts/check-opt.sh` runs the whole corpus on both roads and compares exit code and stdout — and it changes nothing at all for a machine that answers 0 to `MTASK_REG_COUNT` ([machine.md](machine.md) § 5). The dump modes honour it: `--dump-asm --opt=1` is how the optimized lowering is read. Anything but `0` or `1` is `mc: --opt must be 0 or 1: <value>`. The last of `--opt=`/`-O` on the command line wins. |
+| `-O` | an alias for `--opt=1`, and the only short flag `mc` has besides `-o`. It is spelled out here rather than derived, because `scripts/check-docs.sh` enumerates the `--` literals `src/` compares argv against and a bare `-O` is not one of them. |
 | `--machine=NAME` | pick the machine the `--dump-*` modes lower with: `arm64` (the host's, default), `x86_64` (System V) or `x86_64-win` (Win64 — the same instruction set, the Windows calling convention). A compile does **not** need it — an object backend names its own machine, because the file records the architecture — so this flag exists for looking at what a machine selects (`--dump-asm --machine=x86_64-win`). An unknown name is `mc: unknown machine: NAME`. |
 
 ```
