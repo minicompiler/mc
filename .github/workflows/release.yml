@@ -590,3 +590,36 @@ jobs:
             --verify-tag \
             $prerelease \
             dist/mc-*.tar.gz dist/mc-*.tar.gz.sha256
+
+  # S5 of the registry (docs/specs/M47-S5.md): the release the job above just
+  # published is announced to the mc package registry, which clones the tag,
+  # hashes it, validates it inside `mc sandbox` and -- if it is accepted --
+  # writes the row a consumer reads. `minicompiler/mc` is the first registered
+  # repository and the package it publishes is `mc` itself
+  # (docs/reference/packages.md § The `mc` package).
+  #
+  # The action carries NO secret: the whole request is this repository's public
+  # URL, and the registry answers with a job id whose report the action prints
+  # into this log. It is `continue-on-error: false` on purpose -- a refused
+  # validation is a red release, not a footnote.
+  #
+  # It needs the release to EXIST (§ 13b: a version is publishable only when a
+  # GitHub Release names its tag), which is why it is `needs: publish` and not a
+  # step inside it: a failed announcement must not be able to unmake the
+  # release, and a rerun of this job alone is the retry.
+  #
+  # The repository has to be registered once, by a person, on
+  # https://minicompiler.dev/me. Until that has happened the registry answers
+  # 404 `not registered` and this job is red while everything above it is green.
+  publish-to-registry:
+    name: Publish to the mc registry
+    needs: publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    continue-on-error: false
+    steps:
+      - uses: minicompiler/register-action@v1
+        with:
+          tag: ${{ inputs.tag || github.ref_name }}

@@ -513,6 +513,56 @@ answering "unchanged" by doing nothing. With `--yes`, only the downloader's own 
 `mc: check: cannot read the published index for <name>: <reason>`, exit 2. With a directory
 registry the comparison is free and neither case arises.
 
+## 11. The `mc` package — this repository
+
+`minicompiler/mc` carries an `mc.toml` at its root, so the compiler's own tree
+**is** a package. It is what the release workflow announces to the registry on
+every tag (`.github/workflows/release.yml`, job `publish-to-registry`), and what
+`<libs>/mc/v<version>/` holds for a binary that answers `<mc/...>` from an
+installation instead of from a blob (§ 2, step 3).
+
+```toml
+[package]
+name = "mc"
+lib  = "src/core.mc"
+files = [ "lib/backend_arm64.mc", …, "tools/bundle.list" ]
+```
+
+* **`name = "mc"`** — M44's D15': the package `mc` is the whole bundle at the
+  compiler's version. It is the one reserved name the registry admits, and only
+  from this repository.
+* **`lib = "src/core.mc"`** — a bare `#include <mc>` is the compiler *without*
+  `user_init`: what `[compiler].core` defaults to, and what every taught
+  compiler in this tree includes. It carries its own `main()`, so a consumer
+  adds a host layer and a `user_init` and nothing else.
+* **`files`** is `cut -f2 tools/bundle.list | LC_ALL=C sort -u` (byte order: a UTF-8
+  locale collates `_` before `.` on macOS, and the manifest order is what the
+  tree hash is over) plus two files that list
+  cannot name — `src/bundle_data.mc` (the blob has no row in a bundle of
+  itself) and `tools/bundle.list` (the `NAME<TAB>PATH` map an installed tree
+  reads). `scripts/check-pkg.sh` fails when the array drifts from the manifest.
+* There is **no `[project]`**: `make` builds this repository, not `mc build`, and
+  the five real project configs are `src/mc.<target>.toml`. `mc build .` at the
+  root is `mc.toml: missing key: project.entry`, on purpose.
+
+### What it cannot do yet
+
+**`mc` is reserved on every road a consumer would take.** `[deps] mc = "…"`,
+`[replace] mc = "…"`, `mc pkg add mc` and `mc pkg check` of an index file whose
+`[package].name` is `mc` are all `reserved package name` (§ 6, § 8). The
+published package is therefore for the installed-tree road and for `mc install`
+(M44 steps 4-5), not for `[deps]`.
+
+**A package's namespace is not the bundle's.** `<mc/core>` out of the blob is
+`src/core.mc`; through a locked package it would be `<pkgdir>/core.mc`, because
+`libs_open` joins the name's tail to the package directory and only the
+installed road (`dp_mc_load`) has the `NAME → PATH` map. A consumer of the tree
+names files by their real paths — `<mc/src/core.mc>` — and `<mc/host>`, which is
+synthesized, has no meaning there at all.
+
+Both are recorded, with what each would cost to change, in
+[../specs/M47-S5.md](../specs/M47-S5.md) § 3.
+
 ## See also
 
 * [guide/25-packages.md](../guide/25-packages.md) — using one and publishing one, by example
@@ -520,3 +570,4 @@ registry the comparison is free and neither case arises.
 * [bundle.md](bundle.md) — what the binary ships, and why a bundled name can be overridden
 * [cli.md](cli.md) — `--libs-dir`
 * [diagnostics.md](diagnostics.md) — every message above, with cause and fix
+* [../specs/M47-S5.md](../specs/M47-S5.md) — this repository as a package, and what the registry's validator has to be told

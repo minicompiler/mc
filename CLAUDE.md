@@ -3473,6 +3473,102 @@ agents (`.claude/agents/`): `stage0-dev` (C23), `mc-dev` (`.mc` code), `reviewer
   hooks that claim none, and an `on_source` section with the four roads, the entry-file rule and
   the guard), `docs/reference/diagnostics.md` (one row, § 5), `docs/surface.md` (the ten
   registrations, and a § "Every source the lexer pushes").
+- M47 S5, compiler side ✔ (`docs/specs/M47-S5.md`, `docs/reference/packages.md` § 11,
+  `docs/ci.md` § `publish-to-registry`): **this repository is a package, and every release
+  announces itself to the registry.** `stage0/` untouched (2848/3000).
+  * **`mc.toml` at the root**: `[package] name = "mc"` (M44's D15': the whole bundle at the
+    compiler's version), `lib = "src/core.mc"` (a bare `#include <mc>` is the compiler without
+    `user_init` -- what `[compiler].core` defaults to and what every taught compiler here
+    includes; it carries its own `main()`), and `files` = `cut -f2 tools/bundle.list | LC_ALL=C sort -u`
+    plus the **two files that list cannot name** -- `src/bundle_data.mc` (the blob has no row in
+    a bundle of itself; without it the closure rule refuses the build, measured) and
+    `tools/bundle.list` (the `NAME<TAB>PATH` map an installed tree reads). 95 entries, in
+    **byte order** -- under a UTF-8 locale macOS collates `_` before `.`, which CI (the only
+    macOS in this loop with a locale set) caught as a drift the developer's shell could not see.
+    **No `[project]`**, on purpose: `make` builds this repository and the five real project
+    configs are `src/mc.<target>.toml`, so `mc build .` at the root is
+    `mc.toml: missing key: project.entry` and nothing in `scripts/` reads a config there.
+  * **`release.yml` gained `publish-to-registry`** (`needs: publish`, `ubuntu-latest`,
+    `contents: read`, 20 min, `continue-on-error: false`): one step,
+    `minicompiler/register-action@v1` with the tag. No secret, no checkout -- the whole request
+    is the repository's public URL. A job and not a step because § 13b makes a GitHub **Release**
+    the thing the validator looks for, and because a refused announcement must not unmake a
+    published release. **The first run will be red**: `minicompiler/mc` is not registered yet and
+    the registry answers 404 `not registered` until the owner registers it on
+    https://minicompiler.dev/me.
+  * **One compiler fix**, reproduced first on an untouched fixture: `dep_under` refused every
+    entry when the package directory was `.`. `path_norm` answers `"."` for a directory with no
+    segments and `path_join` then DROPS that segment, so the join of a contained entry never
+    began with `"./"` and the prefix test could not match --
+    `mc pkg hash .` was `mc: ./: files entry escapes the package: mathx.mc`, exit 2, **for any
+    package at all**. `src/deps.mc` +8 code lines; the four escaping shapes are still refused
+    with `.` as the base and every other base is byte for byte what it was.
+    `scripts/pkg-hash.sh`'s `files_of` also learned the multi-line array (its own comment said it
+    could not read one); the thirteen fixture hashes did not move.
+  * **Measured**: the root package's tree hash is
+    `930d9e1c5099d1d5c332c83ecb392cdbddc5ebf50cb9ced7c3e633b14c729eab`, and the
+    compiler and `scripts/pkg-hash.sh` agree on it. A consumer outside the tree -- `[deps]`, the
+    tree vendored at `deps/`, an entry that is four `#include`s -- builds a **1 153 024-byte
+    compiler** that answers `mc 0.0.0-dev` and writes an object for `src/mc.mc` **byte for byte**
+    the one `build/mc1` writes (1 269 016 B); dropping `src/bundle_data.mc` from the manifest
+    turns that into `mcpkg/src/bundle_data.mc:1: not declared in mcpkg's [package].files`.
+  * **Three findings for the registry, none fixed here** (`docs/specs/M47-S5.md` § 3):
+    (1) `mc` is reserved on every consumer road -- `[deps]`, `[replace]`, `mc pkg add` and
+    `mc pkg check` of the index file this repository would produce all answer
+    `reserved package name`, so the registry's own gate cannot be run on `index/mc.toml`;
+    (2) the bundle's namespace is not the package's -- `<mc/core>` is `src/core.mc` out of the
+    blob and `<pkgdir>/core.mc` through a locked package, and `<mc/host>` has no meaning there at
+    all; (3) **§ 4.2's `check.mc` cannot include every `files` entry**: written verbatim it is
+    `deps/mcpkg/src/sandbox_profiles.mc:36: initializer must be constant`, and four independent
+    classes of alternative were each reproduced (the lib needs a host layer first; two host
+    layers are `duplicate #define` on `O_CREAT`; two system layers likewise; a non-source payload
+    is `type expected at top level`). Recommended instead: an optional `[package].check` array of
+    translation units, each compiled on its own, defaulting to the `lib` -- inert in the compiler,
+    one loop in the validator.
+  * **Priced, not built** (`docs/specs/M47-S5.md` § 4): the standalone libraries of `lib/` as
+    packages of their own. Each is a DIRECTORY move (`dep_rel_ok` refuses `..`): `lib/float/`,
+    `lib/i128/`, `lib/f16/`, `lib/prelude/`, `lib/io/`, `lib/sys_linux/`, `lib/sys_windows/`, and
+    `rt`/`http`/`sqlite`, which are not bundled at all and live under `examples/api/lib/`.
+    What does NOT move: the bundled names (`bundle.list` is `NAME<TAB>PATH`; only the PATH column
+    changes) and therefore **the blob and the five goldens** -- `tools/bundle.mc` writes names and
+    bytes and "no path, date or address reaches the blob". What breaks: the `lib/*.mc` glob in
+    `check-lex`/`check-ast`/`check-asm`, the paths `check-float`/`check-wide`/`check-surface`
+    name, and ~15 places in `docs/`. The one real question -- a package nested inside the `mc`
+    package -- is already answered by `lex_root_of`, which keeps the LONGEST matching root, but no
+    fixture has ever nested one. ~150 changed lines plus the moves; **zero** if the libraries go
+    to a separate repository instead. The owner decides.
+  -- `make bundle` re-run before bootstrapping (93 files, raw 1179047 -> LZ 551813, blob
+  552975 B). `make check` green end to end (**RC 0, zero FAIL**): `budget` 2848/3000, `test`
+  32/32, `check-lex` 149/149 (3 skipped), `check-ast`/`check-asm` 150/150, `check-obj`
+  **32/32 identical to the frozen seed**, `check-bundle`, `bootstrap` at a fixed point
+  (`mc2.o == mc3.o`, 1269320 B; the `--dump-asm` diff between `mc1` and `mc2` is **empty**),
+  `check-surface` 32/32, `test-exe` 32/32, `check-mc` 15/15, `check-standalone`, `check-parts`,
+  `check-toml` 10/10, `check-build` 53/53, **`check-pkg` 93/93** (the M47-S5 section is the last
+  nine), `check-stubs` 9/9, `check-sysroots`, `check-limits` 17/17 under 90 percent,
+  `check-minimal`,
+  `test-linux` 41/41, `test-linux-x86_64` 39/39, `test-linux-exe` 44/44 musl + 44/44 gnu,
+  `test-linux-x86_64-exe` 42/42 + 42/42, `test-windows` 42/42 and `test-windows-x86_64` 40/40
+  objects cross-compiled, `check-examples`, `check-lang`, `check-conc`, `check-desktop`,
+  `check-float`, `check-wide`, `check-kernel`, `check-avr`, `test-sandbox` 55 ok / 0 failed /
+  1 skipped, `check-docs` (198 symbols, 36 flags, 27 TOML keys, 10 directives, 51 samples,
+  365 links), `site` 90 pages + `check-site` 0 link problems.
+  `make check-linux-host` RC 0 over all four cells (musl and gnu x aarch64 and x86_64), each
+  after its own `mc2l.o == mc3l.o` and with the cross proof green.
+  `scripts/check-inert.sh <mc1 from origin/main> build/mc1`: **33 objects identical**
+  (`tests/*.mc` + `src/mc.mc`) and byte-identical artefacts for `examples/api`, `lang`, `conc`,
+  `desktop` and `kernel` -- a root `mc.toml`, a workflow job and a containment fix emit no byte.
+  The five goldens rewritten **once**, each only after its own criterion: `mc2.sha256`
+  `bbf735bd...6326b` -> `6a689f82b978b310f0143950b50705650afa66fef0c76f49221d6481951a50b9`
+  (empty `--dump-asm` diff + `cmp build/mc2.o build/mc3.o`); the Linux pair deleted and
+  re-recorded by `make check-linux-host` -- `mc2-linux-arm64.sha256`
+  `dbc8f498e78fc023e0eec4e279f9de4ac596cf1f8cc71ff0aa1060667c8f5129`,
+  `mc2-linux-x86_64.sha256`
+  `92c6451658d92bb12f0fa8dc30828988c112a32dbd5d5ba4eb6e51ff12456764`; the Windows pair
+  cross-computed per `tests/golden/README.md` -- `mc2-windows-arm64.sha256`
+  `baf4b5ebefa616775e35199ed45cf880a6ec30373656e4386965fa660d2eee05` (1295746 B),
+  `mc2-windows-x86_64.sha256`
+  `4c1b54c5099a12cbffa4b6547e24891caf4f46f467bffe877a92c3eb9e021227` (1331426 B), both also
+  written byte for byte by `build/mc2`.
 - Next: the **site + registry server, M47 S4-S6**, in `minicompiler/mc-registry`; then **M44 steps 4-5**
   (slim / install / upgrade), then **M42 step 2** (PE `--exe`, CI-gated on the Windows runners).
   **M46** only on the owner's request; **M43 Layer 2** after 1.0.0. M13 and M18 stay in the backlog

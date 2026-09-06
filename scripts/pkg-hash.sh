@@ -40,11 +40,24 @@ sha_stdin() {
 }
 
 files_of() {
-    # [package].files, in manifest order. The fixture manifests write the array
-    # on one line; a multi-line array would need a TOML reader, and the point of
-    # this script is not to be one.
-    sed -n 's/^files *= *\[\(.*\)\].*/\1/p' "$1/mc.toml" | head -1 \
-        | tr ',' '\n' | sed 's/^ *"//; s/" *$//; s/^ *//; s/ *$//' | grep -v '^$' || true
+    # [package].files, in manifest order. Both shapes the fixtures and the
+    # repository's own mc.toml use: the one-line array, and the multi-line one
+    # with a trailing comma (M44's TOML subset admits both). Still not a TOML
+    # reader -- it takes the first `files = [` and everything up to the `]` that
+    # closes it, which is all any manifest here writes.
+    awk '
+        !inarr && /^[ \t]*files[ \t]*=[ \t]*\[/ {
+            sub(/^[ \t]*files[ \t]*=[ \t]*\[/, "")
+            inarr = 1
+        }
+        inarr {
+            line = $0
+            if (match(line, /\]/)) { line = substr(line, 1, RSTART - 1); inarr = 2 }
+            print line
+            if (inarr == 2) exit
+        }
+    ' "$1/mc.toml" \
+        | tr ',' '\n' | sed -n 's/[^"]*"\([^"]*\)".*/\1/p' || true
 }
 
 mode=tree

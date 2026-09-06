@@ -419,8 +419,17 @@ i64 dep_rel_ok(uptr rel, i64 dirok) {
 // join has to start with the normalised directory plus a separator. Belt and
 // braces on purpose -- this is the check that would survive a future path_norm.
 i64 dep_under(uptr dir, uptr rel) {
-    uptr base = tm_cat(path_norm(dir), "/");
-    uptr p = path_join(base, rel);                // path_join normalises
+    uptr nd = path_norm(dir);
+    uptr p = path_join(tm_cat(nd, "/"), rel);     // path_join normalises
+    // path_norm answers "." for a directory with no segments -- `.`, `./`,
+    // `a/..` -- and path_join then DROPS that segment from the result, so the
+    // join of a contained entry does not start with "./" and the prefix test
+    // below refused every entry of a package named as `.`. `mc pkg hash .` was
+    // `files entry escapes the package: <first entry>`, exit 2, for any package
+    // at all. The containment question for that base is the one dep_rel_ok has
+    // already answered plus "the join did not become absolute".
+    if (str_eq(nd, ".")) return cstrlen(p) > 0 && ld8(p) != '/';
+    uptr base = tm_cat(nd, "/");
     i64 n = cstrlen(base);
     if (cstrlen(p) <= n) return 0;
     return mem_eq(p, base, n);
