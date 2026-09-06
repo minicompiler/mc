@@ -3479,10 +3479,12 @@ agents (`.claude/agents/`): `stage0-dev` (C23), `mc-dev` (`.mc` code), `reviewer
   * **`mc.toml` at the root**: `[package] name = "mc"` (M44's D15': the whole bundle at the
     compiler's version), `lib = "src/core.mc"` (a bare `#include <mc>` is the compiler without
     `user_init` -- what `[compiler].core` defaults to and what every taught compiler here
-    includes; it carries its own `main()`), and `files` = `cut -f2 tools/bundle.list | sort -u`
+    includes; it carries its own `main()`), and `files` = `cut -f2 tools/bundle.list | LC_ALL=C sort -u`
     plus the **two files that list cannot name** -- `src/bundle_data.mc` (the blob has no row in
     a bundle of itself; without it the closure rule refuses the build, measured) and
-    `tools/bundle.list` (the `NAME<TAB>PATH` map an installed tree reads). 95 entries.
+    `tools/bundle.list` (the `NAME<TAB>PATH` map an installed tree reads). 95 entries, in
+    **byte order** -- under a UTF-8 locale macOS collates `_` before `.`, which CI (the only
+    macOS in this loop with a locale set) caught as a drift the developer's shell could not see.
     **No `[project]`**, on purpose: `make` builds this repository and the five real project
     configs are `src/mc.<target>.toml`, so `mc build .` at the root is
     `mc.toml: missing key: project.entry` and nothing in `scripts/` reads a config there.
@@ -3504,7 +3506,7 @@ agents (`.claude/agents/`): `stage0-dev` (C23), `mc-dev` (`.mc` code), `reviewer
     `scripts/pkg-hash.sh`'s `files_of` also learned the multi-line array (its own comment said it
     could not read one); the thirteen fixture hashes did not move.
   * **Measured**: the root package's tree hash is
-    `d39eeec8b6cdf7e5cc06ee264b0d6b227934d58619287735bf66f5f85e0d3a5c`, and the
+    `930d9e1c5099d1d5c332c83ecb392cdbddc5ebf50cb9ced7c3e633b14c729eab`, and the
     compiler and `scripts/pkg-hash.sh` agree on it. A consumer outside the tree -- `[deps]`, the
     tree vendored at `deps/`, an entry that is four `#include`s -- builds a **1 153 024-byte
     compiler** that answers `mc 0.0.0-dev` and writes an object for `src/mc.mc` **byte for byte**

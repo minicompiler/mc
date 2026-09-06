@@ -535,7 +535,9 @@ files = [ "lib/backend_arm64.mc", …, "tools/bundle.list" ]
   `user_init`: what `[compiler].core` defaults to, and what every taught
   compiler in this tree includes. It carries its own `main()`, so a consumer
   adds a host layer and a `user_init` and nothing else.
-* **`files`** is `cut -f2 tools/bundle.list | sort -u` plus two files that list
+* **`files`** is `cut -f2 tools/bundle.list | LC_ALL=C sort -u` (byte order: a UTF-8
+  locale collates `_` before `.` on macOS, and the manifest order is what the
+  tree hash is over) plus two files that list
   cannot name — `src/bundle_data.mc` (the blob has no row in a bundle of
   itself) and `tools/bundle.list` (the `NAME<TAB>PATH` map an installed tree
   reads). `scripts/check-pkg.sh` fails when the array drifts from the manifest.

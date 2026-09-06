@@ -950,11 +950,17 @@ fi
 # same hash as the absolute path.
 cd "$here" || exit 1
 
-# 30a. `files` is exactly `cut -f2 tools/bundle.list | sort -u` plus the two
-# files that list cannot name: the blob (which cannot be in a bundle of itself)
-# and the NAME<TAB>PATH map itself.
+# 30a. `files` is exactly `cut -f2 tools/bundle.list | LC_ALL=C sort -u` plus the
+# two files that list cannot name: the blob (which cannot be in a bundle of
+# itself) and the NAME<TAB>PATH map itself.
+#
+# LC_ALL=C is not decoration. Under a UTF-8 locale macOS collates `_` BEFORE
+# `.`, so `lib/float_rt.mc` sorts above `lib/float.mc` and `lib/sys_linux.mc`
+# above `lib/sys.mc` -- a developer with LANG unset and a runner with it set
+# disagree about the order of the array, and the manifest order is what the tree
+# hash is over. The byte order is the only one that is the same everywhere.
 { cut -f2 tools/bundle.list; echo "src/bundle_data.mc"; echo "tools/bundle.list"; } \
-    | sort -u > "$tmp/out/want-files"
+    | LC_ALL=C sort -u > "$tmp/out/want-files"
 sed -n 's/^    "\(.*\)",$/\1/p' mc.toml > "$tmp/out/got-files"
 if cmp -s "$tmp/out/want-files" "$tmp/out/got-files"; then
     ok "mc.toml [package].files == tools/bundle.list + bundle_data.mc + bundle.list"

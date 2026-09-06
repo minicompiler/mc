@@ -23,8 +23,10 @@ name = "mc"
 # includes, so the package tree serves it as the repository does.
 lib = "src/core.mc"
 
-# Generated from tools/bundle.list -- `cut -f2 tools/bundle.list | sort -u` --
-# plus two files that list cannot carry and the tree is useless without:
+# Generated from tools/bundle.list -- `cut -f2 tools/bundle.list | LC_ALL=C sort -u`
+# (byte order: under a UTF-8 locale macOS collates `_` before `.`, and the
+# manifest order is what the tree hash is over) -- plus two files that list
+# cannot carry and the tree is useless without:
 #
 #   src/bundle_data.mc  the blob. The bundle cannot contain itself, so it has no
 #                       bundle.list row; src/core_bundle.mc includes it by path.
