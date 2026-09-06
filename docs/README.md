@@ -19,6 +19,7 @@ nothing to a running signed binary in about two minutes.
 | [One file, one program](guide/10-single-file.md) | the working tour of the language: types, memory, control flow, `extern`, function pointers |
 | [A project](guide/20-project-toml.md) | `mc build` and every `mc.toml` section by example |
 | [Using a package](guide/25-packages.md) | `[deps]`, `mc.lock`, `#include <pack/file.mc>`, vendoring, and publishing a package of your own |
+| [Publishing a package](guide/27-publishing.md) | registering on minicompiler.dev, what a GitHub Release publishes, the validator's box, the CI action, `yank` |
 | [Teaching the compiler](guide/30-teaching.md) | `#token`/`#infix`/`#prefix`, `#rule` and the prelude, then the syntax hooks with a worked toy language |
 | [Emitting bytes](guide/40-backends.md) | `#section`, `#opcode`, `emit()`/`reloc()`, `pass()`, `backend()`, and the `arm64-surface` proof |
 | [Cross-compiling](guide/50-cross-compile.md) | Linux arm64 targets, sysroots, external linkers |
