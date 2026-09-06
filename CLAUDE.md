@@ -4613,6 +4613,96 @@ agents (`.claude/agents/`): `stage0-dev` (C23), `mc-dev` (`.mc` code), `reviewer
   `mc2-windows-x86_64.sha256`
   `4e77010e2463929ed2fb8d07568a6abfea4b929c9e3dfc1f373ae09ba49fe707` (1411502 B), both also
   written byte for byte by `build/mc2`.
+- M48 C2, the windows/x86_64 CI finding (`docs/specs/M48.md` § Implementation notes -- C2;
+  `docs/reference/objects.md` § 4c): **`fold` recursed on the sibling chain, so the stack depth was
+  the LENGTH of a list.** C2 was green on macOS, on all four Linux cells and on
+  `mc on windows/arm64 host`, and red -- twice, deterministically -- on **`mc on windows/x86_64
+  host`**: the cross-compiled compiler linked, said `windows/x86_64`, compiled a small program,
+  lexed and PARSED its own source (exit 0 each) and then died with no output at all while
+  COMPILING it. Nothing C2 wrote is at fault.
+  * **The static pass named the shape and ruled out the code.** `--dump-asm --machine=x86_64-win`
+    of `src/mc_windows_x86_64.mc` from `origin/main` b0c76a3 and from the branch, with the
+    `l_strN` indices normalised: **1712 functions in common, 53 different, every one of them
+    `sb_*`**, plus 33 new. Per-symbol disassembly of the two COFF objects agrees -- **every core
+    function's machine code is byte for byte identical**. `sub rsp, N` maxima identical (1152,
+    under a page: no `__chkstk` question), section sizes, symbol counts and 14457 relocations all
+    far from any ceiling. So the compiler's own code did not change; only its data and the source
+    it was fed.
+  * **The oracle was `wine` under `--platform linux/amd64`** (a Debian 12 image, `wine` 8.0),
+    which runs the Windows binary at full Rosetta speed: main's compiler reproduces its CI
+    success (exit 0, `mc-windows-x86_64.obj` **1388708 bytes**, the CI byte count) and C2's
+    reproduces the failure in 1.1 s. `WINEDEBUG=+seh` named it -- `EXCEPTION_STACK_OVERFLOW`,
+    `c00000fd`, `stack 0x20000-0x21000-0x820000`, all 8 MiB gone. Two cross runs settled where the
+    fault lives: **the C2 binary compiles main's source (exit 0) and main's binary crashes on C2's
+    source (exit 1)** -- the INPUT, not the code.
+  * **The cause.** `fold` (`src/parse.mc`) ended with `i64 nx = fold(nd_next(n));`. A sibling
+    chain is a list and a global array initializer is one node per element, so the stack depth was
+    the length of the longest list in the program. `src/bundle_data.mc` is exactly that shape --
+    the M21.5 deviation keeps `u64 bundle_blob[] = { ... }` on disk, because the frozen seed's
+    lexer has no `#embed`. main: **71739** elements. C2, whose bundle carries the new sandbox
+    sources: **73045**. `fold`'s frame is 64 bytes of locals, so per level that is 8 (return
+    address) + 8 (saved `rbp`) + 64 + **32, the Win64 shadow space held across the recursive
+    call** = **112 bytes**, against **80** under AAPCS64 and SysV, which have no shadow space.
+    71739 x 112 = 7.66 MiB, fits; 73045 x 112 = 7.80 MiB plus the callers, does not. `fold` runs
+    on the compile road only -- `src/cli.mc` returns for `--dump-ast` on the line above it --
+    which is why the parse smoke passed. Measured with a generated `u64 big[] = { ... }` and
+    nothing else in the file: **windows/x86_64 took 74000 elements and failed at 75000;
+    linux/x86_64 took 100000 and SIGSEGVed at 120000; macOS arm64 SIGSEGVed at 150000.** Every
+    host had the defect; the 40% bigger Win64 frame is only what made it arrive first.
+  * **The fix is `src/parse.mc` +30/-16, 8 of the added lines code**: `fold` walks the SIBLING
+    chain with a loop and keeps the recursion for the CHILDREN, so the depth is the nesting and
+    nothing else. It always answered the node it was given, so `set_nd_next(n, nx)` was a no-op
+    and the loop is the same traversal in the same order. After it, **400000 elements compile on
+    windows/x86_64**. Zero new globals (`check-limits`: globals **445/512, 86%**).
+  * **The gate**, `scripts/check-mc.sh` (+41): a **150000-element** chain generated with `awk`,
+    compiled with the host compiler, linked and run (exit 42). Generated and not committed because
+    150000 elements is 300 KB of source; it is the one program in that script the repository does
+    not carry. It is there and NOT in `tests/windows/` because that corpus is cross-compiled on
+    macOS and only LINKED and RUN on Windows -- it would never touch the Windows-hosted compiler's
+    stack -- and `check-mc` is in the Windows and Linux `make check` subsets, so the case runs on
+    every host. Proved to have teeth: with the pre-fix compiler it is
+    `FAIL long-list (compilation: )`, the empty message being the SIGSEGV.
+  * **Not done, on record**: the linker's default 8 MiB stack reserve is left alone
+    (`scripts/link-windows.sh` still passes no `-stack:`). Raising it would have hidden this one
+    instance on one host and left the defect everywhere else.
+  -- `stage0/` untouched, 2848/3000. `make bundle` re-run BEFORE bootstrapping (`src/parse.mc` is
+  `mc/parse`): 93 files, raw 1258075 -> LZ 583749, blob 584911 B. `make check` green end to end
+  (**RC 0, zero FAIL**): `test` 32/32, `check-lex` 163/163 (3 skipped), `check-ast`/`check-asm`
+  164/164, `check-obj` **32/32 identical to the frozen seed**, `check-bundle` (lz round trip 117
+  cases), `bootstrap` at a fixed point (`mc2.o == mc3.o`, 1343032 bytes; the `--dump-asm` diff
+  between `mc1` and `mc2` is **empty**), `check-surface` 32/32 + inert, `test-exe` 32/32,
+  **`check-mc` 17/17** (16 + the new long-list case), `check-standalone`, `check-parts`,
+  `check-toml` 10/10, `check-build` 53/53, `check-pkg` 114/114, `check-stubs` 9/9,
+  `check-sysroots`, `check-limits` **17/17 under 90%**, `check-minimal`, `test-linux` 42/42 and
+  `test-linux-x86_64` 40/40, the four `--exe` cells, `test-windows` and `test-windows-x86_64`,
+  `check-examples`, `check-lang`, `check-conc`, `check-desktop`, `check-float`, `check-wide`,
+  `check-kernel`, `check-avr`, `test-sandbox` 73 ok / 0 failed / 1 skipped, `check-docs`,
+  `site` 92 pages + `check-site` + `check-site-linux` 11/11.
+  `make check-linux-host` RC 0 over all four cells, each after its own `mc2l.o == mc3l.o`
+  (1686712 B on aarch64, 1582648 B on x86_64) and with the cross proof green; `check-mc` is
+  **13/13** there, so the new case runs on the Linux hosts too.
+  `scripts/check-inert.sh <mc1 from origin/main b0c76a3> build/mc1`: **33 objects identical**
+  (`tests/*.mc` and `src/mc.mc`) plus byte-identical artefacts for `examples/api`, `lang`, `conc`,
+  `desktop` and `kernel` -- the traversal order did not change, so nothing the compiler emits
+  moved.
+  **The Windows chain was run here, under Wine**, which is more than the cross-computation the
+  goldens' README asks for: stage 1 -> 2 -> 3 with `lld-link` on the macOS side and each compiler
+  run under `wine`, **`cmp build/mc2w.obj build/mc3w.obj` equal** (1411990 B), and
+  `mc2w.exe --backend=macho src/mc.mc` byte for byte the macOS `build/mc2.o` -- the exact criterion
+  the CI leg applies.
+  The five goldens rewritten **once**, each only after its own criterion: `mc2.sha256`
+  `044387b8...0fe03a` -> `3f0cec7ae9c1ad366ab43dd22883bf317746ced0e7335d22e5466d5d9dfcefd6`
+  (after the empty `--dump-asm` diff and `cmp build/mc2.o build/mc3.o`); the Linux pair deleted
+  and re-recorded by `make check-linux-host` -- `mc2-linux-arm64.sha256`
+  `81e1fda80daef969c1c5fa3176c44a405e0962bd9bce5de9c032b617d8cc2bfa`,
+  `mc2-linux-x86_64.sha256`
+  `2a92672a43d0cab6c4fb00078a3268490932fa4964ed568073d6aa9b1ab0048f`, each recorded in its musl
+  cell and re-verified by the gnu cell of the same architecture; the Windows pair cross-computed
+  per `tests/golden/README.md` -- `mc2-windows-arm64.sha256`
+  `0333405bdabec4e0e804300366b53f615e33a7640a1f7f577477ca628da93cfc` (1371526 B),
+  `mc2-windows-x86_64.sha256`
+  `8b42d0ca3879fa5e2164ddffe44f439b7a10dfd8368680fa530745073566d571` (1411990 B), the second of
+  which the Wine-hosted `mc2w.exe` also wrote byte for byte.
 - Next: the **site + registry server, M47 S4-S6**, in `minicompiler/mc-registry`; then **M44 steps 4-5**
   (slim / install / upgrade), then **M42 step 2** (PE `--exe`, CI-gated on the Windows runners).
   **M46** only on the owner's request; **M43 Layer 2** after 1.0.0. M13 and M18 stay in the backlog
