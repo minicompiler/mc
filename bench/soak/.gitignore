@@ -1,0 +1,3 @@
+# built servers and soak output: never versioned
+bin/
+out/

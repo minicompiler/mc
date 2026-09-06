@@ -1,6 +1,7 @@
 /* serial.c -- raw sockets, one process, one thread, one connection at a time,
  * no keep-alive: accept, read one request, respond Connection: close, close.
  * The exact shape of mc/serial.mc. */
+#define _GNU_SOURCE   /* memmem on glibc */
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <stdio.h>
@@ -29,7 +30,10 @@ int main(int argc, char **argv) {
     int one = 1;
     setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
     struct sockaddr_in sa = {0};
-    sa.sin_len = sizeof sa; sa.sin_family = AF_INET;
+#ifdef __APPLE__
+    sa.sin_len = sizeof sa;   /* Darwin only; Linux has no sin_len */
+#endif
+    sa.sin_family = AF_INET;
     sa.sin_port = htons(atoi(argv[1]));
     sa.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     if (bind(fd, (struct sockaddr *)&sa, sizeof sa) < 0) { perror("bind"); return 1; }

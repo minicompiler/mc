@@ -171,11 +171,19 @@ event-loop design does not.
 - **One host, one architecture (Apple M4 / arm64).** `mc` also targets `x86_64` (macOS via
   Rosetta is not tested; Linux/Windows x86_64 are supported build targets — `machine_x86_64.mc` —
   but not benchmarked here) and RISC-V/AVR bare metal, none measured in this pass.
-- **Round 2** (Node.js single-process and `cluster`, Rust `axum`, Python, Ruby) widens the HTTP
-  comparison under the same harness, in `bench/http2/` if that directory exists in this checkout
-  — see [`../bench/README.md`](../bench/README.md) § "Round 2" for its status and, when it is
-  there, `bench/http2/RESULTS.md` for the numbers. It had not finished running when this page was
-  written, so no round-2 row is in the tables above.
+- **Round 2** (Node.js single-process and `cluster`, Rust `axum`, Python, Ruby, PHP) widens the
+  HTTP comparison under the same harness; its sources are in `bench/http2/` — see
+  [`../bench/README.md`](../bench/README.md) § "Round 2" for its status. It had not finished
+  running when this page was written, so no round-2 row is in the tables above.
+- **Nothing here ran for longer than five seconds.** What a server's memory does over an HOUR
+  under a steady load — the drift the public Rust/Go/Zig comparisons argue about — is a separate
+  measurement with a separate protocol: the soak workflow (`.github/workflows/bench-soak.yml`,
+  described in [`../bench/README.md`](../bench/README.md) § "C. The soak") runs every server
+  above plus round 2's, one GitHub Actions runner each, under a fixed 3000 req/s for 60 minutes,
+  pinned to two cores, sampling the whole process tree every 5 s, and reports RSS at 1/10/30/60
+  min, the fitted slope over the last fifty minutes, CPU ms per 1k requests and p50/p99/p99.9
+  with time-series charts. No numbers from it are on this page yet: they are added once a full
+  hour has run.
 
 ### Feature matrix
 

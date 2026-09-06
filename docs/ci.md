@@ -720,6 +720,35 @@ Deployment uses `actions/configure-pages`, `actions/upload-pages-artifact` and
 
 ---
 
+## `bench-soak.yml`
+
+Never on a push or a pull request: `workflow_dispatch` (inputs `minutes` 60, `rate` 3000,
+`connections` 16, `keepalive` true, `servers` `all` or a comma list) and a weekly `schedule`
+(Sunday 03:00 UTC). It is the 60-minute HTTP soak of `bench/README.md` § "C. The soak": every
+minimal server of `bench/http` and `bench/http2` under the same fixed request rate for the same
+hour, **one runner per server**, with the server's process tree sampled every 5 s.
+
+Three jobs. `plan` turns the `servers` input into a JSON list with `bench/soak/soak.py --plan`
+(unknown names fail there, before a runner is spent). `soak` is a matrix over that list,
+`fail-fast: false`, `ubuntu-latest`, `timeout-minutes: 120`: each job installs `oha` (a pinned
+release binary) and ONLY its server's toolchain at the version pinned in the workflow's `env:`
+block — Go from `bench/http/go/go.mod`, `dtolnay/rust-toolchain`, `mlugg/setup-zig`,
+`actions/setup-dotnet`, `actions/setup-node`, `actions/setup-python` + `pip install uvicorn==`,
+`ruby/setup-ruby` + `gem install puma:`, `shivammathur/setup-php`, the runner's `clang`, and for
+the `mc` servers the LATEST release's `mc-<ver>-linux-x86_64.tar.gz` with its `.sha256`
+verified by `sha256sum -c` (so the soak measures the shipped compiler, and needs no macOS job) —
+then `bench/soak/build.sh`, and `bench/soak/soak.py` with the server under `taskset -c 0,1` and
+`oha` under `taskset -c 2,3`. Each job uploads `bench/soak/out/<server>` as
+`soak-<server>-<run id>`. `report` (`needs: soak`, `if: always()`) downloads them all, runs
+`bench/soak/report.py` (tables, `results.json`, SVG charts, every SVG parsed as XML), uploads
+`soak-report-<run id>` and appends the tables to the run's summary with the artifact link.
+
+`concurrency: group: bench-soak` without `cancel-in-progress`: a second dispatch queues behind
+the first instead of sharing the hour. It is not a required check and never will be: it measures,
+it does not gate.
+
+---
+
 ## Repository settings
 
 **These are already applied on `minicompiler/mc`.** They are written down so that a fork, or a

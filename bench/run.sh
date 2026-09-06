@@ -38,7 +38,7 @@ echo
 echo "== HTTP servers (bench/http/mc/*.mc) =="
 mkdir -p "$tmp/bin"
 for s in serial fork1 forkka; do
-    "$mc" --exe "bench/http/mc/$s.mc" -o "$tmp/bin/mc-$s"
+    "$mc" --exe --include=bench/http/mc/macos "bench/http/mc/$s.mc" -o "$tmp/bin/mc-$s"
 done
 port=18700
 for s in serial fork1 forkka; do
