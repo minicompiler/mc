@@ -167,23 +167,28 @@ def nice_ticks(lo, hi, n=6):
     t0 = math.floor(lo / step) * step
     ticks = []
     t = t0
-    while t <= hi + step * 1e-9:
+    while True:            # up to and including the first tick at or above hi, so the top is named
         ticks.append(round(t, 10))
+        if t >= hi - step * 1e-9:
+            break
         t += step
     return ticks
 
 
 def log_ticks(lo, hi):
+    """1-2-5 ticks on a log axis, from the last one at or below lo to the first one at or above hi"""
     lo = max(lo, 1e-9)
-    ticks = []
-    e = math.floor(math.log10(lo))
-    while 10 ** e <= hi * 1.0001:
+    hi = max(hi, lo * 1.0001)
+    grid = []
+    e = math.floor(math.log10(lo)) - 1
+    while 10 ** e <= hi * 10:
         for m in (1, 2, 5):
-            v = m * 10 ** e
-            if lo * 0.9999 <= v <= hi * 1.0001:
-                ticks.append(v)
+            grid.append(m * 10 ** e)
         e += 1
-    return ticks or [lo, hi]
+    below = [v for v in grid if v <= lo * 1.0001]
+    above = [v for v in grid if v >= hi * 0.9999]
+    first, last = (below[-1] if below else lo), (above[0] if above else hi)
+    return [v for v in grid if first <= v <= last]
 
 
 def fmt(v):
@@ -214,7 +219,7 @@ def line_panel(series, title, ylabel, xlabel, log=False, w=960, h=480, legend=Tr
     if log:
         ylo = max(min(y for y in ys if y > 0) if any(y > 0 for y in ys) else 1, 1)
         yt = log_ticks(ylo, max(ys))
-        y0, y1 = math.log10(yt[0]), math.log10(max(yt[-1], max(ys)))
+        y0, y1 = math.log10(min(yt[0], ylo)), math.log10(max(yt[-1], max(ys)))
         if y1 <= y0:
             y1 = y0 + 1
         yv = lambda y: mt + ph - (math.log10(max(y, ylo)) - y0) / (y1 - y0) * ph
@@ -272,8 +277,14 @@ def charts(runs, results, where, outdir):
     names = ordered(runs)
     color = {n: COLORS[i % len(COLORS)] for i, n in enumerate(names)}
 
+    def until(n):
+        """the samples up to oha's deadline: the teardown after it is not the server's behaviour"""
+        f = runs[n]["facts"]
+        end = f.get("load_start_s", 0.0) + float(f.get("minutes") or 1e9) * 60
+        return [s for s in runs[n]["samples"] if s["t_s"] <= end]
+
     def series(key):
-        return [(n, color[n], [(s["t_s"] / 60, s[key]) for s in runs[n]["samples"]]) for n in names]
+        return [(n, color[n], [(s["t_s"] / 60, s[key]) for s in until(n)]) for n in names]
 
     rss = series("rss_group_kib")
     ys = [y for _, _, pts in rss for _, y in pts if y > 0]
@@ -282,7 +293,7 @@ def charts(runs, results, where, outdir):
     open(os.path.join(outdir, "cpu.svg"), "w").write(line_panel(series("pcpu_group"), f"CPU of the process tree -- {where}", "% of one core", "minutes since server start"))
     open(os.path.join(outdir, "threads.svg"), "w").write(line_panel(series("threads"), f"Threads in the process tree -- {where}", "threads", "minutes since server start"))
     for n in names:
-        one = lambda key: [(n, color[n], [(s["t_s"] / 60, s[key]) for s in runs[n]["samples"]])]
+        one = lambda key: [(n, color[n], [(s["t_s"] / 60, s[key]) for s in until(n)])]
         panels = [line_panel(one("rss_group_kib"), f"{n}: RSS (KiB) -- {where}", "KiB", "minutes", w=720, h=260, legend=False),
                   line_panel(one("pcpu_group"), f"{n}: CPU (% of one core)", "%", "minutes", w=720, h=260, legend=False),
                   line_panel(one("threads"), f"{n}: threads", "threads", "minutes", w=720, h=260, legend=False)]
@@ -371,8 +382,9 @@ def write_md(runs, results, outdir, log_rss):
             L.append(f"- `{n}`: {results[n]['error']}")
     L += ["", "## Charts", "",
           f"`rss.svg` (RSS of the tree, {'log scale: the range spans more than 20x' if log_rss else 'linear scale'}), `cpu.svg`, `threads.svg` --",
-          "every server on one chart -- and one `<server>.svg` per server with its three panels. All in this",
-          "directory, drawn by `report.py` with no library: dark text on a white background.", ""]
+          "every server on one chart -- and one `<server>.svg` per server with its three panels, from the",
+          "server's start to oha's deadline (the teardown after it is not charted). All in this directory,",
+          "drawn by `report.py` with no library: dark text on a white background.", ""]
     open(os.path.join(outdir, "RESULTS.md"), "w").write("\n".join(L))
     return where
 
