@@ -453,7 +453,10 @@ fix it.
   its own; the others are the linker and the taught compiler, both named in `mc.toml`.
 - **The subcommands are registrations, not `if`s (M41).** `build`, `limits` and `sysroot` come
   from a `subcommand()` table that `<mc/core_build>` fills, and the usage text `mc` prints with no
-  arguments is the two fixed lines plus one entry per registered subcommand. A compiler assembled
+  arguments is the two fixed lines plus one entry per registered subcommand **name**: the listing
+  is what dispatch would run, so a name registered twice is printed once, in the position of its
+  first registration and with the text of the last — the registration `subcommand_find` picks
+  ([hooks.md](hooks.md) § 7). A compiler assembled
   without that part prints two lines and accepts no subcommand — which is the honest answer, since
   it has none. Same text, byte for byte, for `mc` itself.
 - **The default backend has a second source (M41).** With no `--backend=` and no `--exe`, `mc`

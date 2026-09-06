@@ -7,9 +7,9 @@
 // Same functions, same order, same table in the same insertion order and ids.
 // No struct: Token, TokEnt and OpenFile are flat records (TOK_*, TE_*, OF_*).
 // Layouts (8-byte fields, in the order of stage0/mc.h's structs):
-//   TokEnt   { text, len, word, id }                       — 32 B
+//   TokEnt   { text, len, word, id, taught }               — 40 B
 //   Token    { id, start, len, val, line, file }            — 48 B
-//   OpenFile { cp, cend, line, name }                       — 32 B
+//   OpenFile { cp, cend, line, name, src, len, claimed }    — 56 B
 // Depends on arena.mc (xalloc, cstrlen, str_eq, mem_eq, buf_*, out_*, die,
 // die2, err_at, read_file).
 // err_at(file, line, msg) is the same as arena.mc/stage0: the file comes from
@@ -95,12 +95,22 @@
 #define K_ARROW    300       // only #rule uses this: `=>`
 #define K_DOT      301       // M44: only `#include <pack/file.mc>` uses this
 
-// ---- TokEnt: { text, len, word, id } ----
-#define TE_TEXT 0
-#define TE_LEN  8
-#define TE_WORD 16
-#define TE_ID   24
-#define TE_SIZE 32
+// ---- TokEnt: { text, len, word, id, taught } ----
+// `taught` is the one field stage0's TokEnt does not have, and the divergence is
+// deliberate (the same kind MAXSTRS/MAXGLOBALS/MAXPARAMS already are): the seed
+// has no word_add at all, so it can never set it. 1 marks a lexeme a MODULE
+// registered through hooks.mc's word_add -- syntax, syntax_stmt, syntax_expr,
+// syntax_infix, type_alias, type_new -- and it is what source_claim scopes. A
+// `#token`/`#rule`/`#infix` literal goes through tok_add directly and is NOT
+// marked: those belong to whoever wrote the directive, in the source that wrote
+// it. A mark per entry rather than an id threshold, because the two roads
+// interleave: `#rule` adds tokens while a taught compiler parses.
+#define TE_TEXT   0
+#define TE_LEN    8
+#define TE_WORD   16
+#define TE_ID     24
+#define TE_TAUGHT 32
+#define TE_SIZE   40
 
 // ---- Token: { id, start, len, val, line, file } ----
 #define TOK_ID    0
@@ -111,17 +121,21 @@
 #define TOK_FILE  40
 #define TOK_SIZE  48
 
-// ---- OpenFile: { cp, cend, line, name, src, len } ----
+// ---- OpenFile: { cp, cend, line, name, src, len, claimed } ----
 // `src`/`len` are the buffer this frame was pushed WITH, kept untouched while
 // cp walks it: that is what on_source replays to a handler registered after the
 // push (the entry file, always, since lex_init runs before user_init).
-#define OF_CP   0
-#define OF_CEND 8
-#define OF_LINE 16
-#define OF_NAME 24
-#define OF_SRC  32
-#define OF_LEN  40
-#define OF_SIZE 48
+// `claimed` is the answer of the source_claim chain for this frame, asked ONCE
+// at push time (and re-asked for every open frame when a handler registers):
+// the identifier branch reads it per lexeme, so it must not be a call.
+#define OF_CP      0
+#define OF_CEND    8
+#define OF_LINE    16
+#define OF_NAME    24
+#define OF_SRC     32
+#define OF_LEN     40
+#define OF_CLAIMED 48
+#define OF_SIZE    56
 
 uptr toktab;                          // M23: grows by doubling (arena.mc grow())
 i64 tokcap = 0;
@@ -166,6 +180,8 @@ void set_te_text(uptr e, uptr v) { st64(e + TE_TEXT, v); }
 void set_te_len(uptr e, i64 v)   { st64(e + TE_LEN, v); }
 void set_te_word(uptr e, i64 v)  { st64(e + TE_WORD, v); }
 void set_te_id(uptr e, i64 v)    { st64(e + TE_ID, v); }
+i64  te_taught(uptr e) { return ld64(e + TE_TAUGHT); }
+void set_te_taught(uptr e, i64 v) { st64(e + TE_TAUGHT, v); }
 
 // ---- Token accessors ----
 i64  tok_id(uptr t)    { return ld64(t + TOK_ID); }
@@ -195,6 +211,8 @@ void set_of_line(uptr f, i64 v)  { st64(f + OF_LINE, v); }
 void set_of_name(uptr f, uptr v) { st64(f + OF_NAME, v); }
 void set_of_src(uptr f, uptr v)  { st64(f + OF_SRC, v); }
 void set_of_len(uptr f, i64 v)   { st64(f + OF_LEN, v); }
+uptr of_claimed(uptr f)          { return ld64(f + OF_CLAIMED); }
+void set_of_claimed(uptr f, i64 v) { st64(f + OF_CLAIMED, v); }
 
 uptr inc_at(i64 i)            { return ld64(inclist + i * 8); }
 void set_inc_at(i64 i, uptr v) { st64(inclist + i * 8, v); }
@@ -229,6 +247,7 @@ i64 tok_add(uptr text, i64 len) {
     set_te_len(ne, len);
     set_te_word(ne, is_alpha(ld8(text)));
     set_te_id(ne, 256 + ntok);
+    set_te_taught(ne, 0);              // a plain lexeme; word_add marks its own
     ntok = ntok + 1;
     return 256 + ntok - 1;
 }
@@ -311,6 +330,68 @@ void tok_init() {
     tok_add(".", 1);
 }
 
+// 1 when `id` is a lexeme a module TAUGHT (hooks.mc's word_add). The id of an
+// entry is 256 + its index and entries are never removed, so this is a load and
+// not a scan -- it runs once per identifier lexed.
+i64 tok_is_taught(i64 id) {
+    if (id < 256) return 0;
+    if (id - 256 >= ntok) return 0;
+    return te_taught(te_at(id - 256));
+}
+
+// word_add says so here; core_types_init() unsays it for the one word the CORE
+// registers through the same road (`i32`), which is a core primitive and not
+// something a module taught.
+void tok_set_taught(i64 id, i64 v) {
+    if (id < 256) return;
+    if (id - 256 >= ntok) return;
+    set_te_taught(te_at(id - 256), v);
+}
+
+// ---- source_claim, reached through one function pointer ----
+// The registry lives in src/hooks.mc, like every other one; the lexer must not
+// name a symbol of that file (src/lexdump.mc includes this one with arena.mc and
+// nothing else), so hooks.mc stores &run_source_claim here on the first
+// registration. With nothing registered the pointer is 0, every frame is
+// claimed, and the identifier branch below behaves exactly as it always has.
+uptr chook_fn = 0;
+i64  chook_busy = 0;                  // 1 while a claim handler is running
+
+void lex_set_claim_hook(uptr fn) { chook_fn = fn; }
+
+// the claim of one source, asked ONCE per frame. The busy flag is the same
+// guard on_source has and for the same reason: a handler that pushes a source
+// from inside the callback interleaves one push with the next.
+i64 lex_ask_claim(uptr name) {
+    if (chook_fn == 0) return 1;
+    chook_busy = 1;
+    i64 r = callp(chook_fn, name);
+    chook_busy = 0;
+    return r != 0;
+}
+
+// Every frame already open, re-asked when a handler registers -- the mirror of
+// lex_replay_sources. lex_init pushes the ENTRY before user_init runs, so
+// without this the one source a module was asked to compile could never be
+// claimed. Re-asking the WHOLE chain (and not just the new handler) is what
+// keeps "any handler answering 1 claims it" true of a frame decided earlier.
+void lex_reclaim_sources() {
+    i64 i = 0;
+    loop {
+        if (i >= nopen) break;
+        uptr f = of_at(i);
+        set_of_claimed(f, lex_ask_claim(of_name(f)));
+        i = i + 1;
+    }
+}
+
+// is the source being lexed one the module claims? With no handler registered
+// every frame was pushed with 1, so this is a load and a test.
+i64 lex_claimed() {
+    if (nopen == 0) return 1;
+    return of_claimed(of_at(nopen - 1));
+}
+
 // identifier: only matches word=true entries
 i64 word_id(uptr s, i64 len) {
     i64 i = 0;
@@ -321,6 +402,22 @@ i64 word_id(uptr s, i64 len) {
         i = i + 1;
     }
     return -1;
+}
+
+// word_id, scoped: a word a MODULE taught is a word only in the sources that
+// module claims; anywhere else the lexeme is an ordinary identifier, which is
+// what lets a taught compiler still read the core's own files (where `type` and
+// `out` are variable names). Only the identifier branch is scoped -- a taught
+// OPERATOR is punctuation and cannot collide with a name -- and only word_add's
+// six roads are marked, so `#rule`/`#infix`/`#token` words are unaffected.
+// word_id itself stays a plain table lookup: a module asking for the id of a
+// word (examples/lang does) is asking the registry, not lexing a source.
+i64 lex_word_id(uptr s, i64 len) {
+    i64 id = word_id(s, len);
+    if (id < 0) return id;
+    if (lex_claimed()) return id;
+    if (tok_is_taught(id)) return -1;
+    return id;
 }
 
 // punctuation/operator: longest prefix, linear and deterministic scan
@@ -499,6 +596,7 @@ void lex_replay_sources(uptr fn) {
 // relative includes by name instead of by path (M15).
 void lex_push_mem(uptr name, uptr src, i64 len, i64 virt, i64 line) {
     if (shook_busy) die2("on_source handler pushed a source", name);
+    if (chook_busy) die2("source_claim handler pushed a source", name);
     i64 oc = opencap;
     fstack = grow(T_OPENS, fstack, nopen, &opencap, OF_SIZE);
     if (opencap != oc) {
@@ -527,6 +625,10 @@ void lex_push_mem(uptr name, uptr src, i64 len, i64 virt, i64 line) {
     cp = src;
     cend = src + len;
     cline = 1;
+    // the claim, before the announcement: an on_source handler that reads a
+    // token of the frame it is being told about must see the same scope every
+    // later read of it will see.
+    set_of_claimed(of_at(nopen - 1), lex_ask_claim(name));
     // the hook, last: cp/cend/cline already describe the new frame, so a
     // handler that reads p_file()/lex_file() sees the source it is being told
     // about. Every road gets here -- the entry (lex_init), a relative
@@ -1116,7 +1218,7 @@ i64 subst_apply(uptr t) {
             i64 ln = cstrlen(to);
             set_tok_start(t, to);            // the lexeme becomes the replacement
             set_tok_len(t, ln);
-            i64 wid = word_id(to, ln);
+            i64 wid = lex_word_id(to, ln);      // scoped, like any other lexeme
             if (wid >= 0) set_tok_id(t, wid);
             else          set_tok_id(t, T_IDENT);
             return 1;
@@ -1159,7 +1261,7 @@ void lex_next(uptr t) {
         }
         set_tok_len(t, cp - tok_start(t));
         if (subst_apply(t)) return;          // M21: only here, and by whole lexeme
-        i64 wid = word_id(tok_start(t), tok_len(t));
+        i64 wid = lex_word_id(tok_start(t), tok_len(t));
         if (wid >= 0) set_tok_id(t, wid);
         else          set_tok_id(t, T_IDENT);
         return;

@@ -249,6 +249,54 @@ void run_on_source(uptr name, uptr src, i64 len) {
     }
 }
 
+// ---- source_claim, the scope of a module's taught words ----
+// `source_claim(&f)` registers `i64 f(uptr name)`: 1 for a source this module's
+// dialect owns, 0 for one it does not. It is the fourth registration keyed by
+// nothing and the second that fires from the lexer.
+//
+// What it changes: a word a module registered through word_add -- syntax,
+// syntax_stmt, syntax_expr, syntax_infix, type_alias, type_new -- stops being a
+// word in a source no handler claims, and lexes as an ordinary identifier
+// there. Nothing else moves: the tables are unchanged, the grammar positions
+// are unchanged, and a `#rule`/`#infix`/`#token` word is not scoped at all,
+// because it belongs to whoever included the directive.
+//
+// Why it exists, measured by the consumer that asked for it: a registration
+// takes its word away from the WHOLE program (docs/surface.md § Tier 3), and a
+// taught compiler still has to read the core's own files -- `<mc/objmodel>`
+// names a parameter `type`, `<mc/macho>` names one `out`. Before this, a module
+// that taught `type` could not compile the compiler it was built on
+// (`objmodel:293: name expected`), and renaming the core's identifiers would
+// only defer the next collision.
+//
+// Handlers run in registration order and ANY 1 claims the source; with none
+// registered every source is claimed, which is the behaviour every compiler had
+// before the hook existed, byte for byte.
+uptr claim_fn;
+i64  claimcap = 0;
+i64  nclaim = 0;
+
+uptr claim_fn_at(i64 i) { return ld64(claim_fn + i * 8); }
+
+void source_claim(uptr fn) {
+    claim_fn = grow(T_SRCCLAIM, claim_fn, nclaim, &claimcap, 8);
+    st64(claim_fn + nclaim * 8, fn);
+    nclaim = nclaim + 1;
+    lex_set_claim_hook(&run_source_claim);
+    lex_reclaim_sources();             // the frames already open, re-asked
+}
+
+// the chain, in registration order; the first 1 wins
+i64 run_source_claim(uptr name) {
+    i64 i = 0;
+    loop {
+        if (i >= nclaim) break;
+        if (callp(claim_fn_at(i), name)) return 1;
+        i = i + 1;
+    }
+    return 0;
+}
+
 // applies the registered passes, in order: root = f(root)
 i64 run_passes(i64 root) {
     i64 i = 0;
@@ -290,6 +338,10 @@ i64 word_add(uptr word) {
     i64 id = tok_add(word, cstrlen(word));
     if (id >= K_U8 && id <= K_EXTERN)
         die2("cannot redefine core keyword", word);
+    // ...and this is the one road that marks a lexeme as TAUGHT, which is what
+    // source_claim scopes. A `#rule` dispatch literal reaches tok_add directly
+    // and is not marked: it belongs to the source that wrote the directive.
+    tok_set_taught(id, 1);
     return id;
 }
 
@@ -611,7 +663,13 @@ i64 type_new(uptr name, i64 width, i64 align, i64 kind) {
 // `i32: removed by this compiler`.
 i64 ty_i32 = 0;
 
-void core_types_init() { ty_i32 = type_new("i32", 4, 4, TK_SINT); }
+void core_types_init() {
+    ty_i32 = type_new("i32", 4, 4, TK_SINT);
+    // ...through the same word_add every module uses, which would mark it
+    // taught and let a source_claim handler scope the CORE's own primitive out
+    // of the files it does not claim. `i32` is not something a module taught.
+    tok_set_taught(word_id("i32", 3), 0);
+}
 
 // ---- M41: the machine-declared width of uptr ----
 // The one fixed decision of the core a module may override, and the reason M24
@@ -1025,12 +1083,28 @@ i64 subcommand_find(uptr name) {
     return -1;
 }
 
-// the usage text of every registered subcommand, in registration order
+// The usage of every subcommand this binary HAS, one line per name, in
+// first-registration order -- so `mc` with no argument keeps printing build,
+// limits and sysroot in that order, byte for byte.
+//
+// The text is the LAST registration's, because that is the one subcommand_find
+// dispatches to: a module that re-registers `build` replaces it, and a usage
+// listing the replaced entry (or listing the name twice) would describe a
+// compiler that does not exist. Order and text come from opposite ends of the
+// table on purpose.
 void subcommand_usage() {
     i64 i = 0;
     loop {
         if (i >= nsubcmd) break;
-        out_str(2, sub_use_at(i));
+        uptr nm = sub_name_at(i);
+        i64 j = 0;
+        i64 dup = 0;
+        loop {                         // already printed under this name?
+            if (j >= i) break;
+            if (str_eq(sub_name_at(j), nm)) dup = 1;
+            j = j + 1;
+        }
+        if (!dup) out_str(2, sub_use_at(subcommand_find(nm)));
         i = i + 1;
     }
 }

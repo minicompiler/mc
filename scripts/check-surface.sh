@@ -1352,6 +1352,196 @@ else
     fi
 fi
 
+# ---- source_claim: a module's taught words apply only where it says ----
+# The consumer's collision, whole: `type` and `out` are ordinary identifiers in
+# the compiler's own sources, and a Tier 3 registration takes its word away from
+# the WHOLE program -- so a module that teaches either one could not compile the
+# core it was built on. Three compilers differ by ONE registration
+# (lib/claim_demo.mc): with the scope, without it, and with a handler that
+# claims nothing.
+mkdir -p "$tmp/claim"
+cat > "$tmp/claim/side.mc" <<'CLSIDE'
+// an ordinary core-flavoured file: `type` and `out` are NAMES here, exactly as
+// they are in <mc/objmodel> and <mc/macho>
+i64 core_type(i64 type) { return type; }
+i64 core_out(i64 out) { return out; }
+CLSIDE
+cat > "$tmp/claim/main.tk" <<'CLMAIN'
+#include "side.mc"
+type answer 40;
+i64 main() { return answer + core_type(out) + core_out(out); }
+CLMAIN
+
+cldemo="build/mc-claim-demo"
+clopen="build/mc-claim-open"
+clnone="build/mc-claim-none"
+rm -f "$cldemo" "$clopen" "$clnone"
+clbuilt=1
+for pair in "mc_claim_demo.mc $cldemo" "mc_claim_open.mc $clopen" "mc_claim_none.mc $clnone"; do
+    set -- $pair
+    if ! msg=$("$mc1" --exe "lib/$1" -o "$2" 2>&1); then
+        echo "FAIL: compiling lib/$1: $msg"
+        fails=$((fails + 1)); clbuilt=0
+    fi
+done
+
+if [ "$clbuilt" = 1 ]; then
+    # (a) the scope: the taught words in the `.tk` file the module claims, the
+    # core's own vocabulary in the `.mc` file it includes -- one program
+    rm -f "$tmp/claim/prog"
+    if ! msg=$("$cldemo" --exe "$tmp/claim/main.tk" -o "$tmp/claim/prog" 2>&1); then
+        echo "FAIL source_claim scope (compilation: $msg)"
+        fails=$((fails + 1))
+    else
+        "$tmp/claim/prog"; rc=$?
+        if [ "$rc" = 42 ]; then
+            echo "ok source_claim: taught words in main.tk, plain names in side.mc (exit 42)"
+        else
+            echo "FAIL source_claim scope (exit $rc, expected 42)"
+            fails=$((fails + 1))
+        fi
+    fi
+
+    # (b) the same program through the same module WITHOUT source_claim: the
+    # collision the consumer reported, in the file the core reads
+    if msg=$("$clopen" "$tmp/claim/main.tk" -o "$tmp/claim/x.o" 2>&1); then
+        echo "FAIL: the unscoped compiler accepted side.mc"
+        fails=$((fails + 1))
+    else
+        case "$msg" in
+        *side.mc:3:*"name reserved by a syntax/type_alias registration: type")
+            echo "ok without source_claim the same module collides (${msg##*/})" ;;
+        *)  echo "FAIL source_claim collision"
+            echo "  expected: .../side.mc:3: name reserved by a syntax/type_alias registration: type"
+            echo "  got:      $msg"
+            fails=$((fails + 1)) ;;
+        esac
+    fi
+
+    # (c) a handler that claims NOTHING: the module's own words are inert
+    # everywhere, its dialect included
+    if msg=$("$clnone" "$tmp/claim/main.tk" -o "$tmp/claim/x.o" 2>&1); then
+        echo "FAIL: the claim-nothing compiler accepted main.tk"
+        fails=$((fails + 1))
+    else
+        case "$msg" in
+        *main.tk:2:*"type expected at top level")
+            echo "ok a module that claims nothing taught this compiler no reachable word" ;;
+        *)  echo "FAIL source_claim claiming nothing"
+            echo "  expected: .../main.tk:2: type expected at top level"
+            echo "  got:      $msg"
+            fails=$((fails + 1)) ;;
+        esac
+    fi
+
+    # (d) the point of the whole hook: the taught compiler reads the CORE. Both
+    # roads -- src/mc.mc from disk and <mc/core> from the bundle -- and the
+    # criterion is byte equality with what the untaught compiler writes, because
+    # scoping a word must change no byte of what is emitted.
+    "$mc1" src/mc.mc -o "$tmp/claim/ref.o" 2>/dev/null
+    printf '#include <mc/host>\n#include <mc/core>\n#include <user_default>\n' > "$tmp/claim/standalone.mc"
+    "$mc1" "$tmp/claim/standalone.mc" -o "$tmp/claim/sa-ref.o" 2>/dev/null
+    clcore=0
+    if ! msg=$("$cldemo" src/mc.mc -o "$tmp/claim/cl.o" 2>&1); then
+        echo "FAIL: the claiming compiler on src/mc.mc: $msg"; clcore=1
+    elif ! cmp -s "$tmp/claim/ref.o" "$tmp/claim/cl.o"; then
+        echo "FAIL: the claiming compiler changed the object of src/mc.mc"; clcore=1
+    fi
+    if ! msg=$("$cldemo" "$tmp/claim/standalone.mc" -o "$tmp/claim/sa.o" 2>&1); then
+        echo "FAIL: the claiming compiler on <mc/core>: $msg"; clcore=1
+    elif ! cmp -s "$tmp/claim/sa-ref.o" "$tmp/claim/sa.o"; then
+        echo "FAIL: the claiming compiler changed the object of <mc/core>"; clcore=1
+    fi
+    if [ "$clcore" = 0 ]; then
+        echo "ok source_claim: the taught compiler compiles src/mc.mc AND <mc/core>, byte for byte"
+    else
+        fails=$((fails + 1))
+    fi
+    # ...and the same file through the unscoped module, which is the report the
+    # consumer sent: a bundled core file, by its bundled name
+    if msg=$("$clopen" "$tmp/claim/standalone.mc" -o "$tmp/claim/x.o" 2>&1); then
+        echo "FAIL: the unscoped compiler accepted <mc/core>"
+        fails=$((fails + 1))
+    else
+        case "$msg" in
+        "mc/objmodel:"*"name reserved by a syntax/type_alias registration: type")
+            echo "ok without source_claim the bundled core collides too ($msg)" ;;
+        *)  echo "FAIL source_claim bundled collision"
+            echo "  expected: mc/objmodel:N: name reserved by a syntax/type_alias registration: type"
+            echo "  got:      $msg"
+            fails=$((fails + 1)) ;;
+        esac
+    fi
+fi
+
+# And the inertness half: a module whose ONLY registration is source_claim and
+# whose handler claims every source has to produce exactly the tree and exactly
+# the object the compiler without the hook produces. 1 is not "no handler
+# registered" -- the callp happens, once per source pushed.
+cnop="build/mc-claim-nop"
+rm -f "$cnop"
+if ! msg=$("$mc1" --exe lib/mc_claim_nop.mc -o "$cnop" 2>&1); then
+    echo "FAIL: compiling lib/mc_claim_nop.mc: $msg"
+    fails=$((fails + 1))
+else
+    cnfails=0
+    for f in tests/*.mc; do
+        [ -f "$f" ] || continue
+        "$mc1"  --dump-ast "$f" > "$tmp/cn0.ast" 2>&1
+        "$cnop" --dump-ast "$f" > "$tmp/cn1.ast" 2>&1
+        cmp -s "$tmp/cn0.ast" "$tmp/cn1.ast" || {
+            echo "FAIL source_claim inert: --dump-ast of $f"; cnfails=$((cnfails + 1)); }
+        "$mc1"  "$f" -o "$tmp/cn0.o" 2>/dev/null
+        "$cnop" "$f" -o "$tmp/cn1.o" 2>/dev/null
+        cmp -s "$tmp/cn0.o" "$tmp/cn1.o" || {
+            echo "FAIL source_claim inert: object of $f"; cnfails=$((cnfails + 1)); }
+    done
+    if [ "$cnfails" = 0 ]; then
+        echo "ok source_claim claiming everything: --dump-ast and objects identical over tests/"
+    else
+        fails=$((fails + cnfails))
+    fi
+fi
+
+# ---- the subcommand table: the usage list is what dispatch would run ----
+# subcommand() is last-wins (subcommand_find scans back to front) and the usage
+# listing used to print every ROW, so a name registered twice was named twice
+# and the entry that would never run was described. A subcommand is registered
+# before mc_main -- user_init runs after the dispatch -- so the fixture is a
+# recreated compiler, the shape docs/guide/98-recreating-the-compiler.md writes.
+cat > "$tmp/dupsub.mc" <<'DUPSUB'
+#include <mc/host>
+#include <mc/core_min>
+
+i64 ds_one(i64 argc, uptr argv) { return 1; }
+i64 ds_two(i64 argc, uptr argv) { return 42; }
+
+void user_init() { }
+
+i64 main(i64 argc, uptr argv, uptr envp) {
+    host_init(envp);
+    subcommand("demo", &ds_one, "       mc demo one\n");
+    subcommand("demo", &ds_two, "       mc demo two\n");
+    return mc_main(argc, argv, envp);
+}
+DUPSUB
+rm -f "$tmp/mcdup"
+if ! msg=$("$mc1" --exe "$tmp/dupsub.mc" -o "$tmp/mcdup" 2>&1); then
+    echo "FAIL: compiling the duplicate-subcommand compiler: $msg"
+    fails=$((fails + 1))
+else
+    lines=$("$tmp/mcdup" 2>&1 | grep -c "mc demo")
+    text=$("$tmp/mcdup" 2>&1 | grep "mc demo" | sed 's/^ *//')
+    "$tmp/mcdup" demo; rc=$?
+    if [ "$lines" = 1 ] && [ "$text" = "mc demo two" ] && [ "$rc" = 42 ]; then
+        echo "ok subcommand registered twice: one usage line, the one dispatch runs"
+    else
+        echo "FAIL subcommand usage after a duplicate registration"
+        echo "  lines=$lines text=$text dispatch=$rc (expected 1, 'mc demo two', 42)"
+        fails=$((fails + 1))
+    fi
+fi
+
 # M4/M8: the probe machine (lib/machine_probe.mc). It derives from `arm64` with
 # machine_tab/machine_slot, delegates every task through the pristine copy, and
 # asserts the depth-type contract on every task it sees -- over the whole of
