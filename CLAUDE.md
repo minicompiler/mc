@@ -3323,6 +3323,64 @@ agents (`.claude/agents/`): `stage0-dev` (C23), `mc-dev` (`.mc` code), `reviewer
   `mc2-windows-x86_64.sha256`
   `67a23742efc58941dc9bfa4b3b1203d70b7183603e7ac18601e5ec210a4a4845` (1322720 B), both also
   produced byte for byte by `build/mc2`.
+- Sandbox forkbomb flake fixed (`docs/specs/M43.md` § Implementation notes -- the forkbomb flake,
+  `docs/reference/sandbox.md`): **a refused call was released by the listener before the kill
+  landed.** The CI job `The sandbox (linux/arm64)`, root cell, case `forkbomb (alt)`
+  (`--allow=threads`, cap 64) failed twice in about ten runs of PR #27 and #29 with
+  `stdout [forked 64], want []` while the report line `refused: process limit (64)` was correct.
+  Reproduced on the Lima oracle (`mc-k7`, Ubuntu 26.04, kernel 7.0.0-30, aarch64, glibc) with a
+  compiler built from `origin/main`, 100 runs of the single case per cell: **14/100 as root,
+  13/100 unprivileged**, the report right every time. The mechanism, measured and not guessed: a
+  refused notification is deliberately left unanswered (step C note 12), but a pending
+  notification is ALSO released when its LISTENER goes away, and the kernel releases it with
+  **ENOSYS** -- a copy of `forkbomb.mc` printing `__errno_location()` answered `forked 64 errno
+  38` on every failing run, never `EAGAIN`. P closes the listener in `sb_go` as soon as
+  `sb_supervise()` returns, and the supervisor loop ends when the status pipe closes, ~1 ms after
+  the kill; the kill itself reaches the STEP only through `zap_pid_ns_processes()` in J's exit
+  path. A timestamped trace of a failing iteration shows `refuse` / `after kill_box` /
+  `status pipe closed -> break` / `sb_go: close the listener` inside the same millisecond, with
+  the step still alive; a 2 s sleep in `sb_refuse` after the kill gave 0/60, which proves the
+  ordering from the other side.
+  The fix makes the order explicit and is **25 code lines in `src/sandbox.mc` and
+  `src/seccomp.mc`, nothing removed**: `sb_refuse` SIGKILLs the task whose call it is
+  (`sb_kill_pid`, using `seccomp_notif.pid`, which the kernel translates into the READER's pid
+  namespace -- the same number `process_vm_readv` already takes), then the box, and only then lets
+  the notification go -- `sb_wait_gone(SB_GONE_MS)` waits for **POLLHUP** on the listener, which
+  is exactly `filter->users == 0`, asking for NO events so that a notification queued behind the
+  refused one cannot wake it; bounded at two seconds, the grace the wall clock already uses.
+  After the fix, same oracle, both cells, **200 iterations each: 0 with stdout, 0 with a wrong
+  report**; `scripts/test-sandbox.sh` **55 ok, 0 failed, 1 skipped** in the root cell and in the
+  unprivileged one; `sh scripts/sandbox-trace.sh --check` green (the profile lists were not
+  touched). `stage0/` untouched (2848/3000), `lib/` and `tests/` untouched.
+  -- `make bundle` re-run BEFORE bootstrapping (93 files, raw 1170795 -> LZ 548311, blob 549473 B).
+  `make check` green end to end (**RC 0, zero FAIL**, 7m59s): `test` 32/32, `check-lex` 145/145
+  (3 skipped), `check-ast`/`check-asm` 146/146, `check-obj` **32/32 identical to the frozen
+  seed**, `check-bundle`, `bootstrap` at a fixed point (`mc2.o == mc3.o`, 1263304 B; the
+  `--dump-asm` diff between `mc1` and `mc2` is **empty**), `check-surface` 32/32, `test-exe`
+  32/32, `check-mc`, `check-standalone`, `check-parts`, `check-toml`, `check-build`,
+  `check-pkg` 85/85, `check-stubs`, `check-sysroots`, `check-limits` **17/17 under 90%**,
+  `test-linux` 41/41 + `test-linux-x86_64` 39/39, the four `--exe` cells 44/44 + 44/44 + 42/42 +
+  42/42, `test-windows` 42/42 and `test-windows-x86_64` 40/40 objects cross-compiled (11/11 each
+  linked), `check-examples`, `check-lang` 18, `check-conc` 21, `check-desktop`, `check-float`,
+  `check-wide`, `check-kernel`, `check-avr`, **`test-sandbox` 55 ok / 0 failed / 1 skipped**
+  (delegated to Lima), `check-docs` (197 symbols, 36 flags, 27 TOML keys, 10 directives, 51
+  samples, 361 links), `site` 89 pages + `check-site`. `make check-linux-host` RC 0 over all four
+  cells (aarch64 musl 41/41 and gnu 42/42, x86_64 musl 39/39 and gnu 40/40), each after its own
+  `mc2l.o == mc3l.o` and with the cross proof against the macOS `build/mc2.o` green.
+  `scripts/check-inert.sh` against a `build/mc1` built from `origin/main`: **33 objects identical**
+  (`tests/*.mc` and `src/mc.mc`) plus byte-identical artefacts for `examples/api`, `lang`, `conc`,
+  `desktop` and `kernel` -- a sandbox fix emits no different byte.
+  The five goldens rewritten **once**, each only after its own criterion: `mc2.sha256`
+  `e6359eb6...94dfb5` -> `6e8eccf15dd071925d13eb146a05e888cff6f25572b60a0ca7a7f191a8c641fe`; the
+  Linux pair deleted and re-recorded by `make check-linux-host` -- `mc2-linux-arm64.sha256`
+  `3789cc6d5cb4f4109b323de831d85e6a815142a7e46ff507a42ad2cbdcba3f80`,
+  `mc2-linux-x86_64.sha256`
+  `ace3d74575d71b4151ec0d10e6fa3caf28cb56c993b107c49820993b86fcb557`; the Windows pair
+  cross-computed per `tests/golden/README.md` -- `mc2-windows-arm64.sha256`
+  `babc44ca1dec8dcaf2dc0f6507a3abe9fce48a283b8887684964208740fd5701` (1289613 B),
+  `mc2-windows-x86_64.sha256`
+  `f6594f109a2eb58b48073042aeaa7127125f74735c137185b336e77e1a0103de` (1325521 B), both also
+  written byte for byte by `build/mc2`.
 - Next: the **site + registry server, M47 S4-S6**, in `minicompiler/mc-registry`; then **M44 steps 4-5**
   (slim / install / upgrade), then **M42 step 2** (PE `--exe`, CI-gated on the Windows runners).
   **M46** only on the owner's request; **M43 Layer 2** after 1.0.0. M13 and M18 stay in the backlog

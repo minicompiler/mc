@@ -97,6 +97,11 @@
 #define SB_POLLIN                      1
 #define SB_POLLERR                     8
 #define SB_POLLHUP                  0x10
+// How long P waits for the box to be gone after it has killed it, before it
+// lets go of the seccomp listener (sb_wait_gone). It is the same two seconds
+// the wall clock gives the box after its own kill, and for the same reason: a
+// SIGKILL is asynchronous and a bound is not a policy.
+#define SB_GONE_MS                  2000
 #define SB_CLOCK_MONOTONIC             1
 
 // getrlimit(2) resources. The struct is two u64 (soft, hard), written byte by
@@ -628,6 +633,8 @@ i64 sb_now_ms() {
 }
 
 void sb_kill_box();                              // defined below, with the supervisor
+void sb_kill_pid(i64 pid);                       // the same, for one task by pid
+i64  sb_wait_gone(i64 ms);                       // and the wait that must follow both
 void sb_note_setup(i64 site, i64 err);
 void sb_notif_pump();                            // src/seccomp.mc: the policy
 
@@ -1288,6 +1295,51 @@ void sb_fetch_listener(i64 jfd) {
 void sb_kill_box() {
     if (sb_pidc() > 0) sb_sys(SN_KILL, sb_pidc(), SB_SIGKILL, 0, 0, 0, 0);
     if (sb_pidi() > 0) sb_sys(SN_KILL, sb_pidi(), SB_SIGKILL, 0, 0, 0, 0);
+}
+
+// One task, by the pid the notification carried. `seccomp_notif.pid` is
+// translated into the READER's pid namespace, which is P's -- the same number
+// process_vm_readv already takes to read the caller's path (sb_vm_read) -- so
+// P can name the exact task whose call it is about to refuse, instead of
+// waiting for the pid namespace to collapse around it.
+void sb_kill_pid(i64 pid) {
+    if (pid > 0) sb_sys(SN_KILL, pid, SB_SIGKILL, 0, 0, 0, 0);
+}
+
+// Wait until nothing is left under the step's seccomp filter, up to `ms`
+// milliseconds; 1 when the filter is empty, 0 when the grace ran out.
+//
+// This is the second half of "a refused call is never answered" (§ 4, step C
+// note 12, and § Implementation notes -- the forkbomb flake). Leaving the
+// notification pending is what keeps the step inside the system call it asked
+// for -- but a pending notification is ALSO released when its LISTENER goes
+// away, and then the kernel hands the step ENOSYS, which is an ordinary failed
+// call the program can act on. So P must not let go of the listener while a
+// task that could still run is holding one, and the kill it just sent is
+// asynchronous: the box's own processes die when J's death collapses the pid
+// namespace, which happens after P has already killed, reported and closed.
+//
+// POLLHUP on the listener is exactly `filter->users == 0` -- every process
+// under that filter is gone -- and poll(2) reports it whatever the events mask
+// asks for. Which is why this asks for NO events: a notification queued behind
+// the refused one must not wake this loop, because answering one is precisely
+// what must not happen here.
+i64 sb_wait_gone(i64 ms) {
+    if (sb_lfd() < 0) return 1;
+    i64 dead = sb_now_ms() + ms;
+    loop {
+        i64 rem = dead - sb_now_ms();
+        if (rem < 0) return 0;
+        st64(sb_ts(), rem / 1000);
+        st64(sb_ts() + 8, (rem % 1000) * 1000000);
+        st32(sb_pollp(), sb_lfd());
+        st16(sb_pollp() + 4, 0);
+        st16(sb_pollp() + 6, 0);
+        i64 n = sb_sys(SN_PPOLL, sb_pollp(), 1, sb_ts(), 0, 8, 0);
+        if (n == 0 - E_INTR) continue;
+        if (n <= 0) return 0;                    // the grace ran out, or ppoll failed
+        if (ld16(sb_pollp() + 6) & (SB_POLLHUP | SB_POLLERR)) return 1;
+    }
 }
 
 void sb_supervise() {
