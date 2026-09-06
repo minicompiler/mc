@@ -165,12 +165,14 @@ i64 mc_main(i64 argc, uptr argv, uptr envp) {
     i64 want_exe = 0;                           // --exe: the HOST's exe backend
     uptr linkflag = 0;                          // the last of --libc/--interp/--link
 
-    // M17: the machines were registered before this call. `machine()` also
-    // makes each one current, so the host's is named again here -- when it
-    // exists: M41 made it machine_use_if, because a compiler for a foreign
-    // target has no machine by the host's name and must not die for it. From
-    // here on the object backend in use picks its own (src/backend_elf.mc) and
-    // `--machine=` overrides for the dump modes.
+    // M17: the machines were registered before this call, so the HOST's is named
+    // here -- when it exists: M41 made it machine_use_if, because a compiler for
+    // a foreign target has no machine by the host's name and must not die for
+    // it. This is the selection a module's registrations must not undo unless
+    // they REPLACE it (src/hooks.mc, machine()): the raw single-file road has no
+    // [target] and no backend to re-select for it. From here on the object
+    // backend in use picks its own (src/backend_elf.mc) and `--machine=`
+    // overrides for the dump modes.
     machine_use_if(host_machine());             // the host's own, for the dumps
     // M24: everything registered up to here is bundled; --dump-machine reads
     // that snapshot to tell a taught slot from a built-in one

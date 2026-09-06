@@ -1727,6 +1727,58 @@ else
     fails=$((fails + 1))
 fi
 
+# ---- a registration no longer steals the current machine ----
+# lib/user_remach.mc derives from all three bundled machines under their own
+# names, in the order arm64, x86_64, x86_64-win, and changes not one slot --
+# what teaching a type family looks like from the registry's point of view
+# (<float> is the real case). `machine()` used to make EVERY registration
+# current, so the last of the three was in effect: on this macOS/aarch64 host
+# `--dump-machine` said `machine x86_64-win (current)` and `--dump-asm` printed
+# Win64 x86-64 for the raw single-file road, where src/cli.mc had selected the
+# host's machine before user_init() and no backend re-selects it.
+remach="build/mc-remach"
+rm -f "$remach"
+printf 'i64 v(i64 x) { return x; }\ni64 main() { return v(40) + v(2); }\n' > "$tmp/rm.mc"
+if ! msg=$("$mc1" --exe lib/mc_remach.mc -o "$remach" 2>&1); then
+    echo "FAIL: compiling lib/mc_remach.mc: $msg"
+    fails=$((fails + 1))
+else
+    # (1) the host's machine survives three registrations that are not it
+    if [ "$("$remach" --dump-machine "$tmp/rm.mc" 2>&1 | grep -c '^machine arm64 (current)$')" = 1 ]; then
+        echo "ok machine(): re-registering three machines leaves arm64 current"
+    else
+        echo "FAIL machine(): the current machine moved"
+        "$remach" --dump-machine "$tmp/rm.mc" 2>&1 | grep '^machine '
+        fails=$((fails + 1))
+    fi
+    # (2) not one slot changed, so the dump is the stock compiler's, byte for byte
+    if "$remach" --dump-asm "$tmp/rm.mc" > "$tmp/rm-a" 2>&1 \
+       && "$mc1" --dump-asm "$tmp/rm.mc" > "$tmp/rm-b" 2>&1 \
+       && cmp -s "$tmp/rm-a" "$tmp/rm-b"; then
+        echo "ok machine(): --dump-asm is byte for byte the stock compiler's"
+    else
+        echo "FAIL machine(): --dump-asm differs from the stock compiler"
+        head -4 "$tmp/rm-a"
+        fails=$((fails + 1))
+    fi
+    # (3) and the compiler still compiles for this host
+    rm -f "$tmp/rm-x"
+    "$remach" --exe "$tmp/rm.mc" -o "$tmp/rm-x" 2>/dev/null; "$tmp/rm-x"; rc=$?
+    if [ "$rc" = 42 ]; then
+        echo "ok machine(): the derived compiler builds and runs a program (42)"
+    else
+        echo "FAIL machine(): the derived compiler's program exited $rc, want 42"
+        fails=$((fails + 1))
+    fi
+    # (4) --machine= still selects a machine that is NOT current, explicitly
+    if "$remach" --dump-asm --machine=x86_64 "$tmp/rm.mc" 2>&1 | grep -q '^  push rbp$'; then
+        echo "ok machine(): --machine=x86_64 still selects it explicitly"
+    else
+        echo "FAIL machine(): --machine=x86_64 did not select the x86-64 machine"
+        fails=$((fails + 1))
+    fi
+fi
+
 # ---- M41.5: syntax_infix on a CORE operator ----
 # The parser-level counterpart of the machine-level proof just above. Before
 # M41.5 the registration was accepted and then silently undone: ops_init() filled

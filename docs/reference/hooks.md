@@ -139,15 +139,34 @@ records its architecture and therefore has to name the machine that produced it.
 Registers the table of instruction-selection tasks the walker drives, and picks which one is in
 effect. `tab` is `MTASK_COUNT` entries of `&fn`, in `MTASK_*` order; the full contract — every slot,
 its signature, and what the walker keeps for itself — is [machine.md](machine.md). Unlike
-`backend()`, registering a machine also **makes it the one in effect**: a machine is chosen by the
-target, not by a flag, and the compiler always has exactly one. `machine_use` switches between
-registered ones; an unknown name is `unknown machine`.
+`backend()`, a machine is chosen by the target and not by a flag, and the compiler always has
+exactly one **in effect**. `machine_use` switches between registered ones; an unknown name is
+`unknown machine`.
+
+A registration takes that place in three cases and no others:
+
+| the registration | becomes the machine in effect? |
+|---|---|
+| there is none yet (the first machine this compiler registers) | yes |
+| a **new** name | yes — a compiler taught a foreign target has no other machine that could be meant, and the `--dump-*` modes have no backend to select one for them |
+| an **existing** name that is the one in effect | yes — the derived table takes the place of the table it derives from |
+| an **existing** name that is *not* the one in effect | **no** |
+
+The last row is the one to know when a module teaches a type family: `<float>` derives from all
+three bundled machines, one copy per name, and it must not matter in which order it registers them.
+Before this rule every registration became current, so on a macOS/aarch64 host — where `mc_main`
+selects the host's machine *before* `user_init()` — the last of the three, `x86_64-win`, was left
+in effect and `mc x.mc --dump-asm` printed Win64 x86-64. `mc build` never saw it, because every
+backend calls `machine_use` first; the raw single-file road did.
+
+A module that wants a registered machine that is not current says so, the way the backends do:
+`machine_use(name)`, or `--machine=NAME` for a dump.
 
 `src/machine_arm64.mc` fills its own table with `void machine_task(i64 task, uptr fn)` and
 registers it from `void machine_arm64_init()`; `src/machine_x86_64.mc` does the same with
 `void x86_task(i64 task, uptr fn)` and `void machine_x86_64_init()`. `main()` calls both before
-any backend can lower, and then `machine_use("arm64")`, because each registration also makes its
-machine current and the host's is the default.
+any backend can lower, and then `machine_use_if(host_machine())`, because the first registration
+is what is current by default and the host's machine is what the dumps should show.
 
 `void machine_freeze()` is called once by `main()`, after the built-in machines are registered and
 before `user_init()` runs: it takes the snapshot `--dump-machine` ([cli.md](cli.md)) reads to tell
@@ -157,7 +176,8 @@ which is the honest answer for a registry it cannot vouch for.
 Registering a name that is **already registered reuses that name's slot** (M24, decision D5)
 rather than appending, so stacking taught modules that each shadow `arm64` does not walk the table
 towards `too many machines`. `machine_find` already searched back to front, so nothing observable
-changes.
+changes — except that such a registration is current only when it replaces the machine that was
+current, per the table above.
 
 ### `uptr machine_tab(uptr name)` · `void machine_slot(uptr tab, i64 task, uptr fn)`
 

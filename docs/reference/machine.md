@@ -79,9 +79,12 @@ i64  machine_find(uptr name)        // index, or -1; searches back to front
 void machine_use(uptr name)         // make that machine the one in effect
 ```
 
-`machine()` appends to a linear table in registration order and **also makes the machine the one in
-effect** — unlike `backend()`, a machine is not chosen by a flag but by the target, and the compiler
-always has exactly one. The ceiling is fixed (`MAXMACHINES 8`): a machine does not scale with the
+`machine()` appends to a linear table in registration order — unlike `backend()`, a machine is not
+chosen by a flag but by the target, and the compiler always has exactly one **in effect**. A
+registration takes that place when there is no machine yet, when the name is **new**, or when it
+**replaces the name that is in effect**; a registration of some other registered name does not
+(the full rule, and what it is for, is in [hooks.md](hooks.md) § `machine`).
+The ceiling is fixed (`MAXMACHINES 8`): a machine does not scale with the
 program being compiled, so M23's "no MAX* on tables that grow with the input" does not apply.
 
 `src/machine_arm64.mc` builds its own table with two helpers and registers it from `main()`, before
@@ -100,12 +103,12 @@ The walker reaches the table through `uptr mach(i64 task)`, which is the only pl
 `mach_tab`. A machine that is missing is `no machine registered`, not a crash.
 
 **How a machine is chosen (settled in step B).** `main()` registers every machine and then names
-the host's, because every `machine()` call also makes its own table current:
+the host's, because the first registration is what is current by default:
 
 ```c
 machine_arm64_init();
 machine_x86_64_init();
-machine_use("arm64");
+machine_use_if(host_machine());
 ```
 
 From there **the object backend picks**, as its first statement — `backend_elf` does
