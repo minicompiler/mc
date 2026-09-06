@@ -170,32 +170,17 @@ ba1924dc0d40b4582669baca5a31c34f28dac13753cc0ac2a64be71bb309776f
 $ git tag v1.2.0 && git push --tags
 ```
 
-Then register it: a `[[versions]]` row in `index/<name>.toml`, added by pull request to the
-registry the package server at `minicompiler.dev` publishes ([reference/packages.md](../reference/packages.md)
-§ 10):
+Then, once per repository, register it on <https://minicompiler.dev/me> (GitHub login) — a form
+that reads your `[package].name` off the tag and checks it is not already taken and not reserved.
+From then on, a **GitHub Release** on the tag (not the tag alone) is what publishes a version: the
+registry validates it inside the same sandbox `mc sandbox run` uses and, on success, writes a row
+whose `sha256` is the tree hash above, never the archive's. A published row never changes
+afterward; the one edit allowed is `yanked = true`, which makes `add` and `update` skip the
+version without breaking anybody who already locked it.
 
-```toml
-[[versions]]
-version = "1.2.0"
-url     = "https://github.com/you/mc-geo/archive/refs/tags/v1.2.0.tar.gz"
-strip   = 1
-sha256  = "ba1924dc0d40b4582669baca5a31c34f28dac13753cc0ac2a64be71bb309776f"
-deps    = ["mathx 1.0.0"]
-```
-
-`sha256` is the tree hash, never the tarball's: a forge that regenerates its tag archives does not
-break your row. Check it before you send it — this is what the registry's CI runs:
-
-```console
-$ mc pkg check index/geo.toml --yes
-ok     geo 1.2.0
-check  index/geo.toml: 1 rows
-```
-
-It downloads the tag, re-derives the hash, and compares the row against the archive's own
-`mc.toml` — the name and every `[deps]` entry. A published row never changes afterwards; the one
-edit allowed is `yanked = true`, which makes `add` and `update` skip the version without breaking
-anybody who already locked it.
+[Publishing a package](27-publishing.md) is the whole road: registering, what a Release publishes,
+the validator's report, wiring `minicompiler/register-action` so every Release publishes itself,
+and `yank`.
 
 **A private registry costs nothing**: any directory or URL with the same `index/<name>.toml`
 layout is one.
@@ -234,6 +219,7 @@ which stays exit 1. A script can tell them apart.
 
 ## Next
 
+* [Publishing a package](27-publishing.md) — registering, what publishes a version, the CI action
 * [reference/packages.md](../reference/packages.md) — the exhaustive version: the resolution
   order, the lock format, the hash, the closure rule, every message
 * [reference/toml.md](../reference/toml.md) — `[deps]`, `[replace]`, `[registry]`, `[package]`

@@ -601,7 +601,8 @@ Both are recorded, with what each would cost to change, in
 
 ## See also
 
-* [guide/25-packages.md](../guide/25-packages.md) — using one and publishing one, by example
+* [guide/25-packages.md](../guide/25-packages.md) — using a package, by example
+* [guide/27-publishing.md](../guide/27-publishing.md) — publishing one: registering, the CI action, `yank`
 * [toml.md](toml.md) — `[deps]`, `[replace]`, `[registry]`, `[package]`
 * [bundle.md](bundle.md) — what the binary ships, and why a bundled name can be overridden
 * [cli.md](cli.md) — `--libs-dir`
