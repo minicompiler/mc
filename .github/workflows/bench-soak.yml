@@ -1,0 +1,274 @@
+# bench-soak.yml -- the 60-minute HTTP soak: every minimal server under the SAME
+# fixed request rate for the same hour, ONE RUNNER PER SERVER, with the server's
+# process tree sampled every 5 s so memory, CPU and thread counts come out as
+# time series (bench/README.md § The soak; bench/soak/soak.py and report.py).
+#
+# Never on push or pull request: it costs an hour of runner time per server
+# (fourteen in parallel) and measures nothing a commit can break. Dispatched by
+# hand (`gh workflow run bench-soak.yml -f minutes=60`) or by the weekly schedule.
+#
+# Shape: `plan` turns the `servers` input into a matrix; `soak` is one job per
+# server on `ubuntu-latest` (4 vCPU), installing ONLY that server's toolchain at a
+# pinned version, the server pinned to cores 0,1 and oha to cores 2,3; `report`
+# collects every job's artifact and writes the tables and the SVG charts.
+name: bench-soak
+
+on:
+  workflow_dispatch:
+    inputs:
+      minutes:
+        description: "length of the load, in minutes"
+        default: "60"
+        type: string
+      rate:
+        description: "requests per second, total over all connections (oha -q)"
+        default: "3000"
+        type: string
+      connections:
+        description: "concurrent connections (oha -c)"
+        default: "16"
+        type: string
+      keepalive:
+        description: "keep connections open between requests (off: --disable-keepalive)"
+        default: true
+        type: boolean
+      servers:
+        description: "all, or a comma list (mc-fork1, py-stdlib and rb-webrick are only run when named)"
+        default: "all"
+        type: string
+  schedule:
+    - cron: "0 3 * * 0"   # Sunday 03:00 UTC, the full hour with the defaults
+
+permissions:
+  contents: read
+
+# two dispatches queue, they never share runners' worth of results
+concurrency:
+  group: bench-soak
+  cancel-in-progress: false
+
+env:
+  # the schedule carries no inputs: every empty value is the dispatch default
+  MINUTES: ${{ inputs.minutes || '60' }}
+  RATE: ${{ inputs.rate || '3000' }}
+  CONNECTIONS: ${{ inputs.connections || '16' }}
+  KEEPALIVE: ${{ inputs.keepalive }}
+  SERVERS: ${{ inputs.servers || 'all' }}
+  OHA_VERSION: v1.16.0
+  RUST_VERSION: "1.96.0"
+  ZIG_VERSION: "0.16.0"
+  DOTNET_VERSION: "10.0.x"
+  NODE_VERSION: "24"
+  PYTHON_VERSION: "3.12"
+  UVICORN_VERSION: "0.39.0"
+  RUBY_VERSION: "3.3"
+  PUMA_VERSION: "6.6.1"
+  PHP_VERSION: "8.4"
+
+jobs:
+  plan:
+    name: plan the matrix
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      servers: ${{ steps.pick.outputs.servers }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Pick the servers
+        id: pick
+        run: |
+          python3 bench/soak/soak.py --plan "$SERVERS" | tee -a "$GITHUB_OUTPUT"
+
+  soak:
+    name: soak ${{ matrix.server }}
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        server: ${{ fromJSON(needs.plan.outputs.servers) }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Runner facts
+        run: |
+          nproc
+          cat /proc/cpuinfo | grep -m1 'model name' || true
+          free -m
+          uname -a
+          cat /etc/os-release
+          echo "ImageOS=$ImageOS ImageVersion=$ImageVersion"
+          cat /proc/sys/net/ipv4/ip_local_port_range /proc/sys/net/ipv4/tcp_tw_reuse
+          taskset --version
+          python3 --version
+          clang --version | head -1
+
+      # --- the load generator: one pinned release binary, no cargo build -------------------
+      - name: Install oha ${{ env.OHA_VERSION }}
+        run: |
+          gh release download "$OHA_VERSION" -R hatoo/oha -p oha-linux-amd64 -O oha
+          chmod +x oha
+          sudo install -m 755 oha /usr/local/bin/oha
+          oha --version
+
+      # --- ONE toolchain per job, pinned ------------------------------------------------------
+      - name: Install mc (the latest release, checksum verified)
+        if: startsWith(matrix.server, 'mc-')
+        run: |
+          gh release download -R "$GITHUB_REPOSITORY" -p 'mc-*-linux-x86_64.tar.gz' -p 'mc-*-linux-x86_64.tar.gz.sha256' -D dl
+          cd dl
+          ls -l
+          sha256sum -c mc-*-linux-x86_64.tar.gz.sha256
+          tar xzf mc-*-linux-x86_64.tar.gz
+          sudo install -m 755 mc-*-linux-x86_64/mc /usr/local/bin/mc
+          mc --version
+          mc --host
+
+      - name: Set up Go (from bench/http/go/go.mod)
+        if: startsWith(matrix.server, 'go-')
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: bench/http/go/go.mod
+          cache: false
+
+      - name: Set up Rust ${{ env.RUST_VERSION }}
+        if: startsWith(matrix.server, 'rust-')
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+
+      - name: Set up Zig ${{ env.ZIG_VERSION }}
+        if: startsWith(matrix.server, 'zig-')
+        uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+
+      - name: Set up .NET ${{ env.DOTNET_VERSION }}
+        if: startsWith(matrix.server, 'cs-')
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: NativeAOT needs zlib
+        if: matrix.server == 'cs-aot'
+        run: sudo apt-get install -y --no-install-recommends zlib1g-dev
+
+      - name: Set up Node ${{ env.NODE_VERSION }}
+        if: startsWith(matrix.server, 'node-')
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        if: startsWith(matrix.server, 'py-')
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install uvicorn ${{ env.UVICORN_VERSION }}
+        if: matrix.server == 'py-uvicorn'
+        run: |
+          python3 -m pip install --disable-pip-version-check "uvicorn==$UVICORN_VERSION"
+          python3 -m uvicorn --version
+
+      - name: Set up Ruby ${{ env.RUBY_VERSION }}
+        if: startsWith(matrix.server, 'rb-')
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: ${{ env.RUBY_VERSION }}
+
+      - name: Install puma ${{ env.PUMA_VERSION }}
+        if: matrix.server == 'rb-puma'
+        run: |
+          gem install --no-document "puma:$PUMA_VERSION" 'rack:~>3.1'
+          puma --version
+          gem list rack
+
+      - name: Set up PHP ${{ env.PHP_VERSION }}
+        if: startsWith(matrix.server, 'php-')
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ env.PHP_VERSION }}
+
+      # --- build, contract, soak --------------------------------------------------------------
+      - name: Build ${{ matrix.server }}
+        run: sh bench/soak/build.sh "${{ matrix.server }}"
+
+      - name: What was built
+        run: ls -lR bench/soak/bin 2>/dev/null | head -20 || echo "(interpreted server, nothing built)"
+
+      - name: Soak ${{ matrix.server }} for ${{ env.MINUTES }} min at ${{ env.RATE }} req/s
+        run: |
+          ka=true
+          [ "$KEEPALIVE" = "false" ] && ka=false
+          python3 bench/soak/soak.py "${{ matrix.server }}" \
+            --minutes "$MINUTES" --rate "$RATE" --connections "$CONNECTIONS" --keepalive "$ka" \
+            --every 5 --port 18080 --server-cpus 0,1 --load-cpus 2,3 --out bench/soak/out
+
+      - name: Show the facts
+        if: always()
+        run: |
+          cat "bench/soak/out/${{ matrix.server }}/facts.json" || true
+          echo; echo "--- contract"; cat -v "bench/soak/out/${{ matrix.server }}/contract.txt" || true
+          echo; echo "--- server log"; tail -20 "bench/soak/out/${{ matrix.server }}/server.log" || true
+          echo; echo "--- samples (head, tail)"; head -3 "bench/soak/out/${{ matrix.server }}/samples.csv" || true
+          tail -3 "bench/soak/out/${{ matrix.server }}/samples.csv" || true
+
+      - name: Upload soak-${{ matrix.server }}-${{ github.run_id }}
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: soak-${{ matrix.server }}-${{ github.run_id }}
+          path: bench/soak/out/${{ matrix.server }}
+          if-no-files-found: warn
+          retention-days: 90
+
+  report:
+    name: report
+    needs: soak
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Download every server's artifact
+        uses: actions/download-artifact@v4
+        with:
+          pattern: soak-*-${{ github.run_id }}
+          path: bench/soak/out
+
+      - name: Tables and charts
+        run: |
+          ls -R bench/soak/out | head -80
+          python3 bench/soak/report.py bench/soak/out --out bench/soak/out/report
+          python3 - <<'EOF'
+          # every chart must be well-formed XML
+          import glob, xml.dom.minidom
+          for f in sorted(glob.glob("bench/soak/out/report/*.svg")):
+              xml.dom.minidom.parse(f)
+              print("ok", f)
+          EOF
+
+      - name: Upload soak-report-${{ github.run_id }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: soak-report-${{ github.run_id }}
+          path: bench/soak/out/report
+          retention-days: 90
+
+      - name: Summary
+        run: |
+          {
+            cat bench/soak/out/report/RESULTS.md
+            echo
+            echo "The charts (rss.svg, cpu.svg, threads.svg and one per server) are in the artifact"
+            echo "\`soak-report-${{ github.run_id }}\` of this run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}#artifacts"
+          } >> "$GITHUB_STEP_SUMMARY"

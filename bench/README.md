@@ -82,10 +82,12 @@ concurrency shapes, driven with `ab` (Apache Bench) and `oha` under two load con
 ### Build
 
 ```sh
-# mc
-build/mc1 --exe bench/http/mc/serial.mc -o bench/http/bin/mc-serial
-build/mc1 --exe bench/http/mc/fork1.mc  -o bench/http/bin/mc-fork1
-build/mc1 --exe bench/http/mc/forkka.mc -o bench/http/bin/mc-forkka
+# mc -- the platform half of httpmin.mc (SOL_SOCKET, SO_REUSEADDR, the sockaddr_in
+# layout) is bench/http/mc/{macos,linux}/netsys.mc, picked with --include=; on
+# Linux add --libc=gnu (see "The soak" below)
+build/mc1 --exe --include=bench/http/mc/macos bench/http/mc/serial.mc -o bench/http/bin/mc-serial
+build/mc1 --exe --include=bench/http/mc/macos bench/http/mc/fork1.mc  -o bench/http/bin/mc-fork1
+build/mc1 --exe --include=bench/http/mc/macos bench/http/mc/forkka.mc -o bench/http/bin/mc-forkka
 
 # C
 clang -O2 -o bench/http/bin/c-serial bench/http/c/serial.c
@@ -148,11 +150,104 @@ CPU time over total requests served); the four result tables are keep-alive/no-k
 3"; § "Notes and failures" is fourteen numbered, verbatim facts about running this on macOS,
 including two harness defects found and fixed mid-run.
 
-## Round 2 (`http2/`, if present)
+## Round 2 (`http2/`)
 
-A second HTTP round widening the comparison to Node.js (single process and `cluster`), Rust
-`axum`, Python (stdlib `http.server`, ASGI/uvicorn) and Ruby (`WEBrick`, `rackup`/Puma) may appear
-alongside this one, under the same harness and the same load configurations. If `http2/` exists in
-this tree, [`http2/RESULTS.md`](http2/RESULTS.md) is its write-up and `docs/comparison.md` § B
-includes its rows; if it does not, it had not finished running when this page was written and is
-still on the roadmap (`docs/plan.md`).
+The sources of the second HTTP round -- Node.js `http.createServer` single-process and `cluster`,
+Rust `axum` on tokio, Python stdlib `http.server` and ASGI/uvicorn, Ruby `WEBrick` and
+`rackup`/Puma, PHP's built-in server -- are in [`http2/`](http2/README.md), under the same
+contract and the same harness shape as round 1 (`http2/bench.py` is `http/bench.py` with the new
+server table). Their write-up, `http2/RESULTS.md`, does not exist yet: the round had not finished
+running when `docs/comparison.md` was written, so no round-2 row is in its tables. The soak below
+runs seven of them (`node-single`, `node-cluster`, `rust-axum`, `py-uvicorn`, `rb-puma`,
+`php-builtin`, and on request `py-stdlib`/`rb-webrick`) next to round 1's servers, on the same
+runners, which is where their first published numbers will come from.
+
+## C. The soak (`soak/`)
+
+The two rounds above answer "how fast, at what cost, for five seconds". The soak answers the
+question the public Rust/Go/Zig comparisons raise and none of them makes reproducible: **what
+does a minimal server's memory, CPU and latency do over an HOUR under a FIXED request rate** --
+does it drift, and by how much. The claim under test is that Go and Rust drift in memory over an
+hour while Zig does not; `mc`'s fork-per-connection shape and the two C# runtimes are of equal
+interest.
+
+### What it measures
+
+For every server, under exactly the same load:
+
+- **RSS of the whole process tree** (the parent plus every child and worker -- a
+  fork-per-connection server's children, a `cluster`'s workers -- so a shape that keeps its memory
+  in children is not counted as free), every 5 s, plus the parent's `VmRSS`/`VmHWM`;
+- **CPU time of the tree**, from `/proc/<pid>/stat` including the time of children the parent has
+  already reaped, turned into `%CPU` (CPU seconds per wall second) per sample and into
+  **CPU ms per 1k requests** over the hour -- the number comparable across concurrency shapes;
+- **threads and processes** in the tree, and `/proc/loadavg`;
+- **latency** (p50, p99, p99.9), achieved vs requested throughput, response codes and errors,
+  from `oha`'s own JSON.
+
+The report (`soak/report.py`) prints RSS at 1, 10, 30 and 60 minutes and at the end, the peak, and
+the **least-squares slope of RSS over the last fifty minutes** in KiB/min with its R^2 -- the one
+number that says "drifted" or "flat" -- and draws the time series as SVG: `rss.svg`, `cpu.svg`,
+`threads.svg` with every server on one chart, and one three-panel chart per server.
+
+### The protocol
+
+- **One GitHub Actions runner per server** (`ubuntu-latest`, 4 vCPU), all in parallel. Every
+  server gets the same hardware for the same hour with nothing else on it, and the whole matrix
+  takes one hour of wall clock, not fourteen.
+- **Pinned cores.** The server runs under `taskset -c 0,1`, `oha` and the sampler under
+  `taskset -c 2,3`, so the load generator never steals the server's cores and a multi-threaded
+  server's numbers are for two cores, the same two for everyone.
+- **A fixed rate, not "as fast as possible."** `oha -z 60m -q 3000 -c 16` (3000 req/s in total over
+  16 keep-alive connections, `--disable-keepalive` on request): at a fixed rate every server does
+  the same work, so memory and CPU are comparable, and latency measures the server rather than the
+  saturation point. 3000 req/s is well under every server's ceiling from round 1, on purpose.
+- **One toolchain per job, pinned**: the job installs only what its server needs, at the version
+  written in the workflow (`env:` block), and `mc` comes from the LATEST release asset with its
+  `.sha256` verified -- the servers are then built exactly as in the rounds above, with
+  `--exe --libc=gnu --include=bench/http/mc/linux` for the `mc` ones (the Linux `netsys.mc`).
+- **The contract is checked before the load** (`curl -si`: `200 OK`, `content-type: text/plain`,
+  `content-length: 13`, body `hello, world\n`) and again after it: a server that stopped answering
+  fails its job.
+- **Everything is recorded** in `facts.json`: toolchain versions as the tools print them, the
+  server and `oha` command lines verbatim, `nproc`, memory, kernel, `/etc/os-release`, the runner
+  image (`$ImageOS`), the ephemeral-port sysctls, date and time, the pinned cores.
+
+The default set is `mc-serial mc-forkka c-serial go-nethttp rust-threads rust-axum zig-threads
+cs-jit cs-aot node-single node-cluster py-uvicorn rb-puma php-builtin`; `mc-fork1`, `py-stdlib`
+and `rb-webrick` run when named (a fork-per-request server and the two thread-per-connection
+stdlib servers of the scripting languages are shapes, not contenders).
+
+### How to run it
+
+```sh
+gh workflow run bench-soak.yml -f minutes=60                       # the full hour, every server
+gh workflow run bench-soak.yml -f minutes=3 -f servers=mc-forkka,go-nethttp   # a dry run
+gh run watch                                                       # then wait
+```
+
+Inputs: `minutes` (60), `rate` (3000), `connections` (16), `keepalive` (true), `servers`
+(`all`, or a comma list). The workflow also runs itself every Sunday at 03:00 UTC with the
+defaults. It never runs on a push or a pull request.
+
+Results land as artifacts of the run: `soak-<server>-<run id>` per server (`samples.csv`,
+`oha.json`, `facts.json`, `contract.txt`, `server.log`) and `soak-report-<run id>` (`RESULTS.md`,
+`results.json`, the SVG charts); the tables are also in the run's summary page. Locally, the same
+scripts run on any Linux with `oha` and `taskset` on the PATH:
+
+```sh
+sh bench/soak/build.sh mc-forkka                # MC=build/mc1 to use a tree's compiler
+python3 bench/soak/soak.py mc-forkka --minutes 5 --server-cpus 0,1 --load-cpus 2,3
+python3 bench/soak/report.py bench/soak/out     # -> bench/soak/out/report/
+```
+
+### The runner caveat
+
+A GitHub-hosted runner is a virtual machine on shared hardware: another tenant's load, a noisy
+neighbour on the same socket, or a different CPU model from one run to the next all move the
+numbers, and nothing in the run can see it. The conditions block at the top of `RESULTS.md`
+records what CAN be seen -- the image, the kernel, the CPU model line, the memory -- and the
+`loadavg1` column of every `samples.csv` shows whether anything else was running. Compare
+servers within ONE run (same day, same image, one runner each); compare runs with care. The
+`bench/Dockerfile`-on-a-fixed-VPS cell of `docs/comparison.md` § "Where to improve" is the
+answer to that caveat; this workflow is the protocol that cell would run.

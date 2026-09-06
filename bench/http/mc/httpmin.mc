@@ -1,16 +1,21 @@
 // httpmin.mc -- the ~100 lines of examples/api/lib/http.mc this benchmark needs,
 // copied so the file compiles with the DEFAULT compiler (build/mc1): no
 // `class`, no `str`, no rt.mc arena. Response headers are the benchmark contract.
+//
+// The platform half -- SOL_SOCKET, SO_REUSEADDR and the sockaddr_in layout, the
+// only things that differ between Darwin and Linux -- comes from netsys.mc, found
+// through an include root: `--include=bench/http/mc/macos` on macOS,
+// `--include=bench/http/mc/linux` on Linux (the bench/soak workflow). The
+// examples/conc precedent, so one source tree serves both hosts.
 #include <prelude>
 #include <sys>
 
 #define AF_INET      2
 #define SOCK_STREAM  1
-#define SOL_SOCKET   0xFFFF
-#define SO_REUSEADDR 4
 #define SA_IN_LEN    16
 #define BUFCAP       8192
 #define BACKLOG      128
+#include "netsys.mc"
 
 extern i32 socket(i64 domain, i64 type, i64 proto);
 extern i32 setsockopt(i64 fd, i64 level, i64 opt, uptr value, i64 len);
@@ -25,16 +30,6 @@ i64 atoi(uptr s) {
     i64 v = 0; i64 i = 0;
     while (ld8(s + i) >= '0' && ld8(s + i) <= '9') { v = v * 10 + (ld8(s + i) - '0'); i++; }
     return v;
-}
-
-void sockaddr_in_init(uptr sa, i64 port) {
-    i64 i = 0;
-    while (i < SA_IN_LEN) { st8(sa + i, 0); i++; }
-    st8(sa + 0, SA_IN_LEN);
-    st8(sa + 1, AF_INET);
-    st8(sa + 2, (port >> 8) & 0xFF);
-    st8(sa + 3, port & 0xFF);
-    st8(sa + 4, 127); st8(sa + 5, 0); st8(sa + 6, 0); st8(sa + 7, 1);   // 127.0.0.1
 }
 
 i64 http_listen(i64 port) {
