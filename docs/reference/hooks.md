@@ -36,19 +36,23 @@ $ ./my-mc --exe program.mc -o program
 ```
 main()
   ├── backend("macho" | "macho-exe" | "elf-obj", …)     the three built-ins
-  ├── lim_plan()  tok_init()  lex_init(source)
+  ├── lim_plan()  tok_init()  lex_init(source)   the ENTRY is pushed here
   ├── user_init()                     <-- every registration below happens here
+  │                                       (on_source replays the entry to the
+  │                                       handler it has just registered)
   ├── parse_unit()                    <-- syntax / syntax_stmt / syntax_expr /
   │                                       syntax_infix / type_alias / #rule,
-  │                                       on_jump on every return/break/continue
-  │                                       and on_stmt on every statement node
+  │                                       on_jump on every return/break/continue,
+  │                                       on_stmt on every statement node and
+  │                                       on_source on every #include pushed
   ├── run_passes()                    <-- pass(&f), in registration order
   ├── fold()
   └── callp(backend_fn_at(i), …)      <-- backend(&f)
 ```
 
 `user_init()` is called **after** `tok_init()` and `lex_init()` and **before** the first token is
-read. Both halves matter: the ids `K_U8..K_EXTERN` are fixed at 256..269, so a `tok_add` before
+read. That is also why `on_source` announces the sources already open when it is registered: the
+entry file was pushed one line earlier. Both halves matter: the ids `K_U8..K_EXTERN` are fixed at 256..269, so a `tok_add` before
 `tok_init` would shift the whole core table; and because the lexer is incremental, a registration
 made here still applies to the entire source.
 
@@ -258,7 +262,7 @@ system or architecture becomes reachable from `mc.toml` without editing the driv
 
 ---
 
-## 3. Tier 3 and Tier 4 — the six word registrations, and the five hooks that claim no word
+## 3. Tier 3 and Tier 4 — the six word registrations, and the six hooks that claim no word
 
 Each of the six claims a **word** in the lexer and a **grammar position**. All six refuse a core
 keyword (`cannot redefine core keyword`), and all six reserve the word for the *whole program*,
@@ -280,11 +284,12 @@ vocabulary, and the parser says so plainly —
 
 In every case the parse is stopped **on the registered word**; consuming it is the handler's job.
 
-`on_stmt(&f)` (M21.5), `on_jump(&f)` (M31), `syntax_lit(&f)` (M24), `syntax_param(&f)` (M41.5) and
-`syntax_type(&f)` are the five registrations that claim no word — and `intrinsic(name, …)` (M24)
-claims a *call name* rather than a lexeme, so none of the paragraph above applies to it either.
-They observe, replace or own nodes at a position the grammar reaches on its own. Each has its own
-section below.
+`on_stmt(&f)` (M21.5), `on_jump(&f)` (M31), `syntax_lit(&f)` (M24), `syntax_param(&f)` (M41.5),
+`syntax_type(&f)` and `on_source(&f)` are the six registrations that claim no word — and
+`intrinsic(name, …)` (M24) claims a *call name* rather than a lexeme, so none of the paragraph
+above applies to it either. Five of them observe, replace or own nodes at a position the grammar
+reaches on its own; `on_source` is the one hook that is not on the parse path at all — it fires
+from the lexer, once per source pushed. Each has its own section below.
 
 **A word may be a type and something else at the same time, and that is a contract, not an
 accident.** `tok_add` is idempotent — the same lexeme always gets the same id — so
@@ -783,6 +788,67 @@ With nothing registered the parser does not even make the call (`nonjump == 0`);
 untaught compiler produces are byte for byte what they were.
 `uptr onjump_fn_at(i64 i)` is the lookup side, and `i64 run_on_jump(i64 n, i64 kind, i64 depth)` is
 what the parser calls.
+
+### `void on_source(uptr fn)` — every source the lexer pushes
+
+```c
+void f(uptr name, uptr src, i64 len)
+```
+
+Called from `lex_push_mem`, right after `cp`/`cend` change, for **every** source the lexer opens:
+
+| road | who pushes it |
+|---|---|
+| the entry file | `lex_init`, from the CLI or from `mc build` |
+| `#include "x.mc"` | `do_directive` → `lex_include` — *internal to the core* |
+| `#include <name>` | the bundle (`bundle_open`) or a locked package (`libs_open`) — also internal |
+| a replayed source | `p_push_source(name, text, len)`, from any module |
+
+`name` is what `lex_file()` prints for that frame — a normalised path for a file on disk, the
+canonical bundled name (`prelude`, `mc/core`) for a bundled one, and whatever string the module
+passed for a pushed one. `src`/`len` are the whole buffer, not the part still to be read. The
+handler returns nothing: this is an announcement, and the core does not consult the answer.
+
+**Why it exists.** A module can already see the files it opens *itself* — it calls `lex_include`
+from its own handler, so it knows the name. What it cannot see is a `#include` the **core**
+resolved: `do_directive` is internal and pushes without telling anybody. A module doing a lexical
+pre-scan (the motivating case is free declaration order — reserving the *word* of every type in a
+file before any body is parsed, with the row built later) was therefore blind to exactly the files
+the source itself asks for. This is that missing announcement and nothing more.
+
+**The entry file is announced too**, and a module need not scan it by hand. `lex_init` pushes the
+entry *before* `user_init()` runs, so the natural call has already happened by the time a handler
+can exist; `on_source` closes that by announcing, **at registration time and to the newly
+registered handler alone**, every source already open, in push order. The rule is therefore: *a
+handler sees every source pushed after it registers, plus the ones already open when it registers.*
+Registering during parsing is allowed and follows the same rule — the frames already open are
+replayed with their whole buffers, which is why the frame record keeps `src`/`len` untouched while
+`cp` walks it.
+
+**The one guard.** A handler runs with the frame it is being told about already on the stack, and
+it must not push a source from inside the callback: the announcement of one source would interleave
+with the opening of the next, and a handler that pushes unconditionally recursed until the process
+stack was gone (SIGSEGV, no diagnostic, measured). Any `lex_push_mem` reached from inside a handler
+— `p_push_source`, `lex_include`, `#include` — is refused with
+`on_source handler pushed a source: <name>`, naming the source the handler tried to push. Reading
+is unrestricted: the buffer is there to be scanned.
+
+```c
+// count the sources and remember their names
+i64 my_nsrc = 0;
+
+void my_source(uptr name, uptr src, i64 len) {
+    my_nsrc = my_nsrc + 1;
+    if (my_ends_with(name, ".tk")) my_prescan(src, len);   // reserve the words, build no rows
+}
+void user_init() { on_source(&my_source); }
+```
+
+With nothing registered the lexer does not even make the call (the function pointer is 0), and the
+objects an untaught compiler produces are byte for byte what they were. `uptr onsrc_fn_at(i64 i)`
+is the lookup side and `void run_on_source(uptr name, uptr src, i64 len)` is what the lexer calls —
+through `lex_set_source_hook`, one function pointer, because `src/lexdump.mc` includes the lexer
+without `src/hooks.mc` (the same reason the bundle is reached through `bopen_fn`).
 
 ---
 
