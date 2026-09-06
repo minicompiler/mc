@@ -34,6 +34,10 @@ edit_url = "https://github.com/minicompiler/mc/blob/main/"
 # search.json plus the header form and its inline script.
 search = true
 
+# Rendered into the home page's `.home-extra`, below the fixed hero/cards/showcase
+# markup in templates/home.html (docs/comparison.md, one sentence).
+home = "home-extra.md"
+
 docs      = "../docs"
 out       = "public"
 templates = "templates"
@@ -81,7 +85,7 @@ title = "Internals"
 dir   = "."
 url   = "internals/"
 order = ["plan", "core-language", "surface", "build", "bootstrap", "determinism",
-         "macho-notes", "ci"]
+         "macho-notes", "ci", "comparison"]
 
 [section.specs]
 title = "Milestone specs"
