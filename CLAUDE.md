@@ -3771,6 +3771,66 @@ agents (`.claude/agents/`): `stage0-dev` (C23), `mc-dev` (`.mc` code), `reviewer
   `docs/reference/diagnostics.md` (one new row, and the `name reserved` row now names the escape),
   `docs/reference/cli.md` (the usage listing), `docs/surface.md` (§ "Where a module's words
   apply", and the registration table).
+- The default registry is `https://pkg.minicompiler.dev` (2026-09-06; `docs/specs/M44.md` § 4
+  Deviations): **one string literal, and the mismatch it closes.** `pkg_default_registry()` in
+  `src/pkg.mc` answered `https://minicompiler.dev/registry` and `mc pkg` reads
+  `<registry>/index/<name>.toml`, while the deployed server serves the index at
+  `https://pkg.minicompiler.dev/index/<name>.toml` -- so `mc pkg sync|add|check` with no
+  `--registry` and no `[registry].url` asked for a path that answered the site's static 404
+  (measured: `curl -o /dev/null -w %{http_code}` gives `404 text/html` for
+  `https://minicompiler.dev/registry/index/mc.toml` and `404 text/plain` for
+  `https://pkg.minicompiler.dev/index/mc.toml`, which is the registry saying "no such package" --
+  no version is published yet). The literal now names the canonical host: the one the rows' own
+  `url` and archive addresses already point at, and the one `MCREG_PKG_BASE` sets on the server.
+  **The registry moved first** (`minicompiler/mc-registry` PR #11: the site host answers
+  `/registry/index/<name>.toml` with the registry host's own handler -- same generator, same
+  `application/toml`, same `public, max-age=300`, same 404 -- an alias and not a second layout),
+  so a compiler older than this change is not stranded by the flip.
+  Measured here with the new `build/mc1`, no `--registry`, no `[registry].url`:
+  `fetch  index mathx` / `url    https://pkg.minicompiler.dev/index/mathx.toml`, and with `--yes`
+  the downloader is spawned against exactly that URL.
+  Docs: `docs/reference/packages.md` (which also records the alias), `docs/reference/toml.md`,
+  `docs/reference/cli.md`, `docs/build.md`, `docs/guide/25-packages.md`, `docs/specs/M44.md` § 4,
+  and `docs/guide/27-publishing.md` § 10, whose "until the compiler's default is updated to match,
+  name the registry explicitly" workaround (merged as #38 while this branch was in flight) is
+  replaced by the fact -- no `--registry` is needed, and an older compiler keeps working through
+  the alias.
+  No global was added (`check-limits` still reports `globals 454/512, 88%`), and nothing the
+  compiler emits moved: `scripts/check-inert.sh` against a `build/mc1` built from `origin/main`
+  f6c6c3d is **33 objects identical** (`tests/*.mc` and `src/mc.mc`) plus byte-identical artefacts
+  for `examples/api`, `lang`, `conc`, `desktop` and `kernel` -- the five goldens move only through
+  the string and the bundle.
+  `make bundle` re-run before bootstrapping (93 files, raw 1189363 -> LZ 556103, blob 557265 B).
+  `make check` **RC 0, zero FAIL**: `budget` 2848/3000, `test` 32/32, `check-lex` 158/158
+  (3 skipped), `check-ast`/`check-asm` 159/159, `check-obj` **32/32 identical to the frozen seed**,
+  `check-bundle`, `bootstrap` at a fixed point (`mc2.o == mc3.o`, 1277128 B; the `--dump-asm` diff
+  between `mc1` and `mc2` is **empty**), `check-surface` 32/32, `test-exe` 32/32 via `--exe`,
+  `check-mc`, `check-standalone`, `check-parts`, `check-toml` 10/10, `check-build`,
+  **`check-pkg` 94/94**, `check-sysroots` (13 rows), `check-stubs` 9/9, `check-limits`
+  **17/17 under 90%**, `check-minimal`, `test-linux` 41/41 and `test-linux-x86_64` 39/39,
+  the four `--exe` cells 44/44 + 44/44 + 42/42 + 42/42, `test-windows` 42/42 and
+  `test-windows-x86_64` 40/40 objects cross-compiled and linked, `check-examples`, `check-lang`,
+  `check-conc`, `check-desktop`, `check-float`, `check-wide`, `check-kernel`, `check-avr`,
+  `test-sandbox` 60 ok / 0 failed / 1 skipped, `check-docs` (199 symbols, 36 flags, 27 TOML keys,
+  10 directives, 51 samples, 382 links), `site` 91 pages + `check-site` 0 link problems
+  (numbers from the run after the rebase onto `da506ce`, which brought
+  `docs/guide/27-publishing.md` in).
+  `make check-linux-host` **RC 0 over all four cells** (aarch64 musl/gnu, x86_64 musl/gnu), each
+  after its own `mc2l.o == mc3l.o` and with the cross proof
+  (`mc2l --backend=macho src/mc.mc` byte for byte the macOS `build/mc2.o`) green.
+  The five goldens rewritten **once**, each only after its own criterion: `mc2.sha256`
+  `f4a841bc...db1083` -> `322c18093d78ef18853b9493ef261c0d29ac36c3cd247c391d8a740cdbc29581`
+  (empty `--dump-asm` diff + `cmp build/mc2.o build/mc3.o`); the Linux pair deleted and
+  re-recorded by `make check-linux-host` -- `mc2-linux-arm64.sha256`
+  `d04e0e50d603d90dd3ee8f209fbb45bf8ea0ddb11936fb2f794a0973f38cc24b`,
+  `mc2-linux-x86_64.sha256`
+  `379c9f96701dc47a878961c9e4f4c2cac848d6ac7fd4760c92080b4368d81784`, each recorded in its musl
+  cell and re-verified by the gnu cell of the same architecture; the Windows pair cross-computed
+  per `tests/golden/README.md` -- `mc2-windows-arm64.sha256`
+  `fa601d8fa1ebee27fc9b598b15b3f60b3889d32efe62aef4a87edf85be6a913c` (1303703 B),
+  `mc2-windows-x86_64.sha256`
+  `bebd088c036e53c8a00932693f83fffbfbac0c24899b63ea4dc700db60ae1a6a` (1339351 B), both also
+  written byte for byte by `build/mc2`.
 - Next: the **site + registry server, M47 S4-S6**, in `minicompiler/mc-registry`; then **M44 steps 4-5**
   (slim / install / upgrade), then **M42 step 2** (PE `--exe`, CI-gated on the Windows runners).
   **M46** only on the owner's request; **M43 Layer 2** after 1.0.0. M13 and M18 stay in the backlog

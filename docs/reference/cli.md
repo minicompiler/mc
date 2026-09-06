@@ -341,7 +341,7 @@ from its `mc.lock` and its `deps/` tree.
 | flag | meaning |
 |---|---|
 | `--yes` | actually download. Without it, anything that would fetch prints the plan — source, expected tree hash, destination — says `nothing was downloaded: re-run with --yes` and exits 0. There is no prompt: `mc` has no `isatty` |
-| `--registry URL\|DIR` | where the index lives, instead of `[registry].url` or the default `https://minicompiler.dev/registry`. A directory is read in place; a URL is fetched into `<libs>/index/<name>.toml`, the offline snapshot |
+| `--registry URL\|DIR` | where the index lives, instead of `[registry].url` or the default `https://pkg.minicompiler.dev`. A directory is read in place; a URL is fetched into `<libs>/index/<name>.toml`, the offline snapshot |
 | `--libs-dir DIR` | where installed packages live, instead of `~/.mc/libs`. `mc build` takes it too, so no CI job depends on `HOME` |
 | `--config FILE` | the project file, instead of `DIR/mc.toml` |
 

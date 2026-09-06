@@ -1940,7 +1940,7 @@ a claim in a document: `make check-pkg` runs the whole fixture suite with a `cur
 | `mc pkg check INDEX.toml [--yes]` | nothing — it is the registry's own gate |
 
 The registry is one file per package, `<registry>/index/<name>.toml`, read from
-`--registry`, `[registry].url`, or `https://minicompiler.dev/registry` by default — a package
+`--registry`, `[registry].url`, or `https://pkg.minicompiler.dev` by default — a package
 server that publishes exactly that layout. **A directory with the same layout is a registry**, so
 a private tap is a `git clone` and one line of TOML, and it is also what the test suite uses:
 `scripts/check-pkg.sh` builds a registry of local tarballs and never touches the network.

@@ -359,8 +359,10 @@ for the `<repo>-<version>/` top directory a tag archive has. `deps` carries each
 archive downloaded.
 
 **Where the index comes from.** `--registry`, else `[registry].url`, else
-`https://minicompiler.dev/registry` — a package **server** that produces exactly this layout out
-of the git repositories registered with it. The compiler's side of that is a reader and a
+`https://pkg.minicompiler.dev` — a package **server** that produces exactly this layout out
+of the git repositories registered with it. That host is the registry's canonical name; the site
+answers `https://minicompiler.dev/registry/index/<name>.toml` with the same bytes, which is what a
+compiler older than 0.15.6 asks for by default. The compiler's side of that is a reader and a
 constant: there is no API client here, no JSON, no search and no transparency log. A **directory**
 with the same layout is a registry too, read in place, which is what a private tap costs: a
 `git clone` and one line of TOML. A URL registry is fetched one file at a time into
