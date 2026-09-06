@@ -1,0 +1,131 @@
+# mc.toml -- the repository, as the package `mc`.
+#
+# This file makes minicompiler/mc a package the registry can publish: M44's
+# amendment D15' says the package `mc` is THE WHOLE BUNDLE at the compiler's
+# version, so `files` below is every path in tools/bundle.list, plus the two
+# files that list cannot name (see the comment on `files`).
+#
+# It carries NO [project]. `mc build` is not how this repository is built --
+# `make` is -- and the five real project configs are src/mc.<target>.toml, one
+# per cross target. A [project] here would also make the registry's validator
+# run the compiler with no arguments, which prints usage and exits 1.
+# So `mc build .` at the root is `mc.toml: missing key: project.entry`, on
+# purpose; nothing in this repository runs it.
+#
+# See docs/reference/packages.md § The `mc` package.
+
+[package]
+name = "mc"
+
+# What a bare `#include <mc>` means: the compiler without `user_init`, which is
+# what every taught compiler includes and what [compiler].core defaults to
+# (`<mc/core>`). src/core.mc reaches the rest of the tree with quoted relative
+# includes, so the package tree serves it as the repository does.
+lib = "src/core.mc"
+
+# Generated from tools/bundle.list -- `cut -f2 tools/bundle.list | sort -u` --
+# plus two files that list cannot carry and the tree is useless without:
+#
+#   src/bundle_data.mc  the blob. The bundle cannot contain itself, so it has no
+#                       bundle.list row; src/core_bundle.mc includes it by path.
+#   tools/bundle.list   the NAME<TAB>PATH map. `#include <name>` served from an
+#                       installed tree (packages.md § 2, step 3) reads it.
+#
+# scripts/check-pkg.sh regenerates this array and fails when it drifts.
+files = [
+    "lib/backend_arm64.mc",
+    "lib/f16.mc",
+    "lib/float.mc",
+    "lib/float_rt.mc",
+    "lib/i128.mc",
+    "lib/io.mc",
+    "lib/machine_arm64_float.mc",
+    "lib/machine_probe.mc",
+    "lib/machine_x86_64_float.mc",
+    "lib/mc_badmach.mc",
+    "lib/mc_f16.mc",
+    "lib/mc_float.mc",
+    "lib/mc_i128.mc",
+    "lib/mc_lit_nop.mc",
+    "lib/mc_param_nop.mc",
+    "lib/mc_probe.mc",
+    "lib/mc_syntax_demo.mc",
+    "lib/pass_demo.mc",
+    "lib/prelude.mc",
+    "lib/syntax_demo_test.mc",
+    "lib/sys.mc",
+    "lib/sys_linux.mc",
+    "lib/sys_linux_aarch64.mc",
+    "lib/sys_linux_x86_64.mc",
+    "lib/sys_svc.mc",
+    "lib/sys_windows.mc",
+    "lib/sys_windows_host.mc",
+    "lib/sys_windows_start.mc",
+    "lib/user_badmach.mc",
+    "lib/user_default.mc",
+    "lib/user_demo.mc",
+    "lib/user_dupintrin.mc",
+    "lib/user_dupop.mc",
+    "lib/user_dupty.mc",
+    "lib/user_float.mc",
+    "lib/user_lit_nop.mc",
+    "lib/user_param_nop.mc",
+    "lib/user_syntax_demo.mc",
+    "lib/user_tokadd.mc",
+    "src/arena.mc",
+    "src/ast.mc",
+    "src/backend_coff.mc",
+    "src/backend_elf.mc",
+    "src/backend_elf_exe.mc",
+    "src/backend_exe.mc",
+    "src/bundle.mc",
+    "src/bundle_data.mc",
+    "src/cli.mc",
+    "src/core.mc",
+    "src/core_build.mc",
+    "src/core_bundle.mc",
+    "src/core_machines.mc",
+    "src/core_min.mc",
+    "src/core_pkg.mc",
+    "src/core_sandbox.mc",
+    "src/core_writers.mc",
+    "src/deps.mc",
+    "src/driver.mc",
+    "src/fetch.mc",
+    "src/gen_resolve.mc",
+    "src/gen_walk.mc",
+    "src/hooks.mc",
+    "src/host_linux.mc",
+    "src/host_linux_aarch64.mc",
+    "src/host_linux_x86_64.mc",
+    "src/host_macos.mc",
+    "src/host_windows.mc",
+    "src/host_windows_aarch64.mc",
+    "src/host_windows_x86_64.mc",
+    "src/lex.mc",
+    "src/limits.mc",
+    "src/lz.mc",
+    "src/machine_arm64.mc",
+    "src/machine_x86_64.mc",
+    "src/macho.mc",
+    "src/main.mc",
+    "src/objmodel.mc",
+    "src/parse.mc",
+    "src/pkg.mc",
+    "src/sandbox.mc",
+    "src/sandbox_box.mc",
+    "src/sandbox_profiles.mc",
+    "src/seccomp.mc",
+    "src/sha256.mc",
+    "src/stubs.mc",
+    "src/sysno.mc",
+    "src/sysno_linux_aarch64.mc",
+    "src/sysno_linux_x86_64.mc",
+    "src/sysroot.mc",
+    "src/sysroots.mc",
+    "src/toml.mc",
+    "src/version.mc",
+    "tests/mc/bundle/embed_demo.mc",
+    "tests/mc/bundle/embed_demo.txt",
+    "tools/bundle.list",
+]

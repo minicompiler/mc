@@ -20,7 +20,7 @@ the release. The contributor-facing half of that is
 | `ci.yml` | pull requests to `main`, push to `main` | `macos-15` + `ubuntu-24.04-arm` + `ubuntu-latest` | `make check`, the Linux suite — once per architecture — in two halves, `mc` bootstrapped on each Linux host, and (M39) the bare-metal RISC-V kernel booted under QEMU |
 | `autotag.yml` | push to `main` | `ubuntu-24.04` | if the push is a merged pull request: computes the next version from its labels, pushes the annotated tag `vX.Y.Z` and starts `release.yml` |
 | `tag.yml` | manual | `ubuntu-24.04` | the escape hatch: validates `X.Y.Z` against the newest tag, pushes the tag and starts `release.yml` |
-| `release.yml` | dispatched by `autotag.yml`/`tag.yml`, tag `v*`, or manual | `macos-15` + `ubuntu-24.04-arm` + `ubuntu-latest` | builds `mc` for macOS, cross-compiles the two Linux objects, links and bootstraps each on its own architecture, packages all three, publishes the GitHub Release |
+| `release.yml` | dispatched by `autotag.yml`/`tag.yml`, tag `v*`, or manual | `macos-15` + `ubuntu-24.04-arm` + `ubuntu-latest` | builds `mc` for macOS, cross-compiles the two Linux objects, links and bootstraps each on its own architecture, packages all three, publishes the GitHub Release, then announces the tag to the mc package registry |
 | `site.yml` | push to `main` touching `site/**` or `docs/**`, or manual | `macos-15` + `ubuntu-24.04` | renders `docs/` with `mcsite` and deploys it to GitHub Pages (<https://minicompiler.dev>) |
 
 All five set `concurrency` groups and per-job `timeout-minutes`, and each declares the narrowest
@@ -641,6 +641,38 @@ takes the **tag's annotation as the release body**, appends
 an install snippet (macOS, Linux and Windows) and the checksums, and calls
 `gh release create --verify-tag`. A version with a
 `-` suffix (`0.2.0-rc1`) is published as a pre-release. Only this job has `contents: write`.
+
+### Job `publish-to-registry` — `ubuntu-latest`
+
+`needs: publish`, `permissions: contents: read`, `timeout-minutes: 20`, one step:
+
+```yaml
+      - uses: minicompiler/register-action@v1
+        with:
+          tag: ${{ inputs.tag || github.ref_name }}
+```
+
+This repository is the mc package registry's first registered repository, and the
+package it publishes is `mc` itself — the whole bundle at the compiler's version
+([reference/packages.md](reference/packages.md) § 11,
+[specs/M47-S5.md](specs/M47-S5.md)). The action carries **no secret**: the whole
+request is this repository's public URL. The registry queues one validation job,
+clones the tag, hashes the checkout and compiles it inside `mc sandbox`; the
+action waits, prints the registry's report into the job log behind a two-space
+gutter, and fails when the release was refused or did not reach the index.
+
+It is a job after `publish` and not a step inside it for two reasons. § 13b of the
+registry's spec makes a **GitHub Release** — not a bare tag — the thing the
+validator looks for, so the release has to exist first; and a refused
+announcement must not be able to unmake a published release. A rerun of this job
+alone is the retry. `continue-on-error` is `false` on purpose: a refused
+validation is a red release, not a footnote.
+
+**The repository has to be registered once, by a person**, on
+<https://minicompiler.dev/me>: a registration binds a repository to an account
+that has accepted the registry's documents, and an unauthenticated request has
+no account. Until that has happened the registry answers **404 `not registered`**
+and this job is red while every job above it is green.
 
 ---
 

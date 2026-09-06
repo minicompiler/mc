@@ -942,6 +942,70 @@ else
     fail "the hash line format" "$(sh scripts/pkg-hash.sh --lines tests/pkg/src/mathx-1.0.0 | tr '\n' '|')"
 fi
 
+# ======================= S5: this repository is a package =====================
+# mc.toml at the root carries [package] name = "mc" (docs/specs/M47-S5.md,
+# docs/reference/packages.md § The `mc` package). Three things are asserted:
+# the array does not drift from tools/bundle.list, the two hash implementations
+# agree on it, and `mc pkg hash .` -- the argument a person types -- answers the
+# same hash as the absolute path.
 cd "$here" || exit 1
+
+# 30a. `files` is exactly `cut -f2 tools/bundle.list | sort -u` plus the two
+# files that list cannot name: the blob (which cannot be in a bundle of itself)
+# and the NAME<TAB>PATH map itself.
+{ cut -f2 tools/bundle.list; echo "src/bundle_data.mc"; echo "tools/bundle.list"; } \
+    | sort -u > "$tmp/out/want-files"
+sed -n 's/^    "\(.*\)",$/\1/p' mc.toml > "$tmp/out/got-files"
+if cmp -s "$tmp/out/want-files" "$tmp/out/got-files"; then
+    ok "mc.toml [package].files == tools/bundle.list + bundle_data.mc + bundle.list"
+else
+    fail "mc.toml [package].files drifted from tools/bundle.list" \
+         "$(diff "$tmp/out/want-files" "$tmp/out/got-files" | head -6 | tr '\n' '|')"
+fi
+
+# 30b. every entry is readable where the manifest says it is (the tree hash
+# below would say so too, but not by name).
+missing=""
+while IFS= read -r f; do
+    [ -f "$f" ] || missing="$missing $f"
+done < "$tmp/out/got-files"
+if [ -z "$missing" ]; then
+    ok "every [package].files entry of the root manifest is on disk"
+else
+    fail "root manifest files" "missing:$missing"
+fi
+
+# 30c/30d. the compiler and the shell agree, and `.` is the same package as the
+# absolute path. `mc pkg hash .` used to be `files entry escapes the package`
+# for EVERY package -- path_norm answers "." for a directory with no segments
+# and path_join then drops that segment, so the prefix test in dep_under could
+# never match (fixed with this section).
+h_abs=$("$mc" pkg hash "$here")
+h_dot=$(cd "$here" && "$mc" pkg hash .)
+h_sh=$(sh scripts/pkg-hash.sh "$here")
+if [ -n "$h_abs" ] && [ "$h_abs" = "$h_sh" ]; then
+    ok "the root package's tree hash: mc and pkg-hash.sh agree ($h_abs)"
+else
+    fail "the root package's tree hash" "mc=$h_abs sh=$h_sh"
+fi
+if [ "$h_dot" = "$h_abs" ]; then
+    ok "\`mc pkg hash .\` is the same package as \`mc pkg hash <abs>\`"
+else
+    fail "mc pkg hash ." "$h_dot (absolute: $h_abs)"
+fi
+
+# 30e. and the containment rule still refuses, with `.` as the base.
+mkdir -p "$tmp/dot"
+echo canary > "$tmp/canary.txt"
+printf 'i64 f() { return 0; }\n' > "$tmp/dot/a.mc"
+for entry in "../canary.txt" "/etc/hosts" "./a.mc" "a/../../canary.txt"; do
+    printf '[package]\nname  = "p"\nfiles = ["%s"]\n' "$entry" > "$tmp/dot/mc.toml"
+    msg=$( (cd "$tmp/dot" && "$mc" pkg hash .) 2>&1 ); rc=$?
+    case "$rc:$msg" in
+        2:*"files entry escapes the package: $entry") ok "\`.\` as the base still refuses: $entry" ;;
+        *) fail "\`.\` as the base refuses $entry" "exit $rc: $msg" ;;
+    esac
+done
+
 echo "check-pkg: $((total - fails))/$total"
 [ "$fails" -eq 0 ]
