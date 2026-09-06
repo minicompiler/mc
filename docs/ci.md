@@ -644,7 +644,14 @@ an install snippet (macOS, Linux and Windows) and the checksums, and calls
 
 ### Job `publish-to-registry` — `ubuntu-latest`
 
-`needs: publish`, `permissions: contents: read`, `timeout-minutes: 20`, one step:
+`needs: publish`, `permissions: contents: read`, `timeout-minutes: 20`, one step.
+**Gated by the repository variable `MC_REGISTRY_PUBLISH`**: the job runs only when
+the variable is `true` (Settings → Secrets and variables → Actions → Variables).
+The owner scheduled both the registry's GitHub token and the apex flip for the
+1.0.0 release (2026-09-06), and a job that is red by design on every release
+until then would hide a real failure; so the variable stays unset — the job is
+**skipped**, never red — and is set to `true` in the same sitting as the flip.
+The step:
 
 ```yaml
       - uses: minicompiler/register-action@v1
