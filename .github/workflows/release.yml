@@ -611,8 +611,15 @@ jobs:
   # The repository has to be registered once, by a person, on
   # https://minicompiler.dev/me. Until that has happened the registry answers
   # 404 `not registered` and this job is red while everything above it is green.
+  #
+  # Gated by the repository variable MC_REGISTRY_PUBLISH (owner, 2026-09-06):
+  # the registry's GitHub token and the apex flip are both scheduled for the
+  # 1.0.0 release, and a job that is red by design on every release until then
+  # would hide a real failure. The variable is set to `true` at the flip
+  # (docs/ci.md); until then the job is skipped, never red.
   publish-to-registry:
     name: Publish to the mc registry
+    if: ${{ vars.MC_REGISTRY_PUBLISH == 'true' }}
     needs: publish
     runs-on: ubuntu-latest
     timeout-minutes: 20
