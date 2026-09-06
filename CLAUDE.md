@@ -3664,6 +3664,113 @@ agents (`.claude/agents/`): `stage0-dev` (C23), `mc-dev` (`.mc` code), `reviewer
   `103a3221398be254ffe19b2d7d6c79274b37ad37c82def83d75df48dbbeefa76` (1296500 B),
   `mc2-windows-x86_64.sha256`
   `b0af8baca4044bfacb26b50cd00e2b45cb58c2701f9986c6b1bfa3ce2cefce81` (1332236 B).
+- `source_claim` done (coop patch for teko/ngen, owner-approved): **a module's taught words apply
+  only in the sources the module claims.** `stage0/` untouched (`git diff origin/main -- stage0/`
+  empty). The defect the consumer measured: a word registration enters the token table through
+  `word_add` and stops lexing as an identifier in EVERY source, the core's own files included, so a
+  compiler assembled from the five parts plus the teko module could not compile `<mc/objmodel>`
+  (`mc/objmodel:293: name reserved by a syntax/type_alias registration: type` -- `type` has 23 sites
+  in the core, `out` 43). Renaming them defers the next collision; the vocabulary of a dialect is
+  open and the core's is fixed.
+  * **`void source_claim(uptr fn)`** (`src/hooks.mc`): handler `i64 f(uptr name)`, 1 for a source
+    this dialect owns. Growable table, arena tag `T_SRCCLAIM` inserted after `T_SYNTYPE`
+    (`src/arena.mc`, `T_COUNT` 41 -> 42, `lim_names`/`lim_seeds` reconciled BY NAME -- the M42
+    lesson: the seed 16 belongs to `backends`, which moved from index 33 to 34; `mc limits` gains a
+    `source_claim` row). Handlers run in registration order and **any 1 claims the source**; with
+    none registered every source is claimed, which is what every compiler did before, byte for byte.
+  * **The answer is computed ONCE per frame**, in `lex_push_mem` right after `cp`/`cend` describe
+    the new source and before the `on_source` announcement, and kept in the frame record
+    (`OF_CLAIMED`, `OF_SIZE` 48 -> 56) -- the identifier branch reads it per lexeme, so it must not
+    be a call. **The replay decision is `on_source`'s, in the other direction**: `lex_init` pushes
+    the entry before `user_init()` runs, so `source_claim` **re-asks the whole chain for every frame
+    still open** (`lex_reclaim_sources`), in push order, at registration time. The whole chain and
+    not just the new handler, so that "any 1 claims it" stays true of a frame decided earlier. The
+    rule, documented: *every source pushed after a handler registers is decided with it, and every
+    source already open is decided again.* Same guard as `on_source` and for the same reason
+    (measured SIGSEGV): a claim handler that pushes is `source_claim handler pushed a source:
+    <name>`.
+  * **The scoped/unscoped rule, as written**: the mark is per TOKEN ENTRY (`TE_TAUGHT`, `TE_SIZE`
+    32 -> 40 -- the one field stage0's `TokEnt` does not have, a deliberate divergence like
+    `MAXSTRS`/`MAXPARAMS`), set by **`word_add` alone** -- and not an id threshold, because the two
+    roads interleave: a `#rule` in a source adds tokens while a taught compiler parses. So the six
+    word registrations are scoped (`syntax`, `syntax_stmt`, `syntax_expr`, `syntax_infix`,
+    `type_alias`, `type_new`) and `#token`/`#infix`/`#prefix`/`#rule` are **not** -- they come from
+    a directive in a source and belong to whoever included it, which is what keeps `<prelude>`'s
+    `while` and `for` working in the core itself. `intrinsic()` claims a call name, not a lexeme, so
+    it is not scoped either. Only the **identifier branch** is scoped: a taught OPERATOR carries the
+    mark and nothing changes for it, since punctuation cannot collide with a name. And **the core's
+    own `i32`** goes through `word_add` too (M45's `type_new`), so `core_types_init()` un-marks it
+    in the same line it registers it -- a core primitive is not something a module taught; without
+    that one line a `.tk`-claiming module would have scoped `i32` out of every `.mc` file.
+  * Enforcement is one helper, `lex_word_id`, at the two places the identifier branch resolves a
+    lexeme (`lex_next` and `subst_apply`, so a `p_subst_name` replacement is scoped like anything
+    else); `word_id` itself stays a plain table lookup, because a module asking for the id of a word
+    (`examples/lang` does) is asking the registry, not lexing a source.
+  * **The defect, fixed with it**: `subcommand_usage()` printed every ROW while `subcommand_find`
+    dispatches back to front, so a module re-registering `build` had the name listed twice and the
+    entry that would never run described. It now prints **one line per name, in first-registration
+    order, with the text of the last registration** -- the two ends of the table on purpose: the
+    order keeps `build`/`limits`/`sysroot` byte for byte where they were, the text keeps the listing
+    a description of the compiler that exists.
+  Proofs, all in `scripts/check-surface.sh` (**139 ok lines**) over `lib/claim_demo.mc` -- the two
+  colliding words (`syntax("type")`, `syntax_expr("out")`) shared by three compilers that differ by
+  ONE registration: (a) `main.tk` uses the taught words and `#include`s a `side.mc` whose parameters
+  are named `type` and `out` -- compiles and exits **42**; (b) the same program through
+  `lib/user_claim_open.mc` (the words, no `source_claim`) is
+  `side.mc:3: name reserved by a syntax/type_alias registration: type`; (c) `lib/user_claim_none.mc`
+  (a handler that claims nothing) refuses `main.tk` itself with `type expected at top level` -- a
+  module that claims no source has taught the compiler nothing any source can reach, which is the
+  rule and not an exception; (d) the point of the hook: the claiming compiler compiles **`src/mc.mc`
+  from disk AND `<mc/host>` + `<mc/core>` + `<user_default>` from the bundle, to objects byte for
+  byte the ones the untaught compiler writes**, while the unscoped one dies on
+  `mc/objmodel:293` -- the consumer's report, reproduced and fixed; (e) inertness:
+  `lib/user_claim_nop.mc` (only registration `source_claim`, claiming everything) gives
+  byte-identical `--dump-ast` and objects over the whole `tests/` corpus; (f) the subcommand fix,
+  through a recreated compiler (`<mc/host>` + `<mc/core_min>` + its own `main`, since `user_init`
+  runs after the dispatch): `demo` registered twice prints **one** usage line, the second text, and
+  `mc demo` exits 42. The nine `lib/*claim*` fixtures are deliberately NOT in `tools/bundle.list`
+  (the M41 precedent for check-script-only modules). `scripts/check-docs.sh` gained `source_claim`
+  as a fifth EXACT name, so the gate covers it (**199 symbols**).
+  -- cost in `src/`: **217 added lines, 111 of them neither comment nor blank** (`lex.mc` +120/63,
+  `hooks.mc` +77/34 -- 9 of those the subcommand fix --, `arena.mc` +20/14, twelve of the last
+  being the renumbered tags and the two seed rows). Five new globals: the seed's `MAXGLOBALS` goes
+  from 449/512 to **454/512 (88%)**, `check-limits` fails at 90%.
+  `make bundle` re-run BEFORE bootstrapping (93 files, raw 1188987 -> LZ 555913, blob 557075 B).
+  `make check` green end to end (**RC 0, zero FAIL**): `budget` 2848/3000, `test` 32/32,
+  `check-lex` 158/158 (3 skipped), `check-ast`/`check-asm` 159/159 (2 skipped), `check-obj` **32/32
+  identical to the frozen seed**, `check-bundle`, `bootstrap` at a fixed point (`mc2.o == mc3.o`,
+  1276936 bytes; the `--dump-asm` diff between `mc1` and `mc2` is **empty**), `check-surface` 32/32
+  + the six new cases + inert, `test-exe` 32/32, `check-mc` 15/15, `check-standalone`,
+  `check-parts`, `check-toml` 10/10, `check-build` 53/53, `check-stubs` 9/9, `check-sysroots`,
+  `check-limits` **17/17 under 90%**, `check-minimal`, `test-linux` 41/41, `test-linux-x86_64`
+  39/39, the four `--exe` cells 44/44 + 44/44 + 42/42 + 42/42, `test-windows` 42/42 and
+  `test-windows-x86_64` 40/40 objects cross-compiled and linked, `check-examples`, `check-lang`,
+  `check-conc`, `check-desktop`, `check-float` (13/13 macos, 13/13 linux/aarch64, 13/13
+  linux/x86_64, 11/11 + 11/11 windows objects), `check-wide`, `check-kernel`, `check-avr`,
+  `test-sandbox` 60 ok / 1 skipped, `check-docs` (199 symbols, 36 flags, 27 TOML keys, 10
+  directives, 51 samples, 368 links), `site` + `check-site`.
+  `scripts/check-inert.sh build/mc1.pre build/mc1` (pre = a `mc1` built from `origin/main` ed3ae34):
+  **33 objects identical** (`tests/*.mc` and `src/mc.mc`) plus byte-identical artefacts for
+  `examples/api`, `lang`, `conc`, `desktop` and `kernel` -- nothing in the corpus registers a claim,
+  so nothing it emits could move. `make check-linux-host` RC 0 over all four cells (aarch64 and
+  x86_64, musl and gnu), each after its own `mc2l.o == mc3l.o` and with the cross proof green.
+  The five goldens rewritten **once**, each only after its own criterion: `mc2.sha256`
+  `4bcf3cd8...17df06` -> `f4a841bcf1fc680e1007e1c9a421e4d52f2c91300d4fc6dde08034e333db1083`
+  (after the empty `--dump-asm` diff and `cmp build/mc2.o build/mc3.o`); the Linux pair deleted and
+  re-recorded by `make check-linux-host` -- `mc2-linux-arm64.sha256`
+  `23a73d36ab003d0f7e767bdb89bc01d545300a0a77e5393ac2ceca577bdca431`, `mc2-linux-x86_64.sha256`
+  `fa119b12592eb7e30700a59b2887c4de16850867d2f796f957e783143b999b0b`, each recorded in its musl
+  cell and re-verified by the gnu cell of the same architecture; the Windows pair cross-computed
+  per `tests/golden/README.md` -- `mc2-windows-arm64.sha256`
+  `a920e766c767a1d0dd0b93309069111611f5b164dc9a20b7f181b3cbe5dd1824` (1303515 B),
+  `mc2-windows-x86_64.sha256`
+  `b7c77f88893ab4ac58fff6bfbb8baddafbb532967a861eda9bce18ccf9d6a354` (1339163 B).
+  Docs: `docs/reference/hooks.md` (§ 3 is now six word registrations + **seven** hooks that claim
+  none, the `source_claim` section with the scoped/unscoped table, the replay rule and the two
+  interactions -- `on_source` and `#rule`; `subcommand_usage`'s rule in § 7),
+  `docs/reference/diagnostics.md` (one new row, and the `name reserved` row now names the escape),
+  `docs/reference/cli.md` (the usage listing), `docs/surface.md` (§ "Where a module's words
+  apply", and the registration table).
 - Next: the **site + registry server, M47 S4-S6**, in `minicompiler/mc-registry`; then **M44 steps 4-5**
   (slim / install / upgrade), then **M42 step 2** (PE `--exe`, CI-gated on the Windows runners).
   **M46** only on the owner's request; **M43 Layer 2** after 1.0.0. M13 and M18 stay in the backlog

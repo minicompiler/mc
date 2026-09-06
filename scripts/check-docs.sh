@@ -80,10 +80,13 @@ cat docs/reference/*.md > "$refs" 2>/dev/null || { echo "FAIL: docs/reference/ i
 # alone (matched as a prefix) would drag in lex_include_name and
 # lex_include_bundled -- all of them deliberately internal. Named exactly
 # instead, so only the four the consumer actually depends on are required.
+# A FIFTH exact name: source_claim, the registration that says where a module's
+# taught words apply. It is a word on its own, like subcommand, and no prefix
+# above reaches it -- the same reason `on_` had to be added after M27.
 # A symbol counts as documented when the reference mentions it
 # as a call (`name(`), which is how every entry in hooks.md and objects.md is
 # written; a bare word in prose is not enough.
-grep -hoE '^(void|i64|uptr|u8|u16|u32|u64) +((p_|syntax|type_|pass|backend|machine|sec_|sym_|reloc_add|gen_|on_|decl_|host_|intrinsic|walk_|subcommand|c_)[A-Za-z_0-9]*|parse_unary|parse_top|do_directive|lex_include)\(' src/*.mc \
+grep -hoE '^(void|i64|uptr|u8|u16|u32|u64) +((p_|syntax|type_|pass|backend|machine|sec_|sym_|reloc_add|gen_|on_|decl_|host_|intrinsic|walk_|subcommand|c_)[A-Za-z_0-9]*|parse_unary|parse_top|do_directive|lex_include|source_claim)\(' src/*.mc \
     | sed -E 's/^[a-z0-9]+ +//; s/\($//' | sort -u > "$tmp/syms"
 
 missing=""

@@ -657,11 +657,12 @@ parser's public API.
 | `syntax_param(&f)` | `i64 f()` — returns an `N_PARAM`, or 0 for "the core handles this one" | `parse_params`, at the head of its loop, **before** `type_of_token` (M41.5) |
 | `syntax_type(&f)` | `i64 f(i64 ty)` — returns another type id, or 0 for "not mine" | right after the core read a type word, at all six sites that read one |
 | `on_source(&f)` | `void f(uptr name, uptr src, i64 len)` — answers nothing | `lex_push_mem`, for **every** source the lexer opens: the entry, an `#include` the core resolved, a bundled or package one, and a `p_push_source` |
+| `source_claim(&f)` | `i64 f(uptr name)` — 1 if the source is the module's, 0 if not | `lex_push_mem` too, once per frame: it says **where** the words above apply |
 
 The first five register the word in the lexer (`tok_add`), the same as `#rule` does with its
-dispatch literal, and all five **refuse a core keyword** (`K_U8`..`K_EXTERN`); the last five claim
+dispatch literal, and all five **refuse a core keyword** (`K_U8`..`K_EXTERN`); the last six claim
 no word at all — four of them observe, replace or own nodes at a position the parser reaches on
-its own, and the fifth is not on the parse path at all:
+its own, and the last two are not on the parse path at all:
 
 ```
 $ build/mc1 --exe my_compiler.mc -o my-mc && ./my-mc x.mc -o x.o
@@ -1585,6 +1586,47 @@ byte-identical to the untaught compiler's over the whole `tests/` corpus. With n
 the lexer does not even make the call.
 
 See `docs/reference/hooks.md` § 3.
+
+## Where a module's words apply
+
+The registration table above reserves each word for the **whole program** — and a taught compiler
+still has to read files it did not write. `<mc/objmodel>` names a parameter `type`, `<mc/macho>`
+names one `out`, so a module that teaches either word could not compile the core it is built on:
+`mc/objmodel:293: name reserved by a syntax/type_alias registration: type`. That is the collision
+the consumer measured, and renaming the core's 23 uses of `type` would only defer the next one.
+
+`source_claim(&f)` registers `i64 f(uptr name)`, called from `lex_push_mem` once per source, with
+the name `lex_file()` prints. Handlers run in registration order and any 1 claims the source. In a
+source no handler claims, a word a module registered lexes as an **ordinary identifier** again;
+everything else is untouched.
+
+```c
+i64 my_claim(uptr name) { return my_ends_with(name, ".tk"); }
+
+void user_init() {
+    syntax("type", &my_type);
+    syntax_expr("out", &my_out);
+    source_claim(&my_claim);
+}
+```
+
+`main.tk` is read in the dialect and the `#include "side.mc"` inside it by the core's own rules, in
+one compilation. The three compilers `lib/claim_demo.mc` feeds differ by that one registration, and
+`scripts/check-surface.sh` compiles `src/mc.mc` **and** `<mc/core>` with the scoped one, to objects
+byte for byte the ones the untaught compiler writes.
+
+What is scoped is exactly the six word registrations — the `word_add` road. A `#token`/`#infix`/
+`#rule` word is **not**: it comes from a directive in a source and belongs to whoever included it,
+which is what keeps `<prelude>`'s `while` and `for` working everywhere. Neither is the core's own
+`i32`, registered through the same road and un-marked by `core_types_init()`. A taught *operator*
+carries the mark but nothing changes for it: only the identifier branch is scoped, and punctuation
+cannot collide with a name. The full table is in `docs/reference/hooks.md` § 3.
+
+The replay rule is `on_source`'s: `lex_init` pushes the entry before `user_init()` runs, so
+registering re-asks the whole chain for every frame still open. A module that claims nothing has
+taught the compiler nothing any source can reach — that is the rule, not an exception. Inert by
+construction: `lib/user_claim_nop.mc` claims every source and its `--dump-ast` and objects are
+byte-identical to the untaught compiler's over the whole `tests/` corpus.
 
 ## M41.5 — and a core operator
 

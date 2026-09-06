@@ -38,7 +38,8 @@ main()
   ├── backend("macho" | "macho-exe" | "elf-obj", …)     the three built-ins
   ├── lim_plan()  tok_init()  lex_init(source)   the ENTRY is pushed here
   ├── user_init()                     <-- every registration below happens here
-  │                                       (on_source replays the entry to the
+  │                                       (on_source replays the entry, and
+  │                                       source_claim re-asks it, to the
   │                                       handler it has just registered)
   ├── parse_unit()                    <-- syntax / syntax_stmt / syntax_expr /
   │                                       syntax_infix / type_alias / #rule,
@@ -262,7 +263,7 @@ system or architecture becomes reachable from `mc.toml` without editing the driv
 
 ---
 
-## 3. Tier 3 and Tier 4 — the six word registrations, and the six hooks that claim no word
+## 3. Tier 3 and Tier 4 — the six word registrations, and the seven hooks that claim no word
 
 Each of the six claims a **word** in the lexer and a **grammar position**. All six refuse a core
 keyword (`cannot redefine core keyword`), and all six reserve the word for the *whole program*,
@@ -285,11 +286,17 @@ vocabulary, and the parser says so plainly —
 In every case the parse is stopped **on the registered word**; consuming it is the handler's job.
 
 `on_stmt(&f)` (M21.5), `on_jump(&f)` (M31), `syntax_lit(&f)` (M24), `syntax_param(&f)` (M41.5),
-`syntax_type(&f)` and `on_source(&f)` are the six registrations that claim no word — and
+`syntax_type(&f)`, `on_source(&f)` and `source_claim(&f)` are the seven registrations that claim
+no word — and
 `intrinsic(name, …)` (M24) claims a *call name* rather than a lexeme, so none of the paragraph
 above applies to it either. Five of them observe, replace or own nodes at a position the grammar
-reaches on its own; `on_source` is the one hook that is not on the parse path at all — it fires
-from the lexer, once per source pushed. Each has its own section below.
+reaches on its own; `on_source` and `source_claim` are the two that are not on the parse path at
+all — they fire from the lexer, once per source pushed. Each has its own section below.
+
+**`source_claim` is what makes "the whole program" negotiable.** With it registered, the six word
+registrations above reserve their word only in the sources the module claims; everywhere else the
+lexeme is an ordinary identifier again. That is the only way a taught compiler can read the
+*core's own* files, where `type` and `out` are variable names.
 
 **A word may be a type and something else at the same time, and that is a contract, not an
 accident.** `tok_add` is idempotent — the same lexeme always gets the same id — so
@@ -850,6 +857,100 @@ is the lookup side and `void run_on_source(uptr name, uptr src, i64 len)` is wha
 through `lex_set_source_hook`, one function pointer, because `src/lexdump.mc` includes the lexer
 without `src/hooks.mc` (the same reason the bundle is reached through `bopen_fn`).
 
+### `void source_claim(uptr fn)` — where a module's taught words apply
+
+```c
+i64 f(uptr name)          // 1: this source is mine · 0: it is not
+```
+
+Called from `lex_push_mem`, for every source the lexer opens — the same four roads `on_source`
+lists — and asked **once per frame**, at push time, with the name `lex_file()` prints. Handlers run
+in registration order and **any 1 claims the source**; with none registered every source is
+claimed, which is what every compiler did before the hook existed, byte for byte.
+
+What the answer changes is **one thing**: in a source no handler claims, a word a module registered
+stops being a word and lexes as an ordinary identifier. Nothing else moves — the registration
+tables are untouched, the grammar positions are untouched, and the handler is not consulted again
+while the source is read.
+
+**Why it exists.** A word registration reserves its word for the *whole program*
+(§ 3 above), and a taught compiler still has to read files it did not write. `<mc/objmodel>` names
+a parameter `type` and `<mc/macho>` names one `out`, so a module that teaches either word could not
+compile the core it is built on:
+
+```
+$ ./my-mc --exe program.mc -o program
+mc/objmodel:293: name reserved by a syntax/type_alias registration: type
+```
+
+Renaming the core's identifiers only defers the next collision — the vocabulary of a dialect is
+open, and the core's is fixed. So the dialect says which sources it owns:
+
+```c
+i64 my_claim(uptr name) { return my_ends_with(name, ".tk"); }
+
+void user_init() {
+    syntax("type", &my_type);        // a word the core uses as a NAME
+    syntax_expr("out", &my_out);     // ...and a second one
+    source_claim(&my_claim);
+}
+```
+
+`main.tk` is read in the dialect; the `#include "side.mc"` inside it is read by the core's own
+rules, in the same compilation. `lib/claim_demo.mc` is that module, whole, and
+`scripts/check-surface.sh` compiles **`src/mc.mc` and `<mc/core>` with it, to an object byte for
+byte the one the untaught compiler writes**.
+
+**What is scoped, and what is not.**
+
+| registration | scoped by `source_claim`? | why |
+|---|---|---|
+| `syntax(word, &f)` | yes | `word_add` |
+| `syntax_stmt(word, &f)` | yes | `word_add` |
+| `syntax_expr(word, &f)` | yes | `word_add` |
+| `syntax_infix(word, prec, &f)` | the *mark* is set, the effect is not | an operator is punctuation, and the identifier branch is the only one scoped — a taught operator's spelling cannot collide with a name |
+| `type_alias(name, base)` | yes | `word_add` |
+| `type_new(name, w, a, kind)` | yes | `word_add` — **except the core's own `i32`**, registered through the same road by `core_types_init()` and un-marked there: it is a core primitive, not something a module taught |
+| `#token`, `#infix`, `#prefix`, `#rule` | **no** | they reach `tok_add` directly, from a *directive in a source*. `while` and `for` come from `<prelude>` and the core itself uses them; a `#rule` word belongs to whoever included the rule, not to the module |
+| `intrinsic(name, …)` | **no** | it claims a call name, not a lexeme (§ 3) |
+| `syntax_lit`, `syntax_param`, `syntax_type`, `on_stmt`, `on_jump`, `on_source` | **no** | they claim no word: there is nothing to scope |
+
+The mark is per token entry, set by `word_add` alone — not an id threshold, because the two roads
+interleave: a `#rule` in a source adds tokens while a taught compiler is parsing.
+
+**The replay rule is `on_source`'s, in the other direction.** `lex_init` pushes the entry *before*
+`user_init()` runs, so a registration made there arrives after the one source that matters most has
+already been pushed. `source_claim` therefore **re-asks the whole chain for every frame still
+open**, in push order, at registration time. The rule is: *every source pushed after a handler
+registers is decided with it, and every source already open is decided again.* Re-asking the whole
+chain and not just the new handler is what keeps "any handler answering 1 claims it" true of a frame
+that was decided earlier. Registering during parsing is allowed and follows the same rule; the
+frames already open change scope from the next lexeme on.
+
+**The one guard**, `on_source`'s again: a handler must not push a source from inside the callback.
+Any `lex_push_mem` reached from inside one — `p_push_source`, `lex_include`, `#include` — is
+`source_claim handler pushed a source: <name>`.
+
+**Two things worth knowing.**
+
+* A module that claims **nothing** has taught the compiler nothing any source can reach: its own
+  dialect files are read with the core's vocabulary too. That is not a special case, it is the rule
+  (`lib/user_claim_none.mc` proves it).
+* The scope is the **compiler's**, not the registration's: one claim answer per source covers every
+  word that compiler's modules taught. Two modules that want different scopes are two compilers.
+* **A source the module pushes itself is asked too**, by the name it passed to `p_push_source`. A
+  module that pushes a runtime (`lib/user_syntax_demo.mc` pushes `"box runtime"`) and claims only
+  `.tk` would find its *own* runtime read with the core's vocabulary — name it so the handler
+  claims it, or answer 1 for it by name.
+
+A module that registers `source_claim` and claims every source must produce byte-identical trees
+and objects to a compiler without the hook; `lib/user_claim_nop.mc` is that module, and
+`scripts/check-surface.sh` runs it over the whole `tests/` corpus.
+
+`uptr claim_fn_at(i64 i)` is the lookup side and `i64 run_source_claim(uptr name)` is what the
+lexer calls — through `lex_set_claim_hook`, one function pointer, for the reason
+`lex_set_source_hook` exists.
+
 ---
 
 ## 4. The parser's public API
@@ -1303,6 +1404,13 @@ for it, newline included, with several lines allowed in the one string.
 `<mc/core_build>`. A compiler without that part has none, and `mc` with no
 argument prints two usage lines instead of six — which is the honest answer,
 since those subcommands are not in it.
+
+`subcommand_usage()` prints **one line per name**, in *first-registration* order, with the text of
+the *last* registration of that name — which is the one `subcommand_find` dispatches to. The two
+ends of the table on purpose: the order keeps `build`, `limits`, `sysroot` where they were, byte
+for byte, and the text keeps the listing a description of the compiler that exists. Before this it
+printed every row, so a module re-registering `build` had its name listed twice and the entry that
+would never run described.
 
 The ceiling is fixed (16), like `machine()` and `target()`: the number of
 subcommands is a property of the compiler, not of the program it compiles.
