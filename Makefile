@@ -603,11 +603,21 @@ budget:
 clean:
 	rm -rf build
 
+# bench/ -- NOT part of `make check`: results depend on the host's CPU, load
+# and installed toolchain versions. `make bench` only needs build/mc1 and
+# clang (both already required above) and checks the mc half of both
+# benchmarks (the workload and the three mc HTTP servers) against their
+# recorded contract; it does not measure Go/Zig/Rust/C# (see bench/README.md
+# and docs/comparison.md for the full multi-language numbers already
+# recorded on one host).
+bench: build/mc1
+	sh bench/run.sh
+
 .PHONY: bootstrap-linux mc-linux mc-linux-x86_64 mc-linux-obj mc-linux-x86_64-obj
 .PHONY: check-site-linux
 .PHONY: check-linux-host check-skipped check-shim test-sandbox sandbox-trace sandbox-trace-check mc-linux-gnu mc-linux-x86_64-gnu
 .PHONY: bootstrap-windows mc-windows mc-windows-x86_64 mc-windows-obj mc-windows-x86_64-obj
-.PHONY: all stage0 stage0-san test check-lex check-ast check-asm check-obj mc1 bootstrap check-surface test-exe bundle check-bundle check-mc check-standalone check-parts check-toml check-build check-pkg check-sysroots check-stubs check-limits sysroot-linux sysroot-linux-x86_64 sysroot-windows sysroot-windows-x86_64 test-linux test-linux-x86_64 test-windows test-windows-x86_64 check-examples check-lang check-conc check-docs site check-site check budget clean check-desktop check-minimal mcrt-windows mcrt-windows-x86_64 check-float check-wide check-kernel check-avr test-linux-exe test-linux-x86_64-exe
+.PHONY: all stage0 stage0-san test check-lex check-ast check-asm check-obj mc1 bootstrap check-surface test-exe bundle check-bundle check-mc check-standalone check-parts check-toml check-build check-pkg check-sysroots check-stubs check-limits sysroot-linux sysroot-linux-x86_64 sysroot-windows sysroot-windows-x86_64 test-linux test-linux-x86_64 test-windows test-windows-x86_64 check-examples check-lang check-conc check-docs site check-site check budget clean check-desktop check-minimal mcrt-windows mcrt-windows-x86_64 check-float check-wide check-kernel check-avr test-linux-exe test-linux-x86_64-exe bench
 
 # M32: examples/desktop -- a GTK4 application written in mc, and the same
 # application with its widget tree written in a UI language taught by ui.mc.

@@ -4224,10 +4224,37 @@ agents (`.claude/agents/`): `stage0-dev` (C23), `mc-dev` (`.mc` code), `reviewer
   (slim / install / upgrade), then **M42 step 2** (PE `--exe`, CI-gated on the Windows runners).
   **M46** only on the owner's request; **M43 Layer 2** after 1.0.0. M13 and M18 stay in the backlog
   (`docs/specs/M13.md`: sizing a program's memory at compile time -- the fixed 4 MiB arena in
-  `examples/api/lib/rt.mc` is one more motivating case; M18 is Linux x86 32-bit).
+  `examples/api/lib/rt.mc` is one more motivating case; M18 is Linux x86 32-bit). From the
+  2026-09-06 benchmark (`docs/comparison.md`): **M49** (a register allocator/peephole/inliner,
+  estimated to close most of the 2.2x gap to `clang -O2` measured on the workload benchmark),
+  **M50** (a reproducible Docker bench cell replacing this host's one-off numbers) and **M51**
+  (a bundled `<http>` library carrying the `mc-forkka` fork-per-connection-keep-alive shape) —
+  the registry server's own move off fork-per-request is `minicompiler/mc-registry`'s work, not
+  this repository's.
   Update this section when each milestone closes.
 - i18n done (2026-09-03): the repository is fully in English — diagnostics, program/script
   output, identifiers, comments, and docs (`docs/*.md`, `docs/specs/*.md`, `CLAUDE.md`,
   `.claude/agents/*.md` re-synced to match `scripts/i18n-map.tsv`/`scripts/i18n-idents.tsv`).
   Language keywords were already English and untouched.
 - CI (2026-09-03): `.github/workflows/` ci/tag/release/site; first run green (`make check` on macos-15 in 41 s, Linux arm64 suite native on ubuntu-24.04-arm in 28 s); site live at https://minicompiler.dev (rendered by `mcsite` since M27). See `docs/ci.md`.
+- Comparison benchmark published (2026-09-06, `docs/comparison.md`, `bench/`): `mc` measured
+  against C, Go, Zig, Rust and C# on one Mac (Apple M4, macOS 26.6.2) — an integer workload
+  (LCG/xorshift, a sieve, recursive `fib`) compiled and run by all six, and nine minimal HTTP
+  servers (three of them `mc`, at three concurrency shapes) under `ab`/`oha`. Headline: **4.1 ms**
+  compile, a **33,461-byte** executable (3 bytes off `clang -O2`), a **1.2 MB** single-file
+  toolchain with no linker — and, on the other side, run time at `clang -O0` level (2.2x behind
+  `clang -O2`) because `mc` folds constants and does nothing else: no register allocator, no
+  peephole, no inlining. The keep-alive HTTP shape (`mc-forkka`, fork per connection) lands at
+  120k req/s in the Rust/Zig/Go/Kestrel band; fork-per-**request** (`mc-fork1`, the old registry
+  server shape) costs 28x the CPU for a fifth of the throughput. Caveat on record and repeated on
+  the page itself: one shared host, ~20% run-to-run variance on a few rows
+  (`bench/http/RESULTS.md` § Notes 13), and the workload run's own `mc` binary reports a stale
+  tree label (`e5a1643`) that does not match its measured size — the actual build was verified
+  against current `main` (`0648e1a` / `v0.15.13`) by rebuilding both and comparing bytes.
+  `bench/` holds the sources (one directory per language, servers under `bench/http/`, a portable
+  `bench/run.sh` behind `make bench`, not in `make check`) and the raw `RESULTS.md`/`results.json`
+  from this run. Three follow-up milestones opened from the gap this exposed: **M49** (optimizer),
+  **M50** (reproducible bench cell), **M51** (`<http>` library) — see the Next line above and
+  `docs/plan.md`. The docs landing page and the site's home page both link to `comparison.md` with
+  the three headline numbers; `site/site.toml` gained `[site] home` (docs/home-extra.md) and
+  `comparison` in the Internals section's reading order.

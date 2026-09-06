@@ -1,0 +1,517 @@
+{
+ "host": {
+  "cpu": "Apple M4",
+  "ram_bytes": 17179869184,
+  "os": "Darwin 25.6.0 (macOS 26.x) arm64",
+  "date": "2026-09-06",
+  "timing_method": "/usr/bin/time -l, best of 3 wall-clock 'real' seconds; max RSS in bytes from the best run; sub-10ms compiles re-timed with perl Time::HiRes (min of 20)"
+ },
+ "workload": {
+  "description": "Identical integer workload in six languages: (1) 200,000,000 iterations of a 64-bit LCG (x = x*6364136223846793005 + 1442695040888963407, wrapping) followed by xorshift mixing (y ^= y>>13; y ^= y<<7; y ^= y>>17) accumulated in a wrapping u64; (2) sieve of Eratosthenes over 50,000,000 bytes counting primes < 50,000,000; (3) naive recursive fib(38). Prints three numbers.",
+  "expected_output": [
+   "8128903901837660708",
+   "3001134",
+   "39088169"
+  ],
+  "output_md5_all_variants": "c369e8b4679ca95f45fa46bbff03b7b7",
+  "all_outputs_identical": true,
+  "sieve_storage": {
+   "mc": "static u8[50000000] in __bss",
+   "c": "static uint8_t[50000000] in .bss",
+   "zig": "std.heap.page_allocator.alloc + @memset (a static [N]u8 global made the Zig compile take ~10 s and was replaced; see notes)",
+   "go": "make([]byte, N)",
+   "rust": "vec![0u8; N]",
+   "csharp": "new byte[N]"
+  },
+  "source_lines": {
+   "mc": 76,
+   "c": 50,
+   "go": 55,
+   "zig": 57,
+   "rust": 59,
+   "csharp": 58
+  }
+ },
+ "A_results": [
+  {
+   "lang": "mc",
+   "variant": "--exe",
+   "build_cmd": "build/mc1 --exe mc/bench.mc -o out/bench-mc",
+   "compile_s_best3": 0.00412,
+   "compile_note": "4.12 ms min of 20 (Time::HiRes); object only (build/mc1 mc/bench.mc -o bench-mc.o): 2.18 ms",
+   "compile_rss_bytes": 2179072,
+   "binary_bytes": 33461,
+   "text_bytes": 1480,
+   "run_s_best3": 1.09,
+   "run_runs": [
+    1.47,
+    1.12,
+    1.09
+   ],
+   "run_rss_bytes": 51347456,
+   "needs_system_linker": false
+  },
+  {
+   "lang": "c",
+   "variant": "clang -O2",
+   "build_cmd": "clang -O2 c/bench.c -o out/bench-c-O2",
+   "compile_s_best3": 0.11,
+   "compile_note": "62.1 ms min of 10 (Time::HiRes)",
+   "compile_rss_bytes": 54132736,
+   "binary_bytes": 33464,
+   "text_bytes": 1320,
+   "run_s_best3": 0.49,
+   "run_runs": [
+    0.75,
+    0.5,
+    0.49
+   ],
+   "run_rss_bytes": 51363840,
+   "needs_system_linker": true
+  },
+  {
+   "lang": "c",
+   "variant": "clang -O0",
+   "build_cmd": "clang -O0 c/bench.c -o out/bench-c-O0",
+   "compile_s_best3": 0.09,
+   "compile_rss_bytes": 40599552,
+   "binary_bytes": 33512,
+   "text_bytes": 740,
+   "run_s_best3": 1.02,
+   "run_runs": [
+    1.36,
+    1.02,
+    1.21
+   ],
+   "run_rss_bytes": 51363840,
+   "needs_system_linker": true
+  },
+  {
+   "lang": "go",
+   "variant": "go build",
+   "build_cmd": "go build -o out/bench-go bench.go",
+   "compile_s_best3": 0.08,
+   "compile_cold_s": 5.94,
+   "compile_note": "cold = fresh GOCACHE (compiles runtime+fmt), 317 MB RSS; warm best of 3 = 0.08 s",
+   "compile_rss_bytes": 26066944,
+   "binary_bytes": 2492482,
+   "text_bytes": 649316,
+   "run_s_best3": 0.55,
+   "run_runs": [
+    0.89,
+    0.55,
+    0.62
+   ],
+   "run_rss_bytes": 54755328,
+   "needs_system_linker": false
+  },
+  {
+   "lang": "zig",
+   "variant": "-O ReleaseFast",
+   "build_cmd": "zig build-exe -O ReleaseFast bench.zig -femit-bin=out/bench-zig-fast",
+   "compile_s_best3": 9.8,
+   "compile_cold_s": 13.42,
+   "compile_note": "warm = global cache (compiler_rt) present; runs 12.26/10.59/9.80",
+   "compile_rss_bytes": 292700160,
+   "binary_bytes": 396304,
+   "text_bytes": 238804,
+   "run_s_best3": 0.5,
+   "run_runs": [
+    0.78,
+    0.51,
+    0.5
+   ],
+   "run_rss_bytes": 51560448,
+   "needs_system_linker": false
+  },
+  {
+   "lang": "zig",
+   "variant": "-O Debug",
+   "build_cmd": "zig build-exe -O Debug bench.zig -femit-bin=out/bench-zig-debug",
+   "compile_s_best3": 2.19,
+   "compile_rss_bytes": 261079040,
+   "binary_bytes": 2046800,
+   "text_bytes": 1272108,
+   "run_s_best3": 1.69,
+   "run_runs": [
+    1.93,
+    1.69,
+    1.72
+   ],
+   "run_rss_bytes": 53035008,
+   "needs_system_linker": false
+  },
+  {
+   "lang": "rust",
+   "variant": "-C opt-level=3",
+   "build_cmd": "rustc -C opt-level=3 bench.rs -o out/bench-rust-O3",
+   "compile_s_best3": 0.19,
+   "compile_rss_bytes": 98631680,
+   "binary_bytes": 466320,
+   "text_bytes": 216908,
+   "run_s_best3": 0.47,
+   "run_runs": [
+    0.74,
+    0.48,
+    0.47
+   ],
+   "run_rss_bytes": 51609600,
+   "needs_system_linker": true
+  },
+  {
+   "lang": "rust",
+   "variant": "-C opt-level=0",
+   "build_cmd": "rustc -C opt-level=0 bench.rs -o out/bench-rust-O0",
+   "compile_s_best3": 0.14,
+   "compile_rss_bytes": 97992704,
+   "binary_bytes": 469152,
+   "text_bytes": 218308,
+   "run_s_best3": 1.55,
+   "run_runs": [
+    1.99,
+    1.67,
+    1.55
+   ],
+   "run_rss_bytes": 51609600,
+   "needs_system_linker": true
+  },
+  {
+   "lang": "csharp",
+   "variant": "JIT (dotnet build -c Release; run: dotnet bench.dll)",
+   "build_cmd": "dotnet build -c Release --no-restore",
+   "compile_s_best3": 0.54,
+   "compile_cold_s": 0.76,
+   "compile_note": "restore 0.80 s once; cold = rm -rf bin obj; --no-incremental warm 0.64 s",
+   "compile_rss_bytes": 176013312,
+   "binary_bytes": 5120,
+   "binary_note": "bench.dll 5120 B + apphost 123944 B; needs the 78 MB Microsoft.NETCore.App shared runtime",
+   "text_bytes": null,
+   "run_s_best3": 0.59,
+   "run_runs": [
+    0.59,
+    0.64,
+    0.67
+   ],
+   "run_rss_bytes": 94601216,
+   "run_note": "apphost with DOTNET_ROOT=.../libexec: 0.59 s / 94.7 MB; 'dotnet run -c Release' (includes build check): 1.71 s / 222 MB",
+   "needs_system_linker": false
+  },
+  {
+   "lang": "csharp",
+   "variant": "NativeAOT (dotnet publish -c Release -r osx-arm64 -p:PublishAot=true)",
+   "build_cmd": "LIBRARY_PATH=/opt/homebrew/opt/openssl@3/lib:/opt/homebrew/opt/brotli/lib dotnet publish -c Release -r osx-arm64 -p:PublishAot=true -o out/cs-aot",
+   "compile_s_best3": 1.04,
+   "compile_cold_s": 3.23,
+   "compile_note": "first attempt FAILED: ld: library 'ssl' not found; second: ld: library 'brotlienc' not found; succeeded with LIBRARY_PATH to Homebrew openssl@3 and brotli. cold = rm -rf bin obj (nuget cache kept). Warm runs 1.86/1.26/1.04 are incremental publishes.",
+   "compile_rss_bytes": 231489536,
+   "binary_bytes": 1020584,
+   "text_bytes": 282276,
+   "run_s_best3": 0.62,
+   "run_runs": [
+    0.94,
+    0.63,
+    0.62
+   ],
+   "run_rss_bytes": 57507840,
+   "needs_system_linker": true,
+   "dylibs": [
+    "libssl.3",
+    "libcrypto.3",
+    "libSystem.B",
+    "libobjc.A",
+    "libswiftCore",
+    "libswiftFoundation",
+    "libz.1",
+    "libbrotli{enc,dec,common}",
+    "libicucore.A",
+    "CoreFoundation/CryptoKit/Foundation/Network/Security/GSS frameworks"
+   ]
+  }
+ ],
+ "B_toolchains": [
+  {
+   "name": "mc",
+   "version": "mc 0.0.0-dev (build/mc1, tree at commit e5a1643)",
+   "root": "build/mc1 (single binary)",
+   "size_bytes": 1181184,
+   "size_human": "1.2 MB (build/mc-exe written by mc --exe: 1170739 B)",
+   "files": 1,
+   "system_linker": "no for macOS/Linux (--exe writes the Mach-O / ELF executable and signs it); Windows executables need lld-link",
+   "self_hosting": "yes: the compiler is written in mc and reaches a byte-identical fixed point (mc1->mc2.o == mc2->mc3.o); a 2848-line C23 seed (stage0) exists only to bootstrap (docs/bootstrap.md)",
+   "dylibs": [
+    "/usr/lib/libSystem.B.dylib"
+   ]
+  },
+  {
+   "name": "go",
+   "version": "go1.26.4 darwin/arm64",
+   "root": "/opt/homebrew/Cellar/go/1.26.4/libexec (go env GOROOT)",
+   "size_human": "258M",
+   "files": 14954,
+   "system_linker": "no for pure Go (measured: go build -x invokes only pkg/tool/darwin_arm64/link, internal linking; cgo programs use external cc)",
+   "self_hosting": "yes since Go 1.5 (2015); from knowledge"
+  },
+  {
+   "name": "zig",
+   "version": "0.16.0",
+   "root": "/opt/homebrew/Cellar/zig/0.16.0_1 (zig env: zig_exe .../bin/zig 21 MB, lib_dir .../lib/zig)",
+   "size_human": "246M",
+   "files": 19548,
+   "system_linker": "no (measured: --verbose-link shows the bundled 'zig ld' driving its own Mach-O linker; the macOS SDK path is passed as -syslibroot)",
+   "self_hosting": "yes: the self-hosted compiler replaced the C++ bootstrap in 0.11 (2023); LLVM is still used for optimized backends (ReleaseFast here); from knowledge"
+  },
+  {
+   "name": "rust",
+   "version": "rustc 1.96.0 (ac68faa20 2026-05-25), cargo 1.96.0",
+   "root": "/Users/schivei/.rustup/toolchains/stable-aarch64-apple-darwin (rustc --print sysroot)",
+   "size_human": "1.7G (~/.rustup 1.7G, ~/.cargo 233M)",
+   "files": 54532,
+   "system_linker": "yes (measured: rustc --print link-args invokes \"cc\" = Apple clang driver -> ld)",
+   "self_hosting": "yes since 2011 (rustc is written in Rust, bootstrapped from a prior stage0 binary); LLVM backend; from knowledge"
+  },
+  {
+   "name": "dotnet",
+   "version": "SDK 10.0.301, runtime 10.0.9",
+   "root": "/opt/homebrew/Cellar/dotnet/10.0.301 (dotnet --list-sdks: .../libexec/sdk/10.0.301 = 350M; shared/Microsoft.NETCore.App 78M)",
+   "size_human": "666M",
+   "files": 4738,
+   "system_linker": "JIT: no (IL, run by the shared runtime); NativeAOT: yes (measured: ILCompiler invokes clang -> ld and links against OpenSSL, brotli, Swift and system frameworks)",
+   "self_hosting": "the C# compiler (Roslyn) is written in C#; the runtime (CoreCLR, JIT, GC) is C++; from knowledge"
+  },
+  {
+   "name": "clang",
+   "version": "Apple clang version 21.0.0 (clang-2100.1.1.101)",
+   "root": "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain",
+   "size_human": "1.0G (clang binary alone 141 MB; usr/lib/clang 25M; MacOSX.sdk 303M)",
+   "files": 5109,
+   "system_linker": "yes (clang drives Apple ld from the same toolchain)",
+   "self_hosting": "yes: clang/LLVM are C++ and build themselves; from knowledge"
+  }
+ ],
+ "C_mc_numbers": {
+  "self_compile_obj_cmd": "build/mc1 src/mc.mc -o <scratch>/x.o",
+  "self_compile_obj_s_best3": 0.88,
+  "self_compile_obj_runs": [
+   0.9,
+   0.93,
+   0.88
+  ],
+  "self_compile_obj_rss_bytes": 59883520,
+  "self_compile_obj_bytes": 1285176,
+  "self_compile_exe_cmd": "build/mc1 --exe src/mc.mc -o <scratch>/mcx",
+  "self_compile_exe_s_best3": 0.93,
+  "self_compile_exe_bytes": 1170736,
+  "self_compile_exe_codesign": "satisfies its Designated Requirement",
+  "src_mc_lines_excl_bundle_data": 24726,
+  "src_mc_files": 63,
+  "bundle_data_mc_lines": 11815,
+  "bundle_data_mc_bytes": 1349348,
+  "stage0_c_lines": 2848,
+  "stage0_budget": 3000,
+  "stage0_c_plus_h_lines": 3064,
+  "codegen_proxy": {
+   "mc_dump_asm_instructions": 370,
+   "mc_dump_asm_labels": 40,
+   "mc_dump_asm_lines": 410,
+   "mc_per_function": {
+    "strlen": 26,
+    "puts": 22,
+    "putnum": 46,
+    "putu64": 46,
+    "mix": 68,
+    "primes": 91,
+    "fib": 32,
+    "main": 39
+   },
+   "mc_workload_only_mix_primes_fib_main": 230,
+   "clang_O2_S_instructions": 330,
+   "clang_O2_per_function": {
+    "main (mix+primes inlined, sieve count vectorized)": 309,
+    "fib": 21
+   },
+   "clang_O0_S_instructions": 185,
+   "clang_O0_per_function": {
+    "main": 30,
+    "mix": 53,
+    "primes": 75,
+    "fib": 27
+   },
+   "note": "mc's count includes strlen/puts/putnum/putu64 (140 instructions) which the C version gets from printf; counting method: mc = lines starting with two spaces in --dump-asm; clang = lines starting with whitespace+letter, excluding '.' directives"
+  },
+  "binary_size": {
+   "mc_exe_bytes": 33461,
+   "clang_O2_bytes": 33464,
+   "clang_O0_bytes": 33512,
+   "mc_text_bytes": 1480,
+   "clang_O2_text_bytes": 1320,
+   "clang_O0_text_bytes": 740,
+   "mc_obj_bytes": 2432,
+   "clang_O2_obj_bytes": 2352
+  }
+ },
+ "D_feature_matrix": {
+  "note": "mc column from docs with file:line citations (see RESULTS.md section D); other languages from general knowledge, marked [k].",
+  "rows": {
+   "generics": {
+    "mc": "no in core (language.md:614-616); examples/lang teaches generics from the surface",
+    "c": "no [k]",
+    "go": "yes [k]",
+    "zig": "yes, comptime [k]",
+    "rust": "yes [k]",
+    "csharp": "yes [k]"
+   },
+   "structs": {
+    "mc": "no struct; #define offsets + accessors (language.md:623-626); examples/api teaches class",
+    "c": "yes",
+    "go": "yes",
+    "zig": "yes",
+    "rust": "yes",
+    "csharp": "yes"
+   },
+   "floats": {
+    "mc": "none in core; <float> library teaches f32/f64 via type_new/syntax_lit/intrinsic (language.md:75-76,618-621)",
+    "c": "yes",
+    "go": "yes",
+    "zig": "yes",
+    "rust": "yes",
+    "csharp": "yes"
+   },
+   "strings": {
+    "mc": "literals only, uptr into __cstring, no string type (language.md:50-54)",
+    "c": "char arrays",
+    "go": "string",
+    "zig": "[]const u8",
+    "rust": "String/&str",
+    "csharp": "System.String"
+   },
+   "closures": {
+    "mc": "&fn + callp intrinsic; no function type, no closures (language.md:469-478)",
+    "c": "function pointers",
+    "go": "closures",
+    "zig": "function pointers",
+    "rust": "closures",
+    "csharp": "lambdas/delegates"
+   },
+   "error_handling": {
+    "mc": "none in the language; exit codes (cli.md:426-441)",
+    "c": "return codes",
+    "go": "error values/panic",
+    "zig": "error unions",
+    "rust": "Result/panic",
+    "csharp": "exceptions"
+   },
+   "memory_safety": {
+    "mc": "unchecked: opaque uptr, ld/st intrinsics, no bounds checks (language.md:73,302-311)",
+    "c": "unchecked",
+    "go": "GC+bounds checks",
+    "zig": "checks in Debug/ReleaseSafe only",
+    "rust": "ownership+bounds checks",
+    "csharp": "GC+bounds checks"
+   },
+   "gc": {
+    "mc": "none; examples/lang uses refcounting in lib/rt.mc, cycles leak (examples/lang/README.md:217-259)",
+    "c": "none",
+    "go": "tracing GC",
+    "zig": "none",
+    "rust": "none",
+    "csharp": "tracing GC"
+   },
+   "concurrency": {
+    "mc": "none in core; examples/conc teaches threads/channels/lock/await (examples/conc/README.md:8-11)",
+    "c": "pthreads (library)",
+    "go": "goroutines/channels",
+    "zig": "std.Thread",
+    "rust": "std threads + async",
+    "csharp": "Task/async"
+   },
+   "optimizer": {
+    "mc": "constant folding only (fold()); no peephole (surface.md:211-212), no inlining (surface.md:1389), no DCE (guide/80-footprint.md:124), no register allocator (objects.md:302-303)",
+    "c": "LLVM",
+    "go": "SSA backend",
+    "zig": "LLVM / self-hosted",
+    "rust": "LLVM",
+    "csharp": "RyuJIT tiered PGO; ILCompiler for AOT"
+   },
+   "register_allocation": {
+    "mc": "none: fixed depth registers x9..x15 (depths 0..6), spill via x16/x17, MAXDEPTH 64, frame <= 4095 B (objects.md:189-191,285-299)",
+    "c": "yes",
+    "go": "yes",
+    "zig": "yes",
+    "rust": "yes",
+    "csharp": "yes"
+   },
+   "cross_targets": {
+    "mc": "macos/aarch64, linux/aarch64, linux/x86_64, windows/aarch64, windows/x86_64 (src/core_writers.mc:57-61); riscv64 bare metal (examples/kernel) and AVR (examples/avr) taught from the surface",
+    "c": "many (LLVM)",
+    "go": "many (GOOS/GOARCH)",
+    "zig": "many",
+    "rust": "many (rustup targets)",
+    "csharp": "RIDs"
+   },
+   "package_manager": {
+    "mc": "mc pkg sync|add|list|vendor|verify|hash|check, mc update; mc.toml [deps], mc.lock, MVS, registry https://pkg.minicompiler.dev (cli.md:315-343, packages.md)",
+    "c": "none",
+    "go": "go modules",
+    "zig": "zig fetch + build.zig.zon",
+    "rust": "cargo",
+    "csharp": "NuGet"
+   },
+   "lsp": {
+    "mc": "none shipped; planned M28 (plan.md:440)",
+    "c": "clangd",
+    "go": "gopls",
+    "zig": "zls",
+    "rust": "rust-analyzer",
+    "csharp": "Roslyn LSP"
+   },
+   "debugger": {
+    "mc": "none: no DWARF, no -g; planned M30 (plan.md:442)",
+    "c": "DWARF",
+    "go": "DWARF/delve",
+    "zig": "DWARF",
+    "rust": "DWARF",
+    "csharp": "PDB; NativeAOT DWARF"
+   },
+   "reproducible_builds": {
+    "mc": "byte-identical fixed point mc2.o == mc3.o, SHA-256 goldens, 8 determinism rules (determinism.md, bootstrap.md:11-40)",
+    "c": "with effort",
+    "go": "yes",
+    "zig": "yes",
+    "rust": "yes in practice",
+    "csharp": "deterministic IL"
+   },
+   "compiler_extensibility": {
+    "mc": "Tier 1 directives (#token/#infix/#prefix/#rule/#include<>/#embed/#section/#opcode/emit/reloc); Tier 2 pass/backend/machine/target; Tier 3/4: 6 word registrations + 7 word-free hooks + intrinsic (hooks.md:286-312, surface.md:646-665)",
+    "c": "none",
+    "go": "none",
+    "zig": "comptime (nearest analogue)",
+    "rust": "proc-macros / macro_rules (nearest analogue)",
+    "csharp": "source generators/analyzers (nearest analogue)"
+   },
+   "sandbox": {
+    "mc": "mc sandbox run|exec|check, Linux only: namespaces, overlay+pivot_root, Landlock, seccomp with supervisor, rlimits (sandbox.md:1-31)",
+    "c": "n/a",
+    "go": "n/a",
+    "zig": "n/a",
+    "rust": "n/a",
+    "csharp": "n/a"
+   },
+   "self_hosting": {
+    "mc": "yes: C seed (2848 lines) compiled once by clang, then mc compiles itself to a fixed point (bootstrap.md:11-56)",
+    "c": "yes",
+    "go": "yes since 1.5",
+    "zig": "yes since 0.11",
+    "rust": "yes",
+    "csharp": "Roslyn in C#, runtime in C++"
+   },
+   "native_exe_without_system_linker": {
+    "mc": "yes on macOS and Linux (macho-exe, elf-exe); Windows needs lld-link (build.md:198-199,697,1117-1122)",
+    "c": "no (ld)",
+    "go": "yes (measured)",
+    "zig": "yes (measured)",
+    "rust": "no (cc; measured)",
+    "csharp": "JIT n/a; AOT no (measured)"
+   }
+  }
+ }
+}

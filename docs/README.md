@@ -9,6 +9,11 @@ format — you teach it from ordinary `mc` source.
 **New here? Start at [guide/00-getting-started.md](guide/00-getting-started.md).** It goes from
 nothing to a running signed binary in about two minutes.
 
+**Curious how it compares?** [comparison.md](comparison.md) measures `mc` against C, Go, Zig,
+Rust and C# on the same workload: a 4.1 ms compile, a 33 KB executable and a 1.2 MB toolchain,
+against a run time still at `clang -O0` level — with the honest caveats and the sources in
+[`../bench/`](../bench/README.md).
+
 ---
 
 ## The guide — task-oriented, read in order
@@ -52,8 +57,10 @@ nothing to a running signed binary in about two minutes.
 
 ## The design documents
 
-These predate this tree and record *why* things are the way they are. The guide and the reference
-describe the compiler as it is; these describe the decisions that produced it.
+Most of these predate this tree and record *why* things are the way they are — the guide and the
+reference describe the compiler as it is; these describe the decisions that produced it.
+`comparison.md` is the exception: it reports a measurement taken against the tree as it stands,
+not a decision behind it, and lives here because it is exhaustive rather than task-oriented.
 
 | document | subject |
 |---|---|
@@ -64,6 +71,7 @@ describe the compiler as it is; these describe the decisions that produced it.
 | [bootstrap.md](bootstrap.md) | cutting `clang`, then `ld`, then the checkout |
 | [determinism.md](determinism.md) | the rules that make the output reproducible |
 | [macho-notes.md](macho-notes.md) | every Mach-O field, with its verified value |
+| [comparison.md](comparison.md) | `mc` measured against C, Go, Zig, Rust and C#: compile time, binary size, run time, and the feature matrix |
 | [ci.md](ci.md) | the GitHub Actions workflows and the release process |
 | [specs/](specs/) | one spec per milestone, `M1.md` … `M30.md` |
 
