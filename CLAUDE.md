@@ -3381,6 +3381,98 @@ agents (`.claude/agents/`): `stage0-dev` (C23), `mc-dev` (`.mc` code), `reviewer
   `mc2-windows-x86_64.sha256`
   `f6594f109a2eb58b48073042aeaa7127125f74735c137185b336e77e1a0103de` (1325521 B), both also
   written byte for byte by `build/mc2`.
+- `on_source` done (coop patch for teko/ngen, owner-approved): **a module is told about every
+  source the lexer pushes.** `stage0/` untouched (2848/3000, `git diff origin/main -- stage0/`
+  empty). The consumer's case: ngen gets free declaration order from a lexical pre-scan, which it
+  can run on the entry and on the files IT opens -- but a `#include "x.tk"` the CORE resolves is
+  invisible, because `do_directive` is internal and pushes without telling anybody.
+  * **`void on_source(uptr fn)`** (`src/hooks.mc` +52/19 code): handler
+    `void f(uptr name, uptr src, i64 len)`, growable table (`grow`), arena tag `T_ONSOURCE`
+    inserted after `T_ONJUMP` (`src/arena.mc` +21/-18, 16 code -- `T_COUNT` 40 -> 41, the eleven
+    tags after it renumbered and `lim_names`/`lim_seeds` reconciled BY NAME, the M42 lesson: the
+    16 that belongs to `backends` travelled with it, and `mc limits` gains an `on_source` row).
+    Handlers run in registration order and answer nothing -- this is an announcement, not a
+    decision.
+  * **One call site, and it covers every road.** `lex_push_mem` is the single funnel: the entry
+    (`lex_init` -> `lex_push`), a relative `#include` (`lex_include` -> `lex_push`), a bundled one
+    (`lex_include_bundled`), a package one (`lex_include_libs`) and `p_push_source`. The call is
+    the LAST thing `lex_push_mem` does, so `cp`/`cend`/`cline` already describe the new frame and
+    a handler reading `lex_file()` sees the source it is being told about.
+  * **The table is in `hooks.mc`, the call cannot be** (`src/lex.mc` +60/31 code): `src/lexdump.mc`
+    includes the lexer with `arena.mc` and nothing else, so the lexer must not name a symbol of
+    `hooks.mc`. It is M15's bundle shape exactly -- `lex_set_source_hook(&run_on_source)`, one
+    function pointer, stored by the first registration; with nothing registered the pointer is 0
+    and there is not even a `callp`.
+  * **The entry file IS announced, and a module need not scan it by hand.** `lex_init` pushes it
+    BEFORE `user_init()` runs (`src/cli.mc`, `src/driver.mc` and `src/limits.mc` all in that
+    order), so the natural call has already happened when a handler can first exist. `on_source`
+    closes that by replaying, at registration time and to the newly registered handler ALONE, in
+    push order, every source already open -- so the rule is one sentence: *a handler sees every
+    source pushed after it registers, plus the ones already open when it registers*, and it holds
+    for a registration made during parsing too. That is what the two new frame fields are for:
+    `OF_SRC`/`OF_LEN` (`OF_SIZE` 32 -> 48) keep the buffer a frame was pushed with untouched while
+    `cp` walks it, so a replay hands over the WHOLE source and not the bytes still unread.
+  * **The one guard, and it was measured before it was written.** A handler runs with the frame it
+    is being told about already on the stack; a push from inside the callback interleaves the
+    announcement of one source with the opening of the next, and a handler that pushes
+    unconditionally recursed until the process stack was gone -- reproduced with
+    `lib/user_srcpush.mc`, **SIGSEGV, exit 139, no diagnostic at all**. A frame-depth comparison
+    after the call cannot see it (the call never returns), so the guard is a re-entrancy flag
+    (`shook_busy`) tested at the HEAD of `lex_push_mem`: the push itself is the error, on the
+    first one, and the message names the source the handler tried to push --
+    `mc: on_source handler pushed a source: srcpush runtime`, exit 1.
+  * **Cost: 133 added lines in `src/`, 66 of them neither comment nor blank** (`lex.mc` +60/31,
+    `hooks.mc` +52/19, `arena.mc` +21/16, twelve of those last being the renumbered tags and the
+    two seed rows). Five new globals -- the seed's `MAXGLOBALS` goes from 444/512 to
+    **449/512 (87%)**.
+  Proofs: `lib/user_syntax_demo.mc` (+55) counts the sources and joins their names
+  (`syntax_expr("srccount")`, `syntax_expr("srcnames")`, the latter building an `N_STR` node), and
+  `scripts/check-surface.sh` (+115) compiles one program that reads both back and prints them --
+  **`<entry>|box runtime|<dir>/inc.mc|prelude`, exit 42** (`srccount` 4 + 40 - 2): the entry
+  (replay), the source the demo module itself pushes at the end of `user_init`, a relative
+  `#include` the CORE resolved and a bundled `#include <prelude>` the core resolved, in push
+  order. The default compiler refuses the same source (`onsrc.mc:6: unknown name`). The guard is
+  asserted with its exact message through `lib/mc_srcpush.mc`. **Inert by construction**:
+  `lib/user_source_nop.mc` + `lib/mc_source_nop.mc` -- a module whose ONLY registration is
+  `on_source` and whose handler does nothing -- produce byte-identical `--dump-ast` and objects
+  over the whole `tests/` corpus. The four new `lib/` fixtures are NOT in `tools/bundle.list`
+  (the M41 precedent for check-script-only modules).
+  -- `make bundle` re-run BEFORE bootstrapping (`src/lex.mc`, `src/hooks.mc` and `src/arena.mc`
+  are bundled): 93 files, raw 1178425 -> LZ 551503, blob 552665 B. `make check` green end to end
+  (**RC 0, zero FAIL**, 8m14s): `budget` 2848/3000, `test` 32/32, `check-lex` 149/149 (3 skipped),
+  `check-ast` 150/150, `check-asm` 150/150, `check-obj` **32/32 identical to the frozen seed**,
+  `check-bundle`, `bootstrap` at a fixed point (`mc2.o == mc3.o`, 1268832 bytes; the `--dump-asm`
+  diff between `mc1` and `mc2` is **empty**), `check-surface` 32/32 + the four new `on_source`
+  cases, `test-exe` 32/32, `check-mc` 15/15, `check-standalone`, `check-parts`, `check-toml` 10/10,
+  `check-build` 53/53, `check-pkg` 85/85, `check-stubs` 9/9, `check-sysroots` (13 rows), `check-limits`
+  **17/17 under 90%**, `check-minimal`, `test-linux` 41/41 and `test-linux-x86_64` 39/39,
+  `test-linux-exe` 44/44 musl + 44/44 gnu and 42/42 + 42/42 on x86_64, `test-windows` 42/42 and
+  `test-windows-x86_64` 40/40 objects cross-compiled, `check-examples`, `check-lang`,
+  `check-conc`, `check-desktop`, `check-float`, `check-wide`, `check-kernel` (QEMU 11.0.1),
+  `check-avr`, `test-sandbox` 55 ok / 0 failed / 1 skipped, `check-docs` (**198 symbols**,
+  36 flags, 27 TOML keys, 10 directives, 51 samples, 361 links), `site` 89 pages + `check-site`
+  (0 link problems) + `check-site-linux` 11/11. `make check-linux-host` RC 0 over all four cells
+  (aarch64 musl 41/41 and gnu 42/42, x86_64 musl 39/39 and gnu 40/40), each after its own
+  `mc2l.o == mc3l.o` and with the cross proof green.
+  `scripts/check-inert.sh build/mc1.pre build/mc1` (pre = a `mc1` built from `origin/main`):
+  **33 objects identical** (`tests/*.mc` and `src/mc.mc`) plus byte-identical artefacts for
+  `examples/api`, `lang`, `conc`, `desktop` and `kernel`.
+  The five goldens rewritten **once**, each only after its own criterion: `mc2.sha256`
+  `6e8eccf1...c641fe` -> `bbf735bd3bdb58948221c945d7652be2e21980f1dc57a169e217f72f7fd6326b`
+  (after the empty `--dump-asm` diff and `cmp build/mc2.o build/mc3.o`); the Linux pair deleted and
+  re-recorded by `make check-linux-host` -- `mc2-linux-arm64.sha256`
+  `f71dda4d84313e40b1a2d205a0c0314cfd61747b4dfda2fe09a76461304f5868`,
+  `mc2-linux-x86_64.sha256`
+  `24ed180c0538715675ac1c35332ebc51506d39c9beaa21dac9c4bb659551b1c9`; the Windows pair
+  cross-computed per `tests/golden/README.md` -- `mc2-windows-arm64.sha256`
+  `a39a9f4d363882c58ba80b406c586f9838bf9b683443cdbaddcec71bfd2ffe2d` (1295230 B),
+  `mc2-windows-x86_64.sha256`
+  `54a3b2536ee550154add7e1f4c869c16861dfb6522e778fdfb8ea80fc5ffd208` (1330894 B), both also
+  written byte for byte by `build/mc2`.
+  Docs: `docs/reference/hooks.md` (§ 1's pipeline, § 3 is now six word registrations + **six**
+  hooks that claim none, and an `on_source` section with the four roads, the entry-file rule and
+  the guard), `docs/reference/diagnostics.md` (one row, § 5), `docs/surface.md` (the ten
+  registrations, and a § "Every source the lexer pushes").
 - Next: the **site + registry server, M47 S4-S6**, in `minicompiler/mc-registry`; then **M44 steps 4-5**
   (slim / install / upgrade), then **M42 step 2** (PE `--exe`, CI-gated on the Windows runners).
   **M46** only on the owner's request; **M43 Layer 2** after 1.0.0. M13 and M18 stay in the backlog

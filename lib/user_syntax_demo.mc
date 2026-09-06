@@ -1018,6 +1018,58 @@ i64 sd_defaults(i64 root) {
     return root;
 }
 
+// ---- on_source: every source the lexer pushes ----
+// The consumer that asked for the hook does a lexical pre-scan of each file it
+// will compile, to get free declaration order; this module does the smallest
+// thing a program can observe instead -- it counts the sources and joins their
+// names -- because what has to be proved is WHICH sources arrive, not what a
+// scan makes of them. Four roads reach the handler here: the ENTRY file
+// (announced at registration, since lex_init pushes it before user_init runs),
+// the "box runtime" source this very module pushes at the end of user_init, a
+// relative `#include` the CORE resolved, and a bundled `#include <name>` the
+// core resolved too. Only the last two are new: a module can already see the
+// files it opens itself.
+#define SD_SRCMAX 4096
+i64 sd_nsrc = 0;                                 // sources announced so far
+u8  sd_srcnbuf[SD_SRCMAX];                       // their names, joined by `|`
+i64 sd_srcnlen = 0;
+
+void sd_source(uptr name, uptr src, i64 len) {
+    sd_nsrc = sd_nsrc + 1;
+    if (sd_srcnlen > 0 && sd_srcnlen < SD_SRCMAX - 1) {
+        st8(sd_srcnbuf + sd_srcnlen, '|');
+        sd_srcnlen = sd_srcnlen + 1;
+    }
+    i64 i = 0;
+    loop {
+        if (sd_srcnlen >= SD_SRCMAX - 1) break;
+        i64 c = ld8(name + i);
+        if (c == 0) break;
+        st8(sd_srcnbuf + sd_srcnlen, c);
+        sd_srcnlen = sd_srcnlen + 1;
+        i = i + 1;
+    }
+    st8(sd_srcnbuf + sd_srcnlen, 0);
+}
+
+i64 sd_srccount() {                              // how many sources, so far
+    i64 line = p_line();
+    uptr fl = p_file();
+    p_next();
+    return sd_int(sd_nsrc, line, fl);
+}
+
+i64 sd_srcnames() {                              // their names, as a string literal
+    i64 line = p_line();
+    uptr fl = p_file();
+    p_next();
+    i64 n = node_new(N_STR, line, fl);
+    set_nd_name(n, xstrdup(sd_srcnbuf, sd_srcnlen));
+    set_nd_val(n, sd_srcnlen);
+    set_nd_type(n, TY_UPTR);
+    return n;
+}
+
 void user_init() {
     sd_ty_fix  = type_new("fix",  8,  8,  TK_INT);    // M24: two taught primitives
     sd_ty_pair = type_new("pair", 16, 16, TK_WIDE);
@@ -1057,6 +1109,9 @@ void user_init() {
     syntax_param(&sd_param);                     // the one that claims real parameters
     syntax_param(&sd_peat);                      // LAST: it consumes and declines
     syntax_lit(&sd_leat);                        // LAST, for the same reason
+    on_source(&sd_source);                       // every source the lexer pushes
+    syntax_expr("srccount", &sd_srccount);       // the two of them, readable
+    syntax_expr("srcnames", &sd_srcnames);
     sd_ty_arr = type_new("i64[]", 8, 8, TK_INT); // the type position: a suffix
     syntax_type(&sd_type);                       // ... on a word the core owns
     syntax_type(&sd_teat);                       // broken on purpose: tests/err/077

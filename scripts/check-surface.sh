@@ -41,6 +41,11 @@
 #
 # `continue N` (the coop patch): two tests/err/ cases asserted with the DEFAULT
 # compiler -- the feature is core, and its positive half lives in tests/mc/.
+#
+# `on_source` (the coop patch): the four roads a source arrives by, counted and
+# named from inside a program; the guard against a handler that pushes one
+# itself (lib/mc_srcpush.mc); and the inertness of a handler that does nothing
+# (lib/mc_source_nop.mc), over the whole tests/ corpus.
 mc0="${1:-build/mc0}"
 mc1="${2:-build/mc1}"
 
@@ -1234,6 +1239,116 @@ else
         echo "ok syntax_type returning 0: --dump-ast and objects identical over tests/"
     else
         fails=$((fails + tnfails))
+    fi
+fi
+
+# ---- on_source: every source the lexer pushes ----
+# The demo counts the sources it is told about and joins their names. Four roads
+# reach the handler and the program reads both counters back: the ENTRY (which
+# lex_init pushes BEFORE user_init, so it can only arrive as the replay
+# on_source() does at registration), the "box runtime" the module itself pushes
+# at the end of user_init, a relative `#include` the CORE resolved, and a
+# bundled `#include <prelude>` the core resolved too. The last two are the ones
+# a module has no other way to see: do_directive is internal.
+mkdir -p "$tmp/src"
+printf 'i64 forty() { return 40; }\n' > "$tmp/src/inc.mc"
+cat > "$tmp/src/onsrc.mc" <<'ONSRC'
+#include "inc.mc"
+#include <prelude>
+extern i64 write(i64 fd, uptr buf, i64 n);
+i64 slen(uptr s) { i64 n = 0; loop { if (ld8(s + n) == 0) break; n = n + 1; } return n; }
+i64 main() {
+    uptr s = srcnames;
+    write(1, s, slen(s));
+    return srccount + forty() - 2;
+}
+ONSRC
+rm -f "$tmp/onsrc"
+if ! msg=$("$demo" --exe "$tmp/src/onsrc.mc" -o "$tmp/onsrc" 2>&1); then
+    echo "FAIL on_source (compilation: $msg)"
+    fails=$((fails + 1))
+else
+    out=$("$tmp/onsrc"); rc=$?
+    # 4 sources: entry, box runtime, inc.mc, prelude -- so 4 + 40 - 2 = 42
+    if [ "$rc" != 42 ]; then
+        echo "FAIL on_source (exit $rc, expected 42: $out)"
+        fails=$((fails + 1))
+    else
+        ok=1
+        for want in "onsrc.mc" "box runtime" "inc.mc" "prelude"; do
+            case "$out" in *"$want"*) ;; *) ok=0; echo "FAIL on_source: $want not announced ($out)" ;; esac
+        done
+        # and in push order, the entry first
+        case "$out" in *onsrc.mc\|box\ runtime\|*inc.mc\|prelude) ;; *) ok=0
+            echo "FAIL on_source: wrong order ($out)" ;; esac
+        if [ "$ok" = 1 ]; then
+            echo "ok on_source: entry, p_push_source, disk #include and <prelude>, in order"
+        else
+            fails=$((fails + 1))
+        fi
+    fi
+fi
+
+# the default compiler refuses the same source: srcnames/srccount are the
+# module's words and nothing else knows them
+if msg=$("$mc1" "$tmp/src/onsrc.mc" -o "$tmp/onsrc.o" 2>&1); then
+    echo "FAIL: the default compiler accepted the on_source source"
+    fails=$((fails + 1))
+else
+    echo "ok the default compiler rejects the on_source source (${msg##*/})"
+fi
+
+# The one guard: a handler that pushes a source from inside the callback. The
+# frame it is being told about is already on the stack, so a push there
+# interleaves the announcement of one source with the opening of the next -- and
+# a handler that pushes unconditionally recursed until the process stack was
+# gone (SIGSEGV, exit 139, no diagnostic) before the flag existed.
+sp="build/mc-srcpush"
+rm -f "$sp"
+if ! msg=$("$mc1" --exe lib/mc_srcpush.mc -o "$sp" 2>&1); then
+    echo "FAIL: compiling lib/mc_srcpush.mc: $msg"
+    fails=$((fails + 1))
+else
+    printf 'i64 main() { return 42; }\n' > "$tmp/plain.mc"
+    if msg=$("$sp" "$tmp/plain.mc" -o "$tmp/plain.o" 2>&1); then
+        echo "FAIL: on_source handler pushed a source and was not refused"
+        fails=$((fails + 1))
+    elif [ "$msg" = "mc: on_source handler pushed a source: srcpush runtime" ]; then
+        echo "ok on_source guard ($msg)"
+    else
+        echo "FAIL on_source guard"
+        echo "  expected: mc: on_source handler pushed a source: srcpush runtime"
+        echo "  got:      $msg"
+        fails=$((fails + 1))
+    fi
+fi
+
+# And the inertness half: a module whose ONLY registration is on_source and
+# whose handler does nothing has to produce exactly the tree and exactly the
+# object the compiler without the hook produces -- for every source of every
+# program, the entry included.
+snop="build/mc-source-nop"
+rm -f "$snop"
+if ! msg=$("$mc1" --exe lib/mc_source_nop.mc -o "$snop" 2>&1); then
+    echo "FAIL: compiling lib/mc_source_nop.mc: $msg"
+    fails=$((fails + 1))
+else
+    snfails=0
+    for f in tests/*.mc; do
+        [ -f "$f" ] || continue
+        "$mc1"  --dump-ast "$f" > "$tmp/sn0.ast" 2>&1
+        "$snop" --dump-ast "$f" > "$tmp/sn1.ast" 2>&1
+        cmp -s "$tmp/sn0.ast" "$tmp/sn1.ast" || {
+            echo "FAIL on_source inert: --dump-ast of $f"; snfails=$((snfails + 1)); }
+        "$mc1"  "$f" -o "$tmp/sn0.o" 2>/dev/null
+        "$snop" "$f" -o "$tmp/sn1.o" 2>/dev/null
+        cmp -s "$tmp/sn0.o" "$tmp/sn1.o" || {
+            echo "FAIL on_source inert: object of $f"; snfails=$((snfails + 1)); }
+    done
+    if [ "$snfails" = 0 ]; then
+        echo "ok on_source doing nothing: --dump-ast and objects identical over tests/"
+    else
+        fails=$((fails + snfails))
     fi
 fi
 

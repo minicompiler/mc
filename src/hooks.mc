@@ -21,6 +21,11 @@
 // taught. `syntax_stmt("{", &f)` now also catches the blocks parse_function and
 // a `#rule` block hole parse, so a module that tracks scopes sees all of them.
 //
+// on_source(&f) is the third registration keyed by nothing, and the only hook
+// that is not on the parse path: it fires from lex_push_mem, for every source
+// the lexer opens -- the entry, an `#include` the CORE resolved, a bundled or
+// package one, and a p_push_source a module made.
+//
 // M31: `on_jump(&f)` is the second registration keyed by nothing. It fires on
 // the EXIT EDGES -- return, break, continue -- at the moment the core builds the
 // node, ahead of every on_stmt hook, which is the only place a scope guard can
@@ -195,6 +200,53 @@ i64 run_on_jump(i64 n, i64 kind, i64 depth) {
         i = i + 1;
     }
     return n;
+}
+
+// ---- on_source, every source the lexer pushes ----
+// `on_source(&f)` registers `void f(uptr name, uptr src, i64 len)`, called from
+// lex_push_mem right after cp/cend change -- so it fires for the ENTRY file, for
+// every `#include "x"` from disk, for every `#include <name>` served by the
+// bundle or by a package, and for every p_push_source a module makes. `name` is
+// what lex_file() prints for that frame, `src`/`len` the whole buffer.
+//
+// The third registration keyed by nothing, and the first one that is not on the
+// parse path at all: a module doing a lexical pre-scan (free declaration order,
+// which needs the WORD of every type before the first body is parsed) can reach
+// the file it was given and the files it includes itself, but a `#include` the
+// CORE resolves is invisible to it -- do_directive is internal and pushes
+// without telling anybody. This is that missing announcement, and nothing more:
+// the handler returns nothing and the core does not read the source again.
+//
+// A handler sees every source pushed after it registers, plus -- announced at
+// registration time, in push order -- the ones already open. The second half is
+// what makes the entry visible: lex_init pushes it BEFORE user_init runs.
+//
+// The table is here, with every other registry; the call site cannot be, because
+// src/lexdump.mc includes the lexer without this file. lex_set_source_hook is
+// the one function pointer between them, exactly as bopen_fn is for the bundle.
+uptr onsrc_fn;
+i64  onsrccap = 0;
+i64  nonsource = 0;
+
+uptr onsrc_fn_at(i64 i) { return ld64(onsrc_fn + i * 8); }
+
+void on_source(uptr fn) {
+    onsrc_fn = grow(T_ONSOURCE, onsrc_fn, nonsource, &onsrccap, 8);
+    st64(onsrc_fn + nonsource * 8, fn);
+    nonsource = nonsource + 1;
+    lex_set_source_hook(&run_on_source);
+    lex_replay_sources(fn);            // the sources already open, to this handler alone
+}
+
+// every handler, in registration order; nothing to short-circuit, since a
+// handler answers nothing
+void run_on_source(uptr name, uptr src, i64 len) {
+    i64 i = 0;
+    loop {
+        if (i >= nonsource) break;
+        callp(onsrc_fn_at(i), name, src, len);
+        i = i + 1;
+    }
 }
 
 // applies the registered passes, in order: root = f(root)

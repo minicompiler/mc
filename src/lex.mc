@@ -111,12 +111,17 @@
 #define TOK_FILE  40
 #define TOK_SIZE  48
 
-// ---- OpenFile: { cp, cend, line, name } ----
+// ---- OpenFile: { cp, cend, line, name, src, len } ----
+// `src`/`len` are the buffer this frame was pushed WITH, kept untouched while
+// cp walks it: that is what on_source replays to a handler registered after the
+// push (the entry file, always, since lex_init runs before user_init).
 #define OF_CP   0
 #define OF_CEND 8
 #define OF_LINE 16
 #define OF_NAME 24
-#define OF_SIZE 32
+#define OF_SRC  32
+#define OF_LEN  40
+#define OF_SIZE 48
 
 uptr toktab;                          // M23: grows by doubling (arena.mc grow())
 i64 tokcap = 0;
@@ -182,10 +187,14 @@ uptr of_cp(uptr f)   { return ld64(f + OF_CP); }
 uptr of_cend(uptr f) { return ld64(f + OF_CEND); }
 i64  of_line(uptr f) { return ld64(f + OF_LINE); }
 uptr of_name(uptr f) { return ld64(f + OF_NAME); }
+uptr of_src(uptr f)  { return ld64(f + OF_SRC); }
+i64  of_len(uptr f)  { return ld64(f + OF_LEN); }
 void set_of_cp(uptr f, uptr v)   { st64(f + OF_CP, v); }
 void set_of_cend(uptr f, uptr v) { st64(f + OF_CEND, v); }
 void set_of_line(uptr f, i64 v)  { st64(f + OF_LINE, v); }
 void set_of_name(uptr f, uptr v) { st64(f + OF_NAME, v); }
+void set_of_src(uptr f, uptr v)  { st64(f + OF_SRC, v); }
+void set_of_len(uptr f, i64 v)   { st64(f + OF_LEN, v); }
 
 uptr inc_at(i64 i)            { return ld64(inclist + i * 8); }
 void set_inc_at(i64 i, uptr v) { st64(inclist + i * 8, v); }
@@ -444,10 +453,52 @@ uptr path_join(uptr base, uptr rel) {
     return path_norm(s);
 }
 
+// ---- on_source, reached through one function pointer ----
+// The registry lives in src/hooks.mc, like every other one, but src/lexdump.mc
+// includes this file with arena.mc and NOTHING else -- so the lexer must not
+// name a symbol of hooks.mc. It is the shape M15 gave the bundle: hooks.mc
+// stores &run_on_source here on the first registration, and with nothing
+// registered the pointer is 0 and lex_push_mem does not even make the call.
+uptr shook_fn = 0;
+i64  shook_busy = 0;                  // 1 while a handler is running
+
+void lex_set_source_hook(uptr fn) { shook_fn = fn; }
+
+// A handler runs with the frame it is being told about already on the stack,
+// and the one thing it must not do there is push another source: the
+// announcement of one source would interleave with the opening of the next, and
+// a handler that pushes unconditionally recurses until the process stack is
+// gone -- measured, SIGSEGV, no diagnostic at all. The flag makes the push
+// itself the error, so the message arrives on the first one and names the
+// source the handler tried to push.
+void lex_announce(uptr name, uptr src, i64 len) {
+    shook_busy = 1;
+    callp(shook_fn, name, src, len);
+    shook_busy = 0;
+}
+
+// Every source already open, announced to ONE newly registered handler in push
+// order. lex_init pushes the entry before user_init runs, so without this a
+// handler could never see the file it was asked to look at; with it, the rule
+// is the same for every source, whenever the handler registered.
+void lex_replay_sources(uptr fn) {
+    i64 n = nopen;
+    i64 i = 0;
+    loop {
+        if (i >= n) break;
+        uptr f = of_at(i);
+        shook_busy = 1;
+        callp(fn, of_name(f), of_src(f), of_len(f));
+        shook_busy = 0;
+        i = i + 1;
+    }
+}
+
 // pushes a source that is already in memory. `virt` marks the level as coming
 // from the bundle, which is what tells lex_include to resolve the file's own
 // relative includes by name instead of by path (M15).
 void lex_push_mem(uptr name, uptr src, i64 len, i64 virt, i64 line) {
+    if (shook_busy) die2("on_source handler pushed a source", name);
     i64 oc = opencap;
     fstack = grow(T_OPENS, fstack, nopen, &opencap, OF_SIZE);
     if (opencap != oc) {
@@ -469,11 +520,18 @@ void lex_push_mem(uptr name, uptr src, i64 len, i64 virt, i64 line) {
         set_of_line(prev, cline);
     }
     set_of_name(of_at(nopen), name);
+    set_of_src(of_at(nopen), src);
+    set_of_len(of_at(nopen), len);
     st64(fvirt + nopen * 8, virt);
     nopen = nopen + 1;
     cp = src;
     cend = src + len;
     cline = 1;
+    // the hook, last: cp/cend/cline already describe the new frame, so a
+    // handler that reads p_file()/lex_file() sees the source it is being told
+    // about. Every road gets here -- the entry (lex_init), a relative
+    // #include, a bundled or package one, and p_push_source.
+    if (shook_fn) lex_announce(name, src, len);
 }
 
 void lex_push(uptr path, i64 line) {

@@ -643,7 +643,7 @@ things a template can't express. Tier 3 is the answer, and it's the same idea as
 user writes a `.mc` module that runs inside the compiler**, this time during *parsing*, using the
 parser's public API.
 
-### The nine registrations
+### The ten registrations
 
 | registration | what you write | when it runs |
 |---|---|---|
@@ -656,10 +656,12 @@ parser's public API.
 | `on_jump(&f)` | `i64 f(i64 n, i64 kind, i64 depth)` — same three answers | `parse_stmt_core`, as it builds a `return`/`break`/`continue` (M31) |
 | `syntax_param(&f)` | `i64 f()` — returns an `N_PARAM`, or 0 for "the core handles this one" | `parse_params`, at the head of its loop, **before** `type_of_token` (M41.5) |
 | `syntax_type(&f)` | `i64 f(i64 ty)` — returns another type id, or 0 for "not mine" | right after the core read a type word, at all six sites that read one |
+| `on_source(&f)` | `void f(uptr name, uptr src, i64 len)` — answers nothing | `lex_push_mem`, for **every** source the lexer opens: the entry, an `#include` the core resolved, a bundled or package one, and a `p_push_source` |
 
 The first five register the word in the lexer (`tok_add`), the same as `#rule` does with its
-dispatch literal, and all five **refuse a core keyword** (`K_U8`..`K_EXTERN`); the last four claim
-no word at all — they observe, replace or own nodes at a position the parser reaches on its own:
+dispatch literal, and all five **refuse a core keyword** (`K_U8`..`K_EXTERN`); the last five claim
+no word at all — four of them observe, replace or own nodes at a position the parser reaches on
+its own, and the fifth is not on the parse path at all:
 
 ```
 $ build/mc1 --exe my_compiler.mc -o my-mc && ./my-mc x.mc -o x.o
@@ -1548,6 +1550,39 @@ One more thing this makes explicit, and it is a **contract**: `tok_add` is idemp
 consulted at disjoint grammar positions — `type_of_token` where a type belongs, `syntax_expr_find`
 at the head of `parse_primary` — and the one place they meet, the cast `(w)`, resolves to the type
 because `parse_primary` tests `type_of_token` first.
+
+See `docs/reference/hooks.md` § 3.
+
+## Every source the lexer pushes
+
+The third thing the same consumer needed, and the only registration that is not on the parse path.
+A module can already see the files it opens *itself* — it calls `lex_include` from its own handler.
+What it cannot see is a `#include` the **core** resolved: `do_directive` is internal and pushes
+without telling anybody. So a lexical pre-scan (the motivating case is free declaration order —
+reserving the *word* of every type before any body is parsed) was blind to exactly the files the
+source asks for.
+
+`on_source(&f)` registers `void f(uptr name, uptr src, i64 len)`, called from `lex_push_mem` right
+after `cp`/`cend` change. Four roads reach it and there is no fifth: the **entry** file, a relative
+`#include`, a `#include <name>` served by the bundle or by a locked package, and a
+`p_push_source`. `name` is what `lex_file()` prints for that frame; `src`/`len` are the whole
+buffer, kept untouched in the frame record while `cp` walks it. The handler answers nothing.
+
+**The entry is announced too, and a module need not scan it by hand.** `lex_init` pushes it
+*before* `user_init()` runs, so `on_source` announces — at registration time, to the newly
+registered handler alone, in push order — every source already open. The rule: *a handler sees
+every source pushed after it registers, plus the ones already open when it registers.*
+
+One guard, and it is the only one: a handler must not push a source from inside the callback.
+The frame it is being told about is already on the stack, so a push there interleaves the
+announcement of one source with the opening of the next — and a handler that pushes
+unconditionally recursed until the process stack was gone (SIGSEGV, exit 139, no diagnostic). Any
+push reached from inside a handler is now `on_source handler pushed a source: <name>`.
+
+Inert by construction: `lib/user_source_nop.mc` registers `on_source` and its handler does nothing
+at all, and `scripts/check-surface.sh` checks that its `--dump-ast` and its objects are
+byte-identical to the untaught compiler's over the whole `tests/` corpus. With nothing registered
+the lexer does not even make the call.
 
 See `docs/reference/hooks.md` § 3.
 
