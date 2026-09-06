@@ -399,8 +399,9 @@ before `return`, so a C caller of it gets what its ABI entitles it to. A functio
 `return` is untouched — that is what keeps the `#opcode` syscall wrappers, which rely on "the
 epilogue leaves `x0` alone", working.
 
-`callp` is the exception, by decision: a pointer call has no declaration, its result stays `i64`,
-and a caller that knows better writes `(i32) callp(...)`.
+`callp` has no declaration to read, so **the cast says it**: a cast applied directly to a `callp`
+call declares what that call returns (§ 7). With no cast the result is `i64`, exactly as it always
+was.
 
 ```mc
 // expect-exit: 42
@@ -470,9 +471,30 @@ The core has no function type. `&name` on a function or an `extern` is a `uptr` 
 
 `callp(p, a1, …, a11)` puts `p` in `x16` and the arguments where a direct call would put them —
 `x0..x7`, then the stack — and issues `blr x16`. Live depth registers are saved exactly as for a
-`bl`. The result is `x0`, typed `i64` — a pointer call has no declaration, so it is the one call
-M45's narrowing does not touch; converting it is the caller's job, `(i32) callp(...)`. Arity is 1 to 12 counting
-the pointer (`callp expects 1 to 12 arguments`).
+`bl`. Arity is 1 to 12 counting the pointer (`callp expects 1 to 12 arguments`).
+
+**A cast applied directly to a `callp` declares what the call returns.** There is no callee to read
+a signature from and a cast is the only syntax in the language that names a type inside an
+expression, so `(i32) callp(p, x)` is the declaration and not a conversion: the compiler types the
+*call* `i32`, M45's call-side extension applies to it (§ 6), and the written cast then repeats an
+extension that is idempotent. With no cast the call is `i64` and every bit the callee left in `x0`
+comes back untouched.
+
+The rule is what makes an indirect call to a function returning something other than a machine word
+work at all. A taught type is the case that cannot be written any other way: with `<float>`
+([../guide/96-a-new-primitive.md](../guide/96-a-new-primitive.md)), `(f64) callp(&dbl, 2.0)` is what
+tells the machine the value comes back in `d0` — without the cast the machine is told "integer",
+moves `x0`, and the arithmetic around it silently reads the pointer's own bits.
+
+```mc
+// expect-exit: 42
+i64 wide(i64 x) { return 0x1234567800000000 + x; }
+
+i64 main() {
+    uptr p = &wide;
+    return (i32) callp(p, 42);       // 42, not 1311768464867721258
+}
+```
 
 ```mc
 // expect-exit: 42
