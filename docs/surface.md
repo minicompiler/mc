@@ -1622,6 +1622,13 @@ which is what keeps `<prelude>`'s `while` and `for` working everywhere. Neither 
 carries the mark but nothing changes for it: only the identifier branch is scoped, and punctuation
 cannot collide with a name. The full table is in `docs/reference/hooks.md` § 3.
 
+The two roads are **not exclusive**: `tok_add` is idempotent, so `syntax_stmt("while", &f)` marks
+the very entry `<prelude>`'s `#rule stmt: while ...` dispatches on. Such a lexeme is never hidden —
+the rule has to keep firing in the sources the module does not claim — and what the scope decides
+there is the **dispatch**: the module's handler in a claimed source, the `#rule` road in an
+unclaimed one. `lib/user_claim_rule.mc` teaches `while` and compiles both halves of one program:
+42 from the prelude's loop in the `.mc` file, 6 from the module's own `while` in the `.tk` one.
+
 The replay rule is `on_source`'s: `lex_init` pushes the entry before `user_init()` runs, so
 registering re-asks the whole chain for every frame still open. A module that claims nothing has
 taught the compiler nothing any source can reach — that is the rule, not an exception. Inert by

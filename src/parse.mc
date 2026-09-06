@@ -238,6 +238,32 @@ void err_name(uptr msg) {
     err_at(tok_file(cur), tok_line(cur), msg);
 }
 
+// ---- the two roads that create a lexeme ----
+// tok_add is idempotent per lexeme, so a word a DIRECTIVE introduces may be the
+// very word a module taught: `#include <prelude>` writes `while` into the table
+// through a `#rule`, and syntax_stmt("while") marks that same entry. The
+// directive's half is not scoped by source_claim -- the lexeme stays a word in
+// every source (src/lex.mc's lex_word_id) -- so the two meanings live side by
+// side and this is what tells them apart at the dispatch.
+i64 tok_add_dir(uptr text, i64 len) {
+    i64 id = tok_add(text, len);
+    tok_set_rule(id);
+    return id;
+}
+
+// does the MODULE's handler apply in the source being parsed? In a claimed
+// source it always does. In an unclaimed one a word a directive introduced falls
+// through to the #rule (or the core) road, which is the meaning that source can
+// see; a word only the module taught never gets here at all -- lex_word_id
+// already handed it back as an identifier.
+// Out of scope, deliberately: a word that is both a `#rule` literal and a taught
+// TYPE (type_alias/type_new). type_of_token is not consulted through this, so
+// such a word is a type in every source that lexes it as a word.
+i64 taught_here(i64 tok) {
+    if (lex_claimed()) return 1;
+    return !tok_is_rule(tok);
+}
+
 // ---- Pratt tables ----
 i64 infix_find(i64 tok) {
     i64 i = 0;
@@ -773,7 +799,7 @@ i64 parse_primary() {
     i64 line = tok_line(cur);
     uptr fl = tok_file(cur);
     i64 xi = syntax_expr_find(tok_id(cur));  // M21 (Tier 3): taught expression
-    if (xi >= 0) {
+    if (xi >= 0 && taught_here(tok_id(cur))) {
         uptr cp0 = cp;                       // lexer cursor before the handler
         uptr t0 = tok_start(cur);            // ... and the token it received
         uptr w = cur_name();                 // the word, for the two errors below
@@ -1254,7 +1280,7 @@ i64 parse_stmt_core() {
     i64 line = tok_line(cur);
     uptr fl = tok_file(cur);
     i64 si = syntax_stmt_find(tok_id(cur));      // Tier 3: taught statement
-    if (si >= 0) return stmt_syntax(si);
+    if (si >= 0 && taught_here(tok_id(cur))) return stmt_syntax(si);
     i64 ri = rule_find(tok_id(cur), 0);          // does the current token open a rule?
     if (ri >= 0) return rule_expand(ri, 0);
     if (tok_id(cur) == T_HOLE) {                 // loose `$init`/`$b` in the template
@@ -1479,7 +1505,7 @@ void do_rule(i64 line, uptr fl) {
             // cur_name, not tok_start: a token's lexeme stays stored in the
             // table and tok_text prints it as a string — it must be in the arena
             i64 id = tok_id(cur);
-            if (id == T_IDENT) id = tok_add(cur_name(), tok_len(cur));
+            if (id == T_IDENT) id = tok_add_dir(cur_name(), tok_len(cur));
             next();
             it = IT_LIT + id * 8;
         }
@@ -1767,13 +1793,13 @@ void do_directive() {
     }
     if (d == D_TOKEN) {
         if (tok_id(cur) != T_STR) err_at(fl, line, "#token expects a string");
-        tok_add(tok_start(cur), tok_len(cur));   // bytes stay in the arena
+        tok_add_dir(tok_start(cur), tok_len(cur));   // bytes stay in the arena
         next();
         return;
     }
     if (d == D_INFIX || d == D_PREFIX) {
         if (tok_id(cur) != T_STR) err_at(fl, line, "directive expects a string");
-        i64 tok = tok_add(tok_start(cur), tok_len(cur));
+        i64 tok = tok_add_dir(tok_start(cur), tok_len(cur));
         next();
         i64 prec = 0;
         i64 right = 0;
@@ -2301,7 +2327,7 @@ i64 parse_top() {
     i64 line = tok_line(cur);
     uptr fl = tok_file(cur);
     i64 si = syntax_find(tok_id(cur));       // Tier 3: taught top-level declaration
-    if (si >= 0) {
+    if (si >= 0 && taught_here(tok_id(cur))) {
         uptr cp0 = cp;                       // lexer cursor before the handler
         uptr t0 = tok_start(cur);            // ... and the token it received
         callp(syntax_fn_at(si));             // the handler eats the word and calls top_add

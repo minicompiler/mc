@@ -98,13 +98,24 @@
 // ---- TokEnt: { text, len, word, id, taught } ----
 // `taught` is the one field stage0's TokEnt does not have, and the divergence is
 // deliberate (the same kind MAXSTRS/MAXGLOBALS/MAXPARAMS already are): the seed
-// has no word_add at all, so it can never set it. 1 marks a lexeme a MODULE
-// registered through hooks.mc's word_add -- syntax, syntax_stmt, syntax_expr,
-// syntax_infix, type_alias, type_new -- and it is what source_claim scopes. A
-// `#token`/`#rule`/`#infix` literal goes through tok_add directly and is NOT
-// marked: those belong to whoever wrote the directive, in the source that wrote
-// it. A mark per entry rather than an id threshold, because the two roads
-// interleave: `#rule` adds tokens while a taught compiler parses.
+// has no word_add at all, so it can never set it. It carries TWO bits, in one
+// field, because the two roads that create a lexeme are not exclusive -- tok_add
+// is idempotent per lexeme, so one entry can have arrived by both:
+//   bit 1 (TE_TAUGHT_BIT)  a MODULE registered it through hooks.mc's word_add
+//                          -- syntax, syntax_stmt, syntax_expr, syntax_infix,
+//                          type_alias, type_new -- and it is what source_claim
+//                          scopes: outside a claimed source the lexeme is an
+//                          ordinary identifier again.
+//   bit 2 (TE_RULE_BIT)    a DIRECTIVE introduced it: a `#rule` pattern literal,
+//                          `#token`, `#infix`, `#prefix`. That belongs to
+//                          whoever wrote the directive, in the source that wrote
+//                          it, so it is NEVER hidden -- otherwise a module that
+//                          teaches `while` (a lexeme <prelude> already owns
+//                          through a #rule) would stop the rule from firing in
+//                          the very sources the module does not claim, the
+//                          core's own files included.
+// Bits per entry rather than an id threshold, because the two roads interleave:
+// `#rule` adds tokens while a taught compiler parses.
 #define TE_TEXT   0
 #define TE_LEN    8
 #define TE_WORD   16
@@ -330,22 +341,49 @@ void tok_init() {
     tok_add(".", 1);
 }
 
+#define TE_TAUGHT_BIT 1
+#define TE_RULE_BIT   2
+
 // 1 when `id` is a lexeme a module TAUGHT (hooks.mc's word_add). The id of an
 // entry is 256 + its index and entries are never removed, so this is a load and
 // not a scan -- it runs once per identifier lexed.
 i64 tok_is_taught(i64 id) {
     if (id < 256) return 0;
     if (id - 256 >= ntok) return 0;
-    return te_taught(te_at(id - 256));
+    return te_taught(te_at(id - 256)) & TE_TAUGHT_BIT;
+}
+
+// 1 when `id` is a lexeme a DIRECTIVE introduced (parse.mc's tok_add_dir).
+i64 tok_is_rule(i64 id) {
+    if (id < 256) return 0;
+    if (id - 256 >= ntok) return 0;
+    return (te_taught(te_at(id - 256)) & TE_RULE_BIT) != 0;
 }
 
 // word_add says so here; core_types_init() unsays it for the one word the CORE
 // registers through the same road (`i32`), which is a core primitive and not
-// something a module taught.
+// something a module taught. Either way the directive bit is preserved: the
+// same lexeme may also be a `#rule` literal, and neither road speaks for the
+// other.
 void tok_set_taught(i64 id, i64 v) {
     if (id < 256) return;
     if (id - 256 >= ntok) return;
-    set_te_taught(te_at(id - 256), v);
+    uptr e = te_at(id - 256);
+    i64 f = te_taught(e) & TE_RULE_BIT;
+    if (v) f = f + TE_TAUGHT_BIT;
+    set_te_taught(e, f);
+}
+
+// ...and the directive road says so here. Only a WORD entry is marked: a
+// punctuation lexeme is never resolved through lex_word_id, so source_claim
+// cannot hide it and the bit would only ever be read at the three dispatch
+// sites, where it has nothing to say about `{` or `+=`.
+void tok_set_rule(i64 id) {
+    if (id < 256) return;
+    if (id - 256 >= ntok) return;
+    uptr e = te_at(id - 256);
+    if (!te_word(e)) return;
+    set_te_taught(e, te_taught(e) | TE_RULE_BIT);
 }
 
 // ---- source_claim, reached through one function pointer ----
@@ -408,14 +446,20 @@ i64 word_id(uptr s, i64 len) {
 // module claims; anywhere else the lexeme is an ordinary identifier, which is
 // what lets a taught compiler still read the core's own files (where `type` and
 // `out` are variable names). Only the identifier branch is scoped -- a taught
-// OPERATOR is punctuation and cannot collide with a name -- and only word_add's
-// six roads are marked, so `#rule`/`#infix`/`#token` words are unaffected.
+// OPERATOR is punctuation and cannot collide with a name.
+// A lexeme a DIRECTIVE introduced is never hidden, even when a module also
+// taught it: `#include <prelude>` writes `while` into the table through a
+// `#rule`, and a module registering syntax_stmt("while") marks that same entry,
+// so hiding it would make the rule unreachable in every unclaimed source. The
+// module's HANDLER is still scoped -- parse.mc's taught_here() -- which is what
+// keeps the two meanings apart instead of picking one.
 // word_id itself stays a plain table lookup: a module asking for the id of a
 // word (examples/lang does) is asking the registry, not lexing a source.
 i64 lex_word_id(uptr s, i64 len) {
     i64 id = word_id(s, len);
     if (id < 0) return id;
     if (lex_claimed()) return id;
+    if (tok_is_rule(id)) return id;
     if (tok_is_taught(id)) return -1;
     return id;
 }
