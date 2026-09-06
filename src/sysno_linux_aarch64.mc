@@ -126,7 +126,23 @@ u16 sysno_tab[] = {
     216,        // SN_MREMAP
      65,        // SN_READV
     SN_ABSENT,  // SN_FORK       -- clone(SIGCHLD) is the only form
-    SN_ABSENT   // SN_VFORK
+    SN_ABSENT,  // SN_VFORK
+    // M48 C2: the sockets half. accept4 is 242 and not next to the rest --
+    // it was added to the generic table long after them.
+    201,        // SN_LISTEN
+    202,        // SN_ACCEPT
+    242,        // SN_ACCEPT4
+    206,        // SN_SENDTO
+    207,        // SN_RECVFROM
+    211,        // SN_SENDMSG
+    212,        // SN_RECVMSG
+    208,        // SN_SETSOCKOPT
+    209,        // SN_GETSOCKOPT
+    204,        // SN_GETSOCKNAME
+    205,        // SN_GETPEERNAME
+    210,        // SN_SHUTDOWN
+    199,        // SN_SOCKETPAIR
+     66         // SN_WRITEV
 };
 
 // the number of SN_*, or -1 when this architecture has no such call

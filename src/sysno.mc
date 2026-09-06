@@ -137,7 +137,35 @@
 #define SN_FORK                     79
 #define SN_VFORK                    80
 
-#define SN_COUNT                    81
+
+// ---- M48 C2: what a box with --allow=net may do ----
+// `--allow=net` keeps the host's network namespace, and a program that has one
+// still has to be allowed to use it: these are the calls the measured net delta
+// names (scripts/sandbox-trace.sh, a probe that does a TCP round trip on
+// loopback). SN_SOCKET, SN_CONNECT and SN_BIND were already here -- step C named
+// them so that a refusal could SAY `socket` -- and are what the delta joins.
+#define SN_LISTEN                   81
+#define SN_ACCEPT                   82
+#define SN_ACCEPT4                  83
+#define SN_SENDTO                   84
+#define SN_RECVFROM                 85
+#define SN_SENDMSG                  86
+#define SN_RECVMSG                  87
+#define SN_SETSOCKOPT               88
+#define SN_GETSOCKOPT               89
+#define SN_GETSOCKNAME              90
+#define SN_GETPEERNAME              91
+#define SN_SHUTDOWN                 92
+#define SN_SOCKETPAIR               93
+
+// The write side of musl's stdio. It joined the PROGRAM profile with M48 C2:
+// every fopen in the corpus was a READ until --rw and --tmp wrote a file, and
+// musl's writable stream is a writev behind an ioctl(TIOCGWINSZ) -- the ioctl
+// it asks to decide whether to line-buffer. SN_IOCTL was already here (the
+// sandbox's own notification channel is three of them).
+#define SN_WRITEV                   94
+
+#define SN_COUNT                    95
 
 // ---- the second column: the NAME of each index ----
 // `refused: syscall 198 (socket)` needs a name for a number, and the number is
@@ -161,5 +189,8 @@ uptr sn_names[] = {
     "getuid", "getgid", "clock_gettime", "getcwd", "open", "fstat",
     "faccessat", "fchmodat", "waitid", "creat", "chmod", "mkdir", "unlink",
     "rt_sigaction", "fcntl", "getdents64", "mremap",
-    "readv", "fork", "vfork"
+    "readv", "fork", "vfork",
+    "listen", "accept", "accept4", "sendto", "recvfrom", "sendmsg", "recvmsg",
+    "setsockopt", "getsockopt", "getsockname", "getpeername", "shutdown",
+    "socketpair", "writev"
 };

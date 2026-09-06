@@ -4,6 +4,7 @@ execve
 exit_group
 fcntl
 getdents64
+ioctl
 lseek
 mmap
 mprotect
@@ -14,3 +15,4 @@ readv
 rt_sigprocmask
 set_tid_address
 write
+writev

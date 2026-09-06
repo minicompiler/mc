@@ -59,6 +59,11 @@
 #define SB_CLONE_NEWPID       0x20000000
 #define SB_CLONE_NEWNET       0x40000000
 #define SB_CLONE_BOX          0x7C020000   // the six above
+// M48 C2, --allow=net: the same five namespaces without CLONE_NEWNET, so the
+// box keeps the host's network stack. It is one constant and not a subtraction
+// at the call site for the reason the six are one constant: the unshare is ONE
+// call, and asking for a different set is a different question to the kernel.
+#define SB_CLONE_BOX_NET      0x3C020000   // the six, less CLONE_NEWNET
 
 // mount(2) flags. MS_PRIVATE|MS_REC on `/` is the box's first mount, so
 // nothing it does afterwards propagates back to the host's mount table.
@@ -187,6 +192,8 @@
 #define SBE_LANDLOCK    20               // step C: the two walls, and the one
 #define SBE_SECCOMP     21               // way P can fail to reach the listener
 #define SBE_LISTENER    22
+#define SBE_RW          23               // M48 C2: the writable binds, the
+#define SBE_BIN         24               // programs, and the /tmp of the six
 
 // ---- the record (§ B3) ----
 // Every piece of sandbox state lives here, in ONE arena block, and is reached
@@ -195,6 +202,15 @@
 // sixteen globals in, and scripts/check-limits.sh fails at 90% (460). A record
 // costs ONE global for the whole milestone.
 #define SB_MAXRO 16
+// M48 C2. Sixteen writable binds is SB_MAXRO's number for the same reason
+// (a box with more roots than that is not a box); eight programs and eight
+// variables are far past what a derived permission set has ever asked for, and
+// each one costs a mount or an environment entry that has to be built before
+// the fork. SB_MAXENVSLOT is HOME, PATH, the eight, and the terminator.
+#define SB_MAXRW  16
+#define SB_MAXBIN  8
+#define SB_MAXENV  8
+#define SB_MAXENVSLOT 16
 
 #define SB_TIME        0    // --time S,  RLIMIT_CPU seconds
 #define SB_WALL        8    // --wall S,  the supervisor's deadline
@@ -242,42 +258,58 @@
 #define SB_CONF      344    // --config NAME, the mc.toml of a `run DIR`
 #define SB_ROOT      352    // --root DIR, the tree that becomes /src
 #define SB_RO        360    // SB_MAXRO * 8 = 128 bytes of --ro directories
-#define SB_ENV       488    // 3 * 8: HOME=/src, PATH=/, 0
-#define SB_RLIM      512    // 16: struct rlimit
-#define SB_TS        528    // 16: struct timespec
-#define SB_POLL      544    // 8: struct pollfd
-#define SB_RU        552    // 144: struct rusage
-#define SB_WORD      696    // 16: one small argument passed by address
-#define SB_UTS       712    // 390: struct utsname
-#define SB_LINE     1104    // 256: the status line being assembled
-#define SB_PATH     1360    // 512: a path being built
-#define SB_OPTS     1872    // 512: a mount option string being built
-#define SB_BUF      2384    // 4096: what a /proc probe reads
-#define SB_RBUF     6480    // 24: the report, a BUF record
+#define SB_ENV       488    // SB_MAXENVSLOT * 8: HOME=, PATH=, the --env
+                            // entries, and the terminator (M48 C2)
+#define SB_RLIM      616    // 16: struct rlimit
+#define SB_TS        632    // 16: struct timespec
+#define SB_POLL      648    // 8: struct pollfd
+#define SB_RU        656    // 144: struct rusage
+#define SB_WORD      800    // 16: one small argument passed by address
+#define SB_UTS       816    // 390: struct utsname
+#define SB_LINE     1208    // 256: the status line being assembled
+#define SB_PATH     1464    // 512: a path being built
+#define SB_OPTS     1976    // 512: a mount option string being built
+#define SB_BUF      2488    // 4096: what a /proc probe reads
+#define SB_RBUF     6584    // 24: the report, a BUF record
 
 // ---- step C: the two walls and the explain channel -------------------------
 // Everything the filter, the notification and the report of a refusal need.
 // It is in the same record for the same reason the rest is (§ B3): the frozen
 // seed's MAXGLOBALS is 512 and `mc limits src/mc.mc` has to stay under 460.
-#define SB_LFD      6504    // the seccomp listener P holds, -1 when none
-#define SB_SYNCR    6512    // the sync pipe: C reads one byte, P writes it
-#define SB_SYNCW    6520
-#define SB_MMTOT    6528    // the running total of what the step has mapped
-#define SB_NCLONE   6536    // clone/clone3 notifications counted for this step
-#define SB_NEXEC    6544    // execve notifications counted for this step
-#define SB_EXECMAX  6552    // how many this step is allowed
-#define SB_NPROF    6560    // how many numbers the profile resolved to
-#define SB_NOTIF    6568    // 80: struct seccomp_notif
-#define SB_RESP     6648    // 24: struct seccomp_notif_resp
-#define SB_IOV      6672    // 32: two struct iovec, local then remote
-#define SB_LLATTR   6704    // 24: struct landlock_ruleset_attr
-#define SB_PBATTR   6728    // 16: struct landlock_path_beneath_attr (12 used)
-#define SB_FPROG    6744    // 16: struct sock_fprog
-#define SB_PROF     6760    // SB_MAXPROF * 8: the profile, as kernel numbers
-#define SB_BPF      7784    // 2048: the filter, 256 struct sock_filter
-#define SB_RPATH    9832    // 4104: a path read out of the step
-#define SB_PROCMAX 13936    // how many processes this step may create
-#define SB_SIZE    13944
+#define SB_LFD      6608    // the seccomp listener P holds, -1 when none
+#define SB_SYNCR    6616    // the sync pipe: C reads one byte, P writes it
+#define SB_SYNCW    6624
+#define SB_MMTOT    6632    // the running total of what the step has mapped
+#define SB_NCLONE   6640    // clone/clone3 notifications counted for this step
+#define SB_NEXEC    6648    // execve notifications counted for this step
+#define SB_EXECMAX  6656    // how many this step is allowed
+#define SB_NPROF    6664    // how many numbers the profile resolved to
+#define SB_NOTIF    6672    // 80: struct seccomp_notif
+#define SB_RESP     6752    // 24: struct seccomp_notif_resp
+#define SB_IOV      6776    // 32: two struct iovec, local then remote
+#define SB_LLATTR   6808    // 24: struct landlock_ruleset_attr
+#define SB_PBATTR   6832    // 16: struct landlock_path_beneath_attr (12 used)
+#define SB_FPROG    6848    // 16: struct sock_fprog
+#define SB_PROF     6864    // SB_MAXPROF * 8: the profile, as kernel numbers
+#define SB_BPF      7888    // 2048: the filter, 256 struct sock_filter
+#define SB_RPATH    9936    // 4104: a path read out of the step
+#define SB_PROCMAX 14040    // how many processes this step may create
+
+// ---- M48 C2: the six primitives (docs/reference/sandbox.md § The primitives)
+// Six flags, six pieces of state, and not one of them knows what a permission
+// is: `--rw DIR`, `--ro DIR --at-path`, `--tmp`, `--allow=net`, `--bin PROG`
+// and `--env NAME`. They live here for the reason everything else does -- the
+// frozen seed's MAXGLOBALS is 512 and this milestone adds no state global.
+#define SB_ATPATH  14048    // --at-path: every --ro at its own absolute path
+#define SB_TMP     14056    // --tmp: a writable /tmp on the box tmpfs
+#define SB_NET     14064    // --allow=net: the host's network namespace, kept
+#define SB_NRW     14072    // how many --rw
+#define SB_RW      14080    // SB_MAXRW * 8: the directories, absolute
+#define SB_NBIN    14208    // how many --bin
+#define SB_BIN     14216    // SB_MAXBIN * 8: the host paths host_which() found
+#define SB_NENV    14280    // how many --env
+#define SB_ENVN    14288    // SB_MAXENV * 8: the variable NAMES, as given
+#define SB_SIZE    14352
 
 #define SB_MAXPROF 128
 
@@ -355,6 +387,12 @@ i64  sb_nexec()    { return ld64(sb_rec() + SB_NEXEC); }
 i64  sb_execmax()  { return ld64(sb_rec() + SB_EXECMAX); }
 i64  sb_nprof()    { return ld64(sb_rec() + SB_NPROF); }
 i64  sb_procmax()  { return ld64(sb_rec() + SB_PROCMAX); }
+i64  sb_atpath()   { return ld64(sb_rec() + SB_ATPATH); }
+i64  sb_tmp()      { return ld64(sb_rec() + SB_TMP); }
+i64  sb_net()      { return ld64(sb_rec() + SB_NET); }
+i64  sb_nrw()      { return ld64(sb_rec() + SB_NRW); }
+i64  sb_nbin()     { return ld64(sb_rec() + SB_NBIN); }
+i64  sb_nenv()     { return ld64(sb_rec() + SB_NENV); }
 
 void set_sb_time(i64 v)    { st64(sb_rec() + SB_TIME, v); }
 void set_sb_wall(i64 v)    { st64(sb_rec() + SB_WALL, v); }
@@ -410,6 +448,12 @@ void set_sb_nexec(i64 v)   { st64(sb_rec() + SB_NEXEC, v); }
 void set_sb_execmax(i64 v) { st64(sb_rec() + SB_EXECMAX, v); }
 void set_sb_nprof(i64 v)   { st64(sb_rec() + SB_NPROF, v); }
 void set_sb_procmax(i64 v) { st64(sb_rec() + SB_PROCMAX, v); }
+void set_sb_atpath(i64 v)  { st64(sb_rec() + SB_ATPATH, v); }
+void set_sb_tmp(i64 v)     { st64(sb_rec() + SB_TMP, v); }
+void set_sb_net(i64 v)     { st64(sb_rec() + SB_NET, v); }
+void set_sb_nrw(i64 v)     { st64(sb_rec() + SB_NRW, v); }
+void set_sb_nbin(i64 v)    { st64(sb_rec() + SB_NBIN, v); }
+void set_sb_nenv(i64 v)    { st64(sb_rec() + SB_NENV, v); }
 
 // the buffers, by address
 uptr sb_env()   { return sb_rec() + SB_ENV; }
@@ -439,6 +483,36 @@ uptr sb_ro_at(i64 i) { return ld64(sb_rec() + SB_RO + i * 8); }
 void sb_ro_add(uptr d) {
     st64(sb_rec() + SB_RO + sb_nro() * 8, d);
     set_sb_nro(sb_nro() + 1);
+}
+
+void set_sb_ro_at(i64 i, uptr d) { st64(sb_rec() + SB_RO + i * 8, d); }
+
+// The three C2 lists, in the shape --ro has had since step B: an array in the
+// record, an index, and a setter for the pass that resolves each entry against
+// the host (sb_resolve_paths) before the box exists.
+uptr sb_rw_at(i64 i) { return ld64(sb_rec() + SB_RW + i * 8); }
+
+void sb_rw_add(uptr d) {
+    st64(sb_rec() + SB_RW + sb_nrw() * 8, d);
+    set_sb_nrw(sb_nrw() + 1);
+}
+
+void set_sb_rw_at(i64 i, uptr d) { st64(sb_rec() + SB_RW + i * 8, d); }
+
+uptr sb_bin_at(i64 i) { return ld64(sb_rec() + SB_BIN + i * 8); }
+
+void sb_bin_add(uptr d) {
+    st64(sb_rec() + SB_BIN + sb_nbin() * 8, d);
+    set_sb_nbin(sb_nbin() + 1);
+}
+
+void set_sb_bin_at(i64 i, uptr d) { st64(sb_rec() + SB_BIN + i * 8, d); }
+
+uptr sb_envn_at(i64 i) { return ld64(sb_rec() + SB_ENVN + i * 8); }
+
+void sb_envn_add(uptr d) {
+    st64(sb_rec() + SB_ENVN + sb_nenv() * 8, d);
+    set_sb_nenv(sb_nenv() + 1);
 }
 
 // ---- the shim, by name ----
@@ -843,6 +917,9 @@ i64 sb_unsupported(uptr tail) {
 // after it (or after `--`) belongs to the program.
 i64 sb_parse(i64 argc, uptr argv, i64 i) {
     set_sb_nro(0);
+    set_sb_nrw(0);
+    set_sb_nbin(0);
+    set_sb_nenv(0);
     set_sb_argi(0);
     loop {
         if (i >= argc) break;
@@ -859,8 +936,9 @@ i64 sb_parse(i64 argc, uptr argv, i64 i) {
         }
         uptr v = opt_val(a, "--allow=");
         if (v) {
-            if (!str_eq(v, "threads")) { sb_err2("unknown --allow value", v); return 2; }
-            set_sb_threads(1);
+            if (str_eq(v, "threads")) set_sb_threads(1);
+            else if (str_eq(v, "net")) set_sb_net(1);
+            else { sb_err2("unknown --allow value", v); return 2; }
             i = i + 1;
             continue;
         }
@@ -872,6 +950,13 @@ i64 sb_parse(i64 argc, uptr argv, i64 i) {
             continue;
         }
         if (str_eq(a, "--verbose")) { set_sb_verbose(1); i = i + 1; continue; }
+        // M48 C2: the two that take no argument. --at-path is a MODIFIER of
+        // --ro and not a value of it, because a caller that hands the box host
+        // paths hands it all of them (a tool is given file:///Users/x/proj by
+        // its own caller, not one path in the box's vocabulary and one in the
+        // host's), and one flag for the invocation is what that means.
+        if (str_eq(a, "--at-path")) { set_sb_atpath(1); i = i + 1; continue; }
+        if (str_eq(a, "--tmp"))     { set_sb_tmp(1);    i = i + 1; continue; }
 
         // the ones that take the next argument
         i64 num = 0;
@@ -879,6 +964,7 @@ i64 sb_parse(i64 argc, uptr argv, i64 i) {
         i64 takes = num;
         if (str_eq(a, "--stdin") || str_eq(a, "--ro") || str_eq(a, "--cwd") || str_eq(a, "--report")) takes = 1;
         if (str_eq(a, "--config") || str_eq(a, "--root")) takes = 1;
+        if (str_eq(a, "--rw") || str_eq(a, "--bin") || str_eq(a, "--env")) takes = 1;
         if (!takes) { sb_err2("unknown sandbox option", a); return 2; }
         if (i + 1 >= argc) { sb_err2("option requires an argument", a); return 2; }
         uptr w = ld64(argv + (i + 1) * 8);
@@ -914,9 +1000,110 @@ i64 sb_parse(i64 argc, uptr argv, i64 i) {
             if (sb_nro() >= SB_MAXRO) { sb_err("too many --ro directories"); return 2; }
             sb_ro_add(w);
         }
+        if (str_eq(a, "--rw")) {
+            if (sb_nrw() >= SB_MAXRW) { sb_err("too many --rw directories"); return 2; }
+            sb_rw_add(w);
+        }
+        if (str_eq(a, "--bin")) {
+            if (sb_nbin() >= SB_MAXBIN) { sb_err("too many --bin programs"); return 2; }
+            sb_bin_add(w);
+        }
+        if (str_eq(a, "--env")) {
+            if (sb_nenv() >= SB_MAXENV) { sb_err("too many --env variables"); return 2; }
+            sb_envn_add(w);
+        }
         i = i + 2;
     }
     set_sb_argi(i);
+    return 0;
+}
+
+// ---- M48 C2: resolving what the six primitives name, on the host ----------
+// Every one of them names something the HOST has -- a directory, a program on
+// PATH, a variable in the environment -- and every one of them has to be
+// resolved before the fork, for the same reason /proc/self/exe is (sb_go):
+// once I has unshared its mount namespace and pivoted, the host's names are
+// gone, and P is the only process that can still say what they meant.
+//
+// A refusal here is a `mc: ` line on stderr and exit 126, not a `sandbox: `
+// report line, and the difference is the one sb_plan already draws: the REPORT
+// has a fixed vocabulary and never carries a host path (§ 6), while a
+// diagnostic about the COMMAND LINE may name what the caller typed -- `mc:
+// cannot open /Users/me/x.mc` has done so since step B.
+//
+// So this pass runs in P, between the option parser and the plan. It rewrites
+// each list IN PLACE with the absolute answer, so that the box (which builds
+// the tree) and the supervisor (which decides whether a path the step named is
+// under a root, sb_path_ok) read the same strings and cannot disagree.
+
+// The box path of the i-th --ro: `/roN` by default, its own absolute path with
+// --at-path. ONE function, read by the mount, by Landlock and by sb_path_ok.
+uptr sb_box_ro_at(i64 i) {
+    if (sb_atpath()) return sb_ro_at(i);
+    return tm_cat("/ro", tm_num_str(i));
+}
+
+// The box path of the i-th --bin: /bin/<basename of what host_which found>.
+uptr sb_box_bin_at(i64 i) { return tm_cat("/bin/", sb_base(sb_bin_at(i))); }
+
+// `NAME=` out of the host's environment, or 0 when there is no such variable.
+uptr sb_getenv(uptr name) {
+    uptr e = host_environ();
+    if (e == 0) return 0;
+    i64 n = cstrlen(name);
+    i64 i = 0;
+    loop {
+        uptr s = ld64(e + i * 8);
+        if (s == 0) return 0;
+        if (mem_eq(s, name, n) && ld8(s + n) == '=') return s + n + 1;
+        i = i + 1;
+    }
+}
+
+// A writable bind of `/` or of the home directory is refused, and there is no
+// flag that lifts it. The reason is not that the box could not do it -- it
+// could, the bind is the same two calls -- but that a primitive whose only
+// caller is a derived permission set (M48 § 4.1: `fs.write workspace` becomes
+// `--rw <the invocation's directory>`) can never legitimately be handed either
+// of those two, and a mistake that hands it one is a `rm -rf` with a sandbox's
+// name on it. An escape flag would be surface nothing uses, and a caller that
+// really wants to write everywhere can name the subdirectories it means.
+// (`--ro /` is not refused: a read-only bind of a tree is a way of reading it,
+// which is what the flag is for, and it cannot damage anything.)
+i64 sb_rw_refused(uptr d) {
+    if (str_eq(d, "/")) {
+        sb_err2("--rw /", "refusing to bind the whole filesystem read-write");
+        return 1;
+    }
+    uptr h = host_home();
+    if (h && ld8(h) == '/' && str_eq(d, path_norm(xstrdup(h, cstrlen(h))))) {
+        sb_err2(tm_cat("--rw ", d), "refusing to bind the home directory read-write; name a subdirectory");
+        return 1;
+    }
+    return 0;
+}
+
+i64 sb_resolve_paths() {
+    i64 i = 0;
+    while (i < sb_nro()) {
+        set_sb_ro_at(i, sb_abs(sb_ro_at(i)));
+        i = i + 1;
+    }
+    i = 0;
+    while (i < sb_nrw()) {
+        uptr d = sb_abs(sb_rw_at(i));
+        if (sb_rw_refused(d)) return SB_EXIT_SETUP;
+        if (!sb_is_dir(d)) { sb_err2("--rw is not a directory", d); return SB_EXIT_SETUP; }
+        set_sb_rw_at(i, d);
+        i = i + 1;
+    }
+    i = 0;
+    while (i < sb_nbin()) {
+        uptr p = host_which(sb_bin_at(i));
+        if (p == 0) { sb_err2(tm_cat("--bin ", sb_bin_at(i)), "not on PATH"); return SB_EXIT_SETUP; }
+        set_sb_bin_at(i, p);
+        i = i + 1;
+    }
     return 0;
 }
 
@@ -1076,6 +1263,35 @@ void sb_argv_build() {
     st64(rv + (extra + 1) * 8, 0);
     set_sb_av1(rv);
     set_sb_bin1(prog);
+}
+
+// The environment every step gets. It was three fixed entries and no leak of
+// the host's (§ 3); with M48 C2 it is still fixed, and every entry past the
+// first two was named on the command line:
+//
+//   HOME=/src        so that anything the compiler caches lands in the box and
+//                    dies with it
+//   PATH=/           or PATH=/bin when --bin put a program there
+//   NAME=<value>     one per --env, the value read out of the host's
+//                    environment -- and EMPTY when the host does not have it,
+//                    which is not an error: a variable that is not set has no
+//                    value, and `NAME=` is exactly what the box should then
+//                    say to a getenv() inside it. A missing --env that stopped
+//                    the box would make a tool's optional setting mandatory.
+void sb_env_build() {
+    i64 n = 0;
+    st64(sb_env() + n * 8, "HOME=/src"); n = n + 1;
+    if (sb_nbin()) { st64(sb_env() + n * 8, "PATH=/bin"); n = n + 1; }
+    else           { st64(sb_env() + n * 8, "PATH=/");    n = n + 1; }
+    i64 i = 0;
+    while (i < sb_nenv()) {
+        uptr v = sb_getenv(sb_envn_at(i));
+        if (v == 0) v = "";
+        st64(sb_env() + n * 8, tm_cat(tm_cat(sb_envn_at(i), "="), v));
+        n = n + 1;
+        i = i + 1;
+    }
+    st64(sb_env() + n * 8, 0);
 }
 
 // ---- the uid and gid maps, written by P (§ 1) ----
@@ -1300,6 +1516,10 @@ void sb_fetch_listener(i64 jfd) {
     // --entry-only child (§ 5) -- and the run step exactly one, its own.
     i64 mx = 1;
     if (sb_step() == SB_STEP_COMPILE) mx = 3;
+    // M48 C2: --bin says the step may RUN those programs, so it may execve
+    // once for itself and once per program it was given. Naming a program is
+    // what raises the ceiling; nothing else does.
+    if (sb_step() == SB_STEP_RUN) mx = 1 + sb_nbin();
     set_sb_execmax(mx);
     // And how many PROCESSES. Every clone, clone3, fork and vfork is a
     // notification (src/seccomp.mc, sb_notified) and is counted here, so this
@@ -1307,6 +1527,11 @@ void sb_fetch_listener(i64 jfd) {
     // where `mc build` runs whatever [linker].cmd the source tree named.
     i64 pm = 0;
     if (sb_step() == SB_STEP_COMPILE) pm = SB_NPROC_COMPILE;
+    // A run step that was given a program to run has to be able to MAKE the
+    // process that runs it, so --bin buys the compile step's sixteen -- the
+    // same number, for the same reason: a handful of spawns is a tool doing its
+    // work and a bomb is not. --allow=threads is the wider cap and wins.
+    if (sb_step() == SB_STEP_RUN && sb_nbin()) pm = SB_NPROC_COMPILE;
     if (sb_step() == SB_STEP_RUN && sb_threads()) pm = SB_NPROC_THREADS;
     set_sb_procmax(pm);
 
@@ -1455,6 +1680,8 @@ uptr sb_site_msg(i64 site) {
     if (site == SBE_LANDLOCK)   return "cannot install the Landlock ruleset";
     if (site == SBE_SECCOMP)    return "cannot install the seccomp filter";
     if (site == SBE_LISTENER)   return "cannot fetch the seccomp listener";
+    if (site == SBE_RW)         return "cannot mount a --rw directory";
+    if (site == SBE_BIN)        return "cannot bind a --bin program";
     return "cannot set up the box";
 }
 
@@ -1510,12 +1737,7 @@ i64 sb_go() {
     set_sb_syncw(ld32(sb_word() + 4));
     sb_resolve_libc();
 
-    // the environment every step gets: fixed, three entries, no leak of the
-    // host's (§ 3). HOME is /src so that anything the compiler caches lands in
-    // the box and dies with it.
-    st64(sb_env() + 0,  "HOME=/src");
-    st64(sb_env() + 8,  "PATH=/");
-    st64(sb_env() + 16, 0);
+    sb_env_build();
 
     i64 pid = sb_sys(SN_CLONE, SB_SIGCHLD, 0, 0, 0, 0, 0);
     if (pid < 0) { sb_err("cannot fork the box"); return SB_EXIT_SETUP; }
@@ -1559,8 +1781,9 @@ void sb_usage() {
     out_str(2, "usage: mc sandbox run  [OPTS] PATH [--] [ARGS]\n");
     out_str(2, "       mc sandbox exec [OPTS] BIN  [--] [ARGS]\n");
     out_str(2, "       mc sandbox check\n");
-    out_str(2, "OPTS:  --time S  --wall S  --mem MiB  --out MiB  --allow=threads --libc=musl|gnu\n");
-    out_str(2, "       --stdin FILE  --ro DIR  --cwd DIR  --root DIR  --report FILE  --config NAME  --verbose\n");
+    out_str(2, "OPTS:  --time S  --wall S  --mem MiB  --out MiB  --allow=threads|net  --libc=musl|gnu\n");
+    out_str(2, "       --stdin FILE  --ro DIR  --rw DIR  --at-path  --tmp  --bin PROG  --env NAME\n");
+    out_str(2, "       --cwd DIR  --root DIR  --report FILE  --config NAME  --verbose\n");
 }
 
 i64 sandbox_cmd(i64 argc, uptr argv) {
@@ -1588,6 +1811,13 @@ i64 sandbox_cmd(i64 argc, uptr argv) {
         if (run) return sb_unsupported("sandbox run PATH");
         return sb_unsupported("sandbox exec BIN");
     }
+
+    // M48 C2: what the six primitives name is resolved against the host BEFORE
+    // the plan, so that a directory that does not exist or a program that is
+    // not on PATH is a diagnostic about the command line rather than a mount
+    // that fails halfway through building the box.
+    rc = sb_resolve_paths();
+    if (rc) return rc;
 
     rc = sb_plan(argc, argv);
     if (rc) return rc;

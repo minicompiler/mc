@@ -371,9 +371,15 @@ report grammar and what is **not** isolated are in [sandbox.md](sandbox.md).
 | `--mem MiB` | address space (`RLIMIT_AS`), default 256, at most 1048576 (1 TiB) |
 | `--out MiB` | how much the program may write (the box tmpfs and `RLIMIT_FSIZE`), default 64, at most 65536 (64 GiB) |
 | `--allow=threads` | let the filter allow a `clone` that is a real thread (`CLONE_THREAD` set, no `CLONE_NEW*`) and the system calls a thread needs; every other way of making a process is then COUNTED, up to 64 ([sandbox.md](sandbox.md) § The explain channel) |
+| `--allow=net` | keep the host's network namespace instead of unsharing an empty one, stop handling the network in the Landlock ruleset, and add the measured net delta to the seccomp profile ([sandbox.md](sandbox.md) § The primitives) |
 | `--libc=musl\|gnu` | which family the program compiled inside the box is linked against; by default, whichever loader this host has on disk |
 | `--stdin FILE` | the program's standard input; without it, immediate EOF |
 | `--ro DIR` | one more directory the box may read (repeatable, at most 16) |
+| `--rw DIR` | one more directory the box may read AND write, bound at its own absolute path (repeatable, at most 16). `--rw /` and `--rw $HOME` are refused, with no flag that lifts it |
+| `--at-path` | bind every `--ro DIR` at its own absolute path instead of at `/ro0`, `/ro1`, … |
+| `--tmp` | a writable `/tmp` inside the box, on the box tmpfs, counted against `--out` and gone when the box is |
+| `--bin PROG` | a program from the host's `PATH`, bound read-only at `/bin/<basename>` with `PATH=/bin` in the box (repeatable, at most 8). It also raises the run step's process cap to 16 and its `execve` cap to 1 + the number of `--bin` |
+| `--env NAME` | copy `NAME=<the host's value>` into the box's environment (repeatable, at most 8). A variable the host does not have arrives empty, which is not an error |
 | `--cwd DIR` | the working directory inside the box: an absolute path is a path in the box (`/ro0`), a relative one is under `/src` |
 | `--root DIR` | the tree that becomes `/src`, instead of the source's own directory. `PATH` must be inside it |
 | `--config NAME` | for `run DIR`: the project file to build, relative to `DIR`. `[project].out` stays relative to that file's directory |
@@ -389,6 +395,13 @@ was unbounded, so `--mem 999999999999999999999999` wrapped and the box ran with 
 all four: `--time 0` and `--wall 0` kill the box before it runs, `--mem 0` is an `RLIMIT_AS`
 nothing can start under (measured: the compile step died of `SIGSEGV`), and `--out 0` is a tmpfs
 the mount refuses.
+
+The six primitives above know nothing about permissions: each one is a mount, a namespace, an
+environment entry or a profile row, and what a package's `[[permission]]` rows map onto them is
+somebody else's question. Three of them can refuse before the box exists, each `mc: …` on stderr
+with exit **126** — `mc: --rw /: refusing to bind the whole filesystem read-write`, `mc: --rw
+/Users/me: refusing to bind the home directory read-write; name a subdirectory`, `mc: --rw is not
+a directory: PATH` and `mc: --bin NAME: not on PATH`.
 
 `mc sandbox check` prints six lines on stdout and exits 0 when every one of the five capabilities
 the box needs is there, 1 otherwise:

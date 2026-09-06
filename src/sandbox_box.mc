@@ -165,18 +165,91 @@ void sb_bind_ldcache() {
     if (rc < 0) sb_die_box(SBE_LIB, rc);
 }
 
+// Every component of an absolute box path, as a directory on the box tmpfs.
+// `--rw /home/me/proj` needs /home and /home/me to exist before /home/me/proj
+// can be a mount point, and each one of them is a fresh empty directory on the
+// tmpfs -- the box does not gain /home, it gains three empty directories and
+// one bind at the bottom of them. An EEXIST is not a failure: two --rw
+// directories may share a prefix, and /bin may already be there.
+void sb_mkdir_p(uptr p) {
+    i64 n = cstrlen(p);
+    i64 i = 1;                                   // p starts with '/'
+    while (i <= n) {
+        if (i == n || ld8(p + i) == '/') {
+            i64 rc = sb_mkdir(sb_bp(xstrdup(p + 1, i - 1)));
+            if (rc < 0 && rc != 0 - 17) sb_die_box(SBE_MKDIR, rc);
+        }
+        i = i + 1;
+    }
+}
+
+// A bind that stays writable: the same first call sb_bind_ro makes, and NOT
+// the second. The kernel ignores every flag but MS_REC on a bind, so leaving
+// out the remount is the whole difference between the two.
+i64 sb_bind_rw(uptr src, uptr tgt) {
+    return sb_mount(src, tgt, 0, SB_MS_BIND | SB_MS_REC, 0);
+}
+
 // --ro DIR, repeatable: each one is bound read-only at /ro0, /ro1, ... in the
 // order it was given. The numbering is the interface -- a program that has to
 // read a tree next to its own source is told where it is, and the box never
 // reproduces a host path (§ 6: no host path in the report, and none in the
 // box either).
+//
+// M48 C2 adds the other half of that, --at-path: a program that is HANDED host
+// paths by its own caller (an editor gives a language server
+// file:///Users/x/proj/main.mc) cannot be told the tree moved, so with the flag
+// each --ro is bound at its own absolute path instead. Which of the two applies
+// is sb_box_ro_at()'s answer, and it is the same answer Landlock and the
+// supervisor's sb_path_ok read.
 void sb_bind_ro_dirs() {
     i64 i = 0;
     while (i < sb_nro()) {
-        uptr at = tm_cat("ro", tm_num_str(i));
-        sb_mkdir_or_die(sb_bp(at));
-        i64 rc = sb_bind_ro(sb_abs(sb_ro_at(i)), sb_bp(at));
+        uptr at = sb_box_ro_at(i);
+        sb_mkdir_p(at);
+        i64 rc = sb_bind_ro(sb_ro_at(i), sb_bp(at + 1));
         if (rc < 0) sb_die_box(SBE_RO, rc);
+        i = i + 1;
+    }
+}
+
+// --rw DIR, repeatable: bound at its OWN absolute path, always. There is no
+// numbering to choose here -- a directory a program may write to is one it was
+// told about by name, and a `/rwN` it has never heard of is not one.
+void sb_bind_rw_dirs() {
+    i64 i = 0;
+    while (i < sb_nrw()) {
+        uptr at = sb_rw_at(i);
+        sb_mkdir_p(at);
+        i64 rc = sb_bind_rw(at, sb_bp(at + 1));
+        if (rc < 0) sb_die_box(SBE_RW, rc);
+        i = i + 1;
+    }
+}
+
+// --tmp: a writable /tmp. It is one mkdir and nothing else, because the box's
+// whole root IS the tmpfs (§ 3) -- so a directory made on it is already
+// writable, already counted against --out, and already dies with the box.
+void sb_make_tmp() {
+    if (!sb_tmp()) return;
+    sb_mkdir_p("/tmp");                          // a --rw under /tmp made it already
+}
+
+// --bin PROG, repeatable: the program P found on the host's PATH, bound
+// read-only at /bin/<basename>, which is what PATH=/bin in the box then finds.
+// It is a FILE, so its mount point is an empty file (sb_bind_compiler's shape)
+// and not a directory.
+void sb_bind_bins() {
+    if (sb_nbin() == 0) return;
+    sb_mkdir_p("/bin");
+    i64 i = 0;
+    while (i < sb_nbin()) {
+        uptr at = sb_bp(sb_box_bin_at(i) + 1);
+        i64 fd = sb_sys(SN_OPENAT, SB_AT_FDCWD, at, SB_O_WRONLY | SB_O_CREAT, SB_MODE_600, 0, 0);
+        if (fd < 0) sb_die_box(SBE_BIN, fd);
+        sb_sys(SN_CLOSE, fd, 0, 0, 0, 0, 0);
+        i64 rc = sb_bind_ro(sb_bin_at(i), at);
+        if (rc < 0) sb_die_box(SBE_BIN, rc);
         i = i + 1;
     }
 }
@@ -209,6 +282,13 @@ void sb_build_tree() {
     sb_bind_ro_dirs();
     sb_bind_libs();
     sb_bind_ldcache();
+    // M48 C2, and they come last on purpose: /lib, /lib64 and /usr/lib are
+    // already there, so a --rw or a --bin that names a path INSIDE one of them
+    // fails against the read-only mount that is already in the way instead of
+    // being silently shadowed by it.
+    sb_bind_rw_dirs();
+    sb_make_tmp();
+    sb_bind_bins();
 
     // pivot_root(".", ".old") from inside the new root is the documented
     // recipe: put_old has to be under new_root, and new_root has to be a mount
@@ -297,6 +377,10 @@ void sb_caps_step(i64 step) {
     // kernel's EAGAIN and the limit here is deliberately looser (32).
     i64 np = 0;
     if (step == SB_STEP_COMPILE) np = SB_NPROC_COMPILE_WALL;
+    // M48 C2: a run step given a --bin has P's counted cap of sixteen, so the
+    // kernel's own wall has to sit above it or the EAGAIN arrives before the
+    // sentence -- the same argument the compile step's thirty-two makes.
+    if (sb_nbin()) np = SB_NPROC_COMPILE_WALL;
     if (sb_threads()) np = SB_NPROC_BACKSTOP;
     sb_rlimit(SB_RLIMIT_NPROC, np);
 }
@@ -473,7 +557,14 @@ void sb_steps_main() {
 
 // ---- I: the box ----
 void sb_box_main() {
-    i64 rc = sb_sys(SN_UNSHARE, SB_CLONE_BOX, 0, 0, 0, 0, 0);
+    // M48 C2: --allow=net keeps the host's network namespace, and that is the
+    // whole of the mechanism -- one bit fewer in the one unshare (§ 1). The
+    // seccomp profile and the Landlock ruleset follow it (src/seccomp.mc): a
+    // box with a network needs the calls to use one, and a network field in a
+    // ruleset that grants nothing would refuse what the namespace just allowed.
+    i64 mask = SB_CLONE_BOX;
+    if (sb_net()) mask = SB_CLONE_BOX_NET;
+    i64 rc = sb_sys(SN_UNSHARE, mask, 0, 0, 0, 0, 0);
     if (rc < 0) sb_die_box(SBE_UNSHARE, rc);
 
     // P is the only process that may write the maps (§ 1): unprivileged, a

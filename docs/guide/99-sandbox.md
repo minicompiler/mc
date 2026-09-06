@@ -135,7 +135,37 @@ The four caps have maxima as well as defaults — a day for `--time` and `--wall
 `--mem`, 64 GiB for `--out` — and none of them takes a zero
 ([../reference/cli.md](../reference/cli.md) § 3c).
 
-## 5. A binary you already have
+## 5. Letting a little of the world in
+
+The box is empty by design, and sometimes that is one thing too few. Six flags open one door
+each, and none of them opens two:
+
+```
+$ mc sandbox run --rw ./build --tmp prog.mc          # write here, and scratch in /tmp
+$ mc sandbox run --ro ./data --at-path prog.mc       # read ./data, at the name it has out here
+$ mc sandbox exec --allow=net client                 # keep the machine's network
+$ mc sandbox exec --bin git --env HOME tool          # run `git`, and know where HOME was
+```
+
+* `--rw DIR` binds DIR **writable, at its own absolute path**, so a program that writes
+  `/home/me/proj/out.txt` inside writes `/home/me/proj/out.txt` outside. That is the point, and
+  it is also why `--rw /` and `--rw $HOME` are refused with no flag that lifts it.
+* `--at-path` moves `--ro` to the same footing. Without it a read-only directory is at `/ro0`,
+  which is right when you can tell the program where to look and wrong when something else hands
+  it host paths.
+* `--tmp` gives it a `/tmp` it can write. It is on the box's own tmpfs: it counts against `--out`
+  and it is gone when the box is.
+* `--allow=net` keeps the machine's network instead of the empty one. Without it a `socket` is
+  `refused: syscall 198 (socket)`.
+* `--bin PROG` finds PROG on *your* `PATH` and binds it at `/bin/<name>`, with `PATH=/bin` inside;
+  it also lets the program make up to 16 processes and run one program per `--bin`. Without it,
+  the first fork is `refused: process limit (0)`.
+* `--env NAME` copies one variable in. A variable you do not have arrives empty, which is not an
+  error.
+
+Everything else of your machine stays where it was: this is the whole list.
+
+## 6. A binary you already have
 
 `run` compiles; `exec` does not:
 
@@ -148,7 +178,7 @@ The box binds `/lib`, `/lib64` and `/usr/lib` read-only and nothing else of the 
 exactly enough for a dynamic binary to find its loader and its C library — and not enough for it
 to find your files.
 
-## 6. A whole project
+## 7. A whole project
 
 ```
 $ mc sandbox run --time 120 --wall 300 --mem 4096 --config mc.linux.toml examples/lang
@@ -162,7 +192,7 @@ is the run step. Two options exist for trees that reach outside themselves:
   a test that includes `../lib/sys.mc` still resolves it;
 * `--config NAME` picks the project file.
 
-## 7. When there is no box
+## 8. When there is no box
 
 **macOS and Windows have none**, and `mc` says so rather than pretending:
 
@@ -186,7 +216,7 @@ thing as **root** works too and is still the worse answer: a root box maps `0 0 
 box needs `--privileged`, for the same reason: the default seccomp profile keeps `unshare`,
 `mount` and `pivot_root` behind `CAP_SYS_ADMIN`.
 
-## 8. What it costs, and what it does not buy
+## 9. What it costs, and what it does not buy
 
 A box costs about **1.7 ms** on a quiet AArch64 machine (2.0 ms with both walls installed; the
 walls are +21%), and 3–5 ms on a busy shared x86-64 VPS. That is per *run*, not per program: it
@@ -199,7 +229,7 @@ sentence of [What is not isolated](../reference/sandbox.md#what-is-not-isolated)
 reading before you use this for anything hostile and public. For the project's own purposes —
 fuzz inputs, examples nobody audited, a suite of 30 programs — it is the right trade.
 
-## 9. In your own checks
+## 10. In your own checks
 
 ```
 $ sh scripts/test-sandbox.sh            # the whole suite, through the box

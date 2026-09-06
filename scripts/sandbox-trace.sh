@@ -41,6 +41,12 @@
 #     tools/sandbox/<arch>-<libc>-program.list
 #     tools/sandbox/<arch>-<libc>-threads.list
 #
+# and TWO shared files, one per M48 C2 delta, because those two are consumed as
+# a union over every host and are the same names on both architectures:
+#
+#     tools/sandbox/net.list                      M48 C2: --allow=net
+#     tools/sandbox/spawn.list                    M48 C2: --bin
+#
 # src/sandbox_profiles.mc is then GENERATED from every list file present, so a
 # machine that can only measure one architecture never erases the other's
 # numbers. The checked-in .mc is what this script printed; `--check` proves it
@@ -147,6 +153,7 @@ extern uptr realloc(uptr p, i64 n);
 extern void free(uptr p);
 extern uptr fopen(uptr path, uptr mode);
 extern i64 fread(uptr p, i64 sz, i64 n, uptr f);
+extern i64 fwrite(uptr p, i64 sz, i64 n, uptr f);
 extern i32 fseek(uptr f, i64 off, i64 whence);
 extern i64 ftell(uptr f);
 extern i32 fclose(uptr f);
@@ -176,6 +183,17 @@ i64 main() {
     big = realloc(big, 8388608);
     st8(big, 3);
     free(big);
+    // stdio in BOTH directions. The write side is not decoration: musl's
+    // __fdopen asks ioctl(TIOCGWINSZ) of every stream it may write to, to
+    // decide whether to line-buffer it, and every fopen in the corpus was a
+    // READ -- so a program that wrote a file through stdio inside the box was
+    // `refused: syscall 29 (ioctl)` under musl, and nothing measured it until
+    // M48 C2's --rw and --tmp cases wrote one.
+    uptr w = fopen("libc-out.txt", "w");
+    if (w) {
+        fwrite("stdio\n", 1, 6, w);
+        fclose(w);
+    }
     // stdio, a seek, a directory listing and a signal mask: the ordinary
     // things a C program does that no tests/*.mc does
     uptr f = fopen("libc.mc", "r");
@@ -233,19 +251,84 @@ EOF
 ( cd "$out" && trace "c.threaded" ./threaded )
 names "$out/c.threaded" | sort -u > "$out/threads.all"
 
+
+# ---- the --allow=net and --bin deltas (M48 C2) ------------------------------
+# Neither can be measured over the corpus: the box has had an empty network
+# namespace and a process cap of zero since step B, so nothing in tests/*.mc
+# could open a socket or spawn anything. The two probes are the two cases of
+# tests/sandbox/ that exercise them, compiled and run HERE, outside the box --
+# which is the point of using them rather than a heredoc: the profile is
+# measured over exactly the program the suite then runs INSIDE the box, so a
+# call the test makes and the table lacks cannot exist.
+#
+#   nettrip.mc   one program that is both ends of a TCP conversation on
+#                loopback: socket, setsockopt, bind, listen, getsockname,
+#                connect, accept, accept4, send, recv, sendmsg, recvmsg,
+#                getpeername, getsockopt, shutdown
+#   spawn.mc     posix_spawn AND posix_spawnp of another program, and the wait
+#                for each. The process-creating calls they make are NOT in the
+#                delta -- no profile allows one (src/seccomp.mc) -- so what is
+#                left is what running another program costs beside them, which
+#                is where the two C libraries differ most: glibc clones into a
+#                shared struct, musl makes a pipe and reads the child's errno
+#                back out of it.
+#
+# The spawn probe is written here and not taken from tests/sandbox/binexec.mc,
+# which forks instead: a fork is a fork on both C libraries, which is what makes
+# that test's refusal one sentence, and posix_spawn is the WIDER measurement.
+# shellcheck disable=SC2086
+"$mc" --exe $lf tests/sandbox/nettrip.mc -o "$out/nettrip" > /dev/null 2>&1
+( cd "$out" && trace "c.nettrip" ./nettrip )
+names "$out/c.nettrip" | sort -u > "$out/net.all"
+
+cat > "$out/spawn.mc" <<'EOF'
+extern i64 posix_spawn(uptr pid, uptr path, uptr fa, uptr attr, uptr av, uptr envp);
+extern i64 posix_spawnp(uptr pid, uptr file, uptr fa, uptr attr, uptr av, uptr envp);
+extern i64 waitpid(i64 pid, uptr status, i64 options);
+extern i64 fork();
+extern i64 execv(uptr path, uptr av);
+extern void _exit(i64 code);
+
+i64 main() {
+    u8 pid[8];
+    u8 st[8];
+    uptr av[2];
+    st64(av, "true");
+    st64(av + 8, 0);
+    st64(pid, 0);
+    posix_spawn(pid, "/bin/true", 0, 0, av, 0);
+    waitpid(ld64(pid), st, 0);
+    st64(pid, 0);
+    posix_spawnp(pid, "true", 0, 0, av, 0);
+    waitpid(ld64(pid), st, 0);
+    i64 p = fork();
+    if (p == 0) { execv("/bin/true", av); _exit(127); }
+    waitpid(p, st, 0);
+    return 0;
+}
+EOF
+# shellcheck disable=SC2086
+"$mc" --exe $lf "$out/spawn.mc" -o "$out/spawn" > /dev/null 2>&1
+( cd "$out" && trace "c.spawn" ./spawn )
+names "$out/c.spawn" | sort -u > "$out/spawn.all"
+
 sort -u "$c_raw" > "$out/compile.list"
 sort -u "$p_raw" > "$out/program.list"
 comm -23 "$out/threads.all" "$out/program.list" > "$out/threads.list"
+comm -23 "$out/net.all"     "$out/program.list" > "$out/net.list"
+comm -23 "$out/spawn.all"   "$out/program.list" > "$out/spawn.list"
 
 echo "   corpus: $n sources compiled and run, plus mc build examples/lang"
 echo "   compile $(wc -l < "$out/compile.list") calls, program $(wc -l < "$out/program.list") calls, threads delta $(wc -l < "$out/threads.list")"
+echo "   net delta $(wc -l < "$out/net.list") calls, spawn delta $(wc -l < "$out/spawn.list") calls"
 
 # ---- every name must have an SN_* -------------------------------------------
 # The tables are written in SN_* terms so that src/sandbox*.mc names no number
 # (docs/reference/sandbox.md § The system-call shim). A name the enum does not
 # have is a hard failure with the line to add, not a silent drop.
 miss=
-for s in $(cat "$out/compile.list" "$out/program.list" "$out/threads.list" | sort -u); do
+for s in $(cat "$out/compile.list" "$out/program.list" "$out/threads.list" \
+                "$out/net.list" "$out/spawn.list" | sort -u); do
     u=$(echo "$s" | tr 'a-z' 'A-Z')
     grep -q "^#define SN_$u  *[0-9]" src/sysno.mc || miss="$miss SN_$u"
 done
@@ -273,9 +356,20 @@ fi
 # as `note` lines, and `--strict` restores the two-way failure for a
 # single-host audit -- which is only meaningful on the host that last wrote the
 # table with a plain (replacing) run.
+# The two M48 C2 deltas are ONE file each, not one per (architecture, libc),
+# and that is what they are: src/sandbox_profiles.mc reads sbp_net and
+# sbp_spawn as a single union over every host (emit(), below), because a
+# socket and a spawn are named the same on both architectures and the entry an
+# architecture does not have is dropped when the filter is built. A shared file
+# also removes the one thing a per-host name cannot answer -- what `--check`
+# compares against on a host that has never been able to WRITE its own copy.
+# They are always unioned, never replaced, for the same reason: a host that
+# cannot measure the other's calls must not erase them.
 newlist() {   # newlist KIND
     src="$out/$1.list"
     dst="tools/sandbox/$arch-$libc-$1.list"
+    shared=0
+    case "$1" in net|spawn) dst="tools/sandbox/$1.list"; shared=1 ;; esac
     if [ "$check" = 1 ]; then
         if [ ! -f "$dst" ]; then echo "FAIL: $dst is missing"; return 1; fi
         missing=$(comm -13 "$dst" "$src")
@@ -300,7 +394,7 @@ newlist() {   # newlist KIND
         [ "$st" = 0 ] && echo "ok   $1: $(wc -l < "$dst") calls, every call in the trace is in the table"
         return $st
     fi
-    if [ "$union" = 1 ] && [ -f "$dst" ]; then
+    if { [ "$union" = 1 ] || [ "$shared" = 1 ]; } && [ -f "$dst" ]; then
         sort -u "$dst" "$src" > "$out/$1.union"
         cp "$out/$1.union" "$dst"
         echo "     wrote $dst ($(wc -l < "$dst") calls, the union with what was there)"
@@ -315,6 +409,8 @@ rc=0
 newlist compile || rc=1
 newlist program || rc=1
 newlist threads || rc=1
+newlist net     || rc=1
+newlist spawn   || rc=1
 
 # ---- generate src/sandbox_profiles.mc --------------------------------------
 # From every list file in tools/sandbox/, so the architecture this host cannot
@@ -337,13 +433,17 @@ emit() {   # emit > FILE
 // direction, or if regenerating this file from the lists does not reproduce it
 // byte for byte.
 //
-// Three tables per architecture, plus one shared delta:
+// Three tables per architecture, plus three shared deltas:
 //
 //   sbp_compile_*   the compile step: /mc itself, and the compiler it teaches
 //   sbp_program_*   the run step: what an mc program plus its loader issues
 //   sbp_gnu_*_*     what glibc's ld.so and libc need that musl's do not, per
 //                   step -- the two are NOT the same list
 //   sbp_threads     what --allow=threads adds
+//   sbp_net         what --allow=net adds (M48 C2), measured over a probe that
+//                   is both ends of a TCP conversation on loopback
+//   sbp_spawn       what --bin adds (M48 C2), measured over a probe that
+//                   posix_spawns another program and waits for it
 //
 // Each list is terminated by -1. An entry this architecture does not have
 // answers -1 from host_sysno() and is skipped when the filter is built.
@@ -383,6 +483,16 @@ EOF
     t=$(cat tools/sandbox/*-threads.list 2>/dev/null | sort -u)
     echo
     echo "i64 sbp_threads[] = {"
+    emit_rows "$t"
+    echo "};"
+    t=$(cat tools/sandbox/net.list 2>/dev/null | sort -u)
+    echo
+    echo "i64 sbp_net[] = {"
+    emit_rows "$t"
+    echo "};"
+    t=$(cat tools/sandbox/spawn.list 2>/dev/null | sort -u)
+    echo
+    echo "i64 sbp_spawn[] = {"
     emit_rows "$t"
     echo "};"
     cat <<'EOF'

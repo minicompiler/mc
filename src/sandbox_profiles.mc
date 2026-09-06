@@ -14,13 +14,17 @@
 // direction, or if regenerating this file from the lists does not reproduce it
 // byte for byte.
 //
-// Three tables per architecture, plus one shared delta:
+// Three tables per architecture, plus three shared deltas:
 //
 //   sbp_compile_*   the compile step: /mc itself, and the compiler it teaches
 //   sbp_program_*   the run step: what an mc program plus its loader issues
 //   sbp_gnu_*_*     what glibc's ld.so and libc need that musl's do not, per
 //                   step -- the two are NOT the same list
 //   sbp_threads     what --allow=threads adds
+//   sbp_net         what --allow=net adds (M48 C2), measured over a probe that
+//                   is both ends of a TCP conversation on loopback
+//   sbp_spawn       what --bin adds (M48 C2), measured over a probe that
+//                   posix_spawns another program and waits for it
 //
 // Each list is terminated by -1. An entry this architecture does not have
 // answers -1 from host_sysno() and is skipped when the filter is built.
@@ -74,6 +78,7 @@ i64 sbp_program_aarch64[] = {
     SN_EXIT_GROUP,
     SN_FCNTL,
     SN_GETDENTS64,
+    SN_IOCTL,
     SN_LSEEK,
     SN_MMAP,
     SN_MPROTECT,
@@ -84,6 +89,7 @@ i64 sbp_program_aarch64[] = {
     SN_RT_SIGPROCMASK,
     SN_SET_TID_ADDRESS,
     SN_WRITE,
+    SN_WRITEV,
     -1
 };
 
@@ -181,6 +187,35 @@ i64 sbp_threads[] = {
     SN_MEMBARRIER,
     SN_NANOSLEEP,
     SN_RT_SIGACTION,
+    -1
+};
+
+i64 sbp_net[] = {
+    SN_ACCEPT,
+    SN_ACCEPT4,
+    SN_BIND,
+    SN_CONNECT,
+    SN_GETPEERNAME,
+    SN_GETSOCKNAME,
+    SN_GETSOCKOPT,
+    SN_LISTEN,
+    SN_RECVFROM,
+    SN_RECVMSG,
+    SN_SENDMSG,
+    SN_SENDTO,
+    SN_SETSOCKOPT,
+    SN_SHUTDOWN,
+    SN_SOCKET,
+    -1
+};
+
+i64 sbp_spawn[] = {
+    // SN_CLONE  notified, never allowed (src/seccomp.mc)
+    // SN_CLONE3  notified, never allowed (src/seccomp.mc)
+    SN_GETUID,
+    SN_PIPE2,
+    SN_READ,
+    SN_WAIT4,
     -1
 };
 
