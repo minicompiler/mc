@@ -62,15 +62,71 @@
 // MODE_755 (0755 in decimal) comes from backend_exe.mc, which already needs it
 // to mark the executable it writes.
 
-uptr cfg_file = 0;                    // path of mc.toml, as it will appear in errors
-uptr drv_sdk_cache = 0;               // {sdk}, resolved at most once
-i64  drv_target = -1;                 // index in the target registry (hooks.mc)
-uptr drv_os = 0;                      // [target].os, as the file wrote it
-uptr drv_arch = 0;                    // [target].arch, likewise (M25: {sysroot})
-uptr drv_stubs_cache = 0;             // {stubs}, written at most once (M25)
-i64  drv_unit = 0;                    // the unit the last parse produced -- what
-                                      // the stub writer reads its externs from
-i64  drv_stub_mode = 0;               // `mc sysroot stub`: parse, write the
+// ---- the driver's state, in one arena record -------------------------------
+// Twelve file-level globals used to live here. They are one record now, for the
+// reason src/sandbox.mc gives for sb_state: the frozen seed's MAXGLOBALS is 512
+// and `mc limits src/mc.mc` has to stay under 460 (scripts/check-limits.sh
+// fails at 90%). The record is allocated on first use and the two non-zero
+// starting values -- DRV_TARGET -1 and DRV_TOL 2500 -- are set there, so a
+// reader that runs before any TOML was parsed sees exactly what the initialized
+// globals used to hold. Nothing else changed: every accessor is the name the
+// global had, and the call sites read the same.
+#define DRV_CFG        0      // path of mc.toml, as it will appear in errors
+#define DRV_SDK        8      // {sdk}, resolved at most once
+#define DRV_TARGET    16      // index in the target registry (hooks.mc), -1 = none
+#define DRV_OS        24      // [target].os, as the file wrote it
+#define DRV_ARCH      32      // [target].arch, likewise (M25: {sysroot})
+#define DRV_STUBS     40      // {stubs}, written at most once (M25)
+#define DRV_UNIT      48      // the unit the last parse produced -- what the
+                              // stub writer reads its externs from
+#define DRV_STUBMODE  56      // `mc sysroot stub`: parse, write the stubs, and
+                              // neither compile nor link
+#define DRV_BNAME     64      // what drv_compile writes with: a role until the
+                              // resolution below names it
+#define DRV_STATIC    72      // [target].link = "static" (post-M42 patch)
+#define DRV_LIMMODE   80      // 0 = plain build, 1 = --limits (report +
+                              // verdict), 2 = --fix-limits (report + rewrite
+                              // the [limits] section). `mc limits` is mode 1.
+#define DRV_TOL       88      // [limits].tolerance, in basis points
+#define DRV_SIZE      96
+
+uptr drv_state = 0;                   // the one global of this file
+
+uptr drv_rec() {
+    if (drv_state == 0) {
+        drv_state = xalloc(DRV_SIZE);
+        mem_zero(drv_state, DRV_SIZE);
+        st64(drv_state + DRV_TARGET, -1);
+        st64(drv_state + DRV_TOL, 2500);
+    }
+    return drv_state;
+}
+
+uptr cfg_file()        { return ld64(drv_rec() + DRV_CFG); }
+uptr drv_sdk_cache()   { return ld64(drv_rec() + DRV_SDK); }
+i64  drv_target()      { return ld64(drv_rec() + DRV_TARGET); }
+uptr drv_os()          { return ld64(drv_rec() + DRV_OS); }
+uptr drv_arch()        { return ld64(drv_rec() + DRV_ARCH); }
+uptr drv_stubs_cache() { return ld64(drv_rec() + DRV_STUBS); }
+i64  drv_unit()        { return ld64(drv_rec() + DRV_UNIT); }
+i64  drv_stub_mode()   { return ld64(drv_rec() + DRV_STUBMODE); }
+uptr drv_bname()       { return ld64(drv_rec() + DRV_BNAME); }
+i64  drv_static()      { return ld64(drv_rec() + DRV_STATIC); }
+i64  drv_lim_mode()    { return ld64(drv_rec() + DRV_LIMMODE); }
+i64  drv_tol()         { return ld64(drv_rec() + DRV_TOL); }
+
+void set_cfg_file(uptr v)        { st64(drv_rec() + DRV_CFG, v); }
+void set_drv_sdk_cache(uptr v)   { st64(drv_rec() + DRV_SDK, v); }
+void set_drv_target(i64 v)       { st64(drv_rec() + DRV_TARGET, v); }
+void set_drv_os(uptr v)          { st64(drv_rec() + DRV_OS, v); }
+void set_drv_arch(uptr v)        { st64(drv_rec() + DRV_ARCH, v); }
+void set_drv_stubs_cache(uptr v) { st64(drv_rec() + DRV_STUBS, v); }
+void set_drv_unit(i64 v)         { st64(drv_rec() + DRV_UNIT, v); }
+void set_drv_stub_mode(i64 v)    { st64(drv_rec() + DRV_STUBMODE, v); }
+void set_drv_bname(uptr v)       { st64(drv_rec() + DRV_BNAME, v); }
+void set_drv_static(i64 v)       { st64(drv_rec() + DRV_STATIC, v); }
+void set_drv_lim_mode(i64 v)     { st64(drv_rec() + DRV_LIMMODE, v); }
+void set_drv_tol(i64 v)          { st64(drv_rec() + DRV_TOL, v); }
                                       // stubs, and neither compile nor link
 
 // the backends that write for the target in effect. M17 replaced the whitelist
@@ -91,8 +147,8 @@ i64  drv_stub_mode = 0;               // `mc sysroot stub`: parse, write the
 #define DRV_ROLE_EXE 2                // its direct-executable backend
 #define DRV_ROLE_NONE 3               // no backend at all: check [target] and
                                       // stop (`mc sysroot stub`, below)
-uptr drv_bname = 0;                   // what drv_compile writes with: a role
-                                      // until the resolution below names it
+// DRV_BNAME in the record above is what drv_compile writes with: a role until
+// the resolution below names it.
 
 // the (os, arch) pair against the registry, and nothing about backends. Split
 // out of drv_backend_for so that `mc sysroot stub` -- which needs the target's
@@ -100,9 +156,9 @@ uptr drv_bname = 0;                   // what drv_compile writes with: a role
 // same place and with the same two messages, instead of walking on with an
 // unvalidated [target] (docs/reference/sysroot.md § 7).
 void drv_target_resolve() {
-    if (!target_os_known(drv_os)) toml_err_key("target.os", target_os_list());
-    drv_target = target_find(drv_os, drv_arch);
-    if (drv_target < 0) toml_err_key("target.arch", target_arch_list(drv_os));
+    if (!target_os_known(drv_os())) toml_err_key("target.os", target_os_list());
+    set_drv_target(target_find(drv_os(), drv_arch()));
+    if (drv_target() < 0) toml_err_key("target.arch", target_arch_list(drv_os()));
 }
 
 uptr drv_backend_for(i64 role) {
@@ -114,35 +170,33 @@ uptr drv_backend_for(i64 role) {
     // the artefact), and `target(os, arch, "x", 0)` is Linux. Neither may reach
     // backend_find(), which takes a name and would dereference the 0.
     if (role == DRV_ROLE_OBJ) {
-        if (tgt_obj_at(drv_target) == 0)
-            toml_err_key("target.os", tm_cat(tm_cat(drv_os, "/"),
-                         tm_cat(drv_arch,
+        if (tgt_obj_at(drv_target()) == 0)
+            toml_err_key("target.os", tm_cat(tm_cat(drv_os(), "/"),
+                         tm_cat(drv_arch(),
                                 " has no object backend: use kind = \"exe\"")));
-        return tgt_obj_at(drv_target);
+        return tgt_obj_at(drv_target());
     }
-    if (tgt_exe_at(drv_target) == 0)
-        toml_err_key("target.os", tm_cat(drv_os,
+    if (tgt_exe_at(drv_target()) == 0)
+        toml_err_key("target.os", tm_cat(drv_os(),
                      " requires [linker]: there is no direct executable"));
-    return tgt_exe_at(drv_target);
+    return tgt_exe_at(drv_target());
 }
 
 // post-M42 patch: [target].link, validated in drv_run and handed to the writer
 // (dyn_static) in drv_entry alone -- the key describes THE ENTRY's executable.
 // The taught compiler drv_teach builds is a binary for THIS host, it imports a
 // libc by construction, and a `link = "static"` meant for the target must not
-// refuse it.
-i64 drv_static = 0;
+// refuse it. That is DRV_STATIC in the record above.
 
-// M23: 0 = plain build, 1 = --limits (report + verdict), 2 = --fix-limits
-// (report + rewrite the [limits] section). `mc limits` is mode 1.
-i64 drv_lim_mode = 0;
-i64 drv_tol = 2500;                   // [limits].tolerance, in basis points
+// M23: DRV_LIMMODE is 0 = plain build, 1 = --limits (report + verdict),
+// 2 = --fix-limits (report + rewrite the [limits] section). `mc limits` is
+// mode 1. DRV_TOL is [limits].tolerance, in basis points.
 
 // ---- small helpers ----
 void drv_put(uptr b, uptr s) { buf_put(b, s, cstrlen(s)); }
 
 // path written in the TOML -> path usable from the working directory
-uptr drv_path(uptr rel) { return path_join(cfg_file, rel); }
+uptr drv_path(uptr rel) { return path_join(cfg_file(), rel); }
 
 // `what a -> b`, one line per step
 void drv_step(uptr what, uptr a, uptr b) {
@@ -256,7 +310,7 @@ i64 drv_spawn(uptr file, uptr av, uptr fa) {
 // actually uses it. stdout goes to `tmpf` via a spawn file action -- no shell,
 // no pipe.
 uptr drv_sdk(uptr tmpf) {
-    if (drv_sdk_cache != 0) return drv_sdk_cache;
+    if (drv_sdk_cache() != 0) return drv_sdk_cache();
     // M37: `xcrun` is a macOS program. On any other host {sdk} is a config
     // error, not a spawn that fails halfway through a build.
     if (!host_has_sdk())
@@ -279,7 +333,7 @@ uptr drv_sdk(uptr tmpf) {
     while (len > 0 && (ld8(s + len - 1) == '\n' || ld8(s + len - 1) == '\r')) { len = len - 1; }
     st8(s + len, 0);
     unlink(tmpf);
-    drv_sdk_cache = s;
+    set_drv_sdk_cache(s);
     return s;
 }
 
@@ -333,7 +387,7 @@ uptr drv_usage_file() { return drv_path("build/.mc-usage.toml"); }
 // {stubs} reads at link time: the compile and the link happen in one process,
 // so the externs are still in memory when the link line is assembled.
 i64 drv_parse(uptr src, i64 cfg, uptr label) {
-    lim_plan(src, drv_tol, drv_usage_file(), label);   // M23: before any table exists
+    lim_plan(src, drv_tol(), drv_usage_file(), label);   // M23: before any table exists
     tok_init();
     lex_init(src);
     core_types_init();                                 // M45: `i32`, before user_init
@@ -341,16 +395,16 @@ i64 drv_parse(uptr src, i64 cfg, uptr label) {
     // M39.5: HERE. After user_init(), so a [target] a module registered is in
     // the registry; before parse_unit(), so an unknown pair is still reported
     // ahead of anything the source itself might be wrong about.
-    if (drv_bname == DRV_ROLE_OBJ || drv_bname == DRV_ROLE_EXE
-        || drv_bname == DRV_ROLE_NONE)
-        drv_bname = drv_backend_for(drv_bname);
+    if (drv_bname() == DRV_ROLE_OBJ || drv_bname() == DRV_ROLE_EXE
+        || drv_bname() == DRV_ROLE_NONE)
+        set_drv_bname(drv_backend_for(drv_bname()));
     // M44: BOTH halves. A compiler-module package has to reach the compilation
     // of the taught compiler (cfg == 0) and a library package the compilation
     // of the entry (cfg == 1), so the roots the lock names are registered here
     // and not inside drv_apply_config. With no [deps] it returns having read
     // nothing at all -- not even mc.lock -- which is what makes a project
     // without dependencies byte for byte what it was (D24).
-    deps_apply(cfg_file);
+    deps_apply(cfg_file());
     if (cfg) drv_apply_config();
     i64 unit = parse_unit();
     // M44: the [package].files boundary, over the once-only list the lexer just
@@ -358,17 +412,17 @@ i64 drv_parse(uptr src, i64 cfg, uptr label) {
     deps_check_files();
     unit = run_passes(unit);
     unit = fold(unit);
-    drv_unit = unit;
+    set_drv_unit(unit);
     return unit;
 }
 
 // `bname` is a backend name, or one of the two DRV_ROLE_* markers drv_entry
 // passes when the name has to come out of [target] (M39.5).
 void drv_compile(uptr src, uptr out, uptr bname, i64 cfg, uptr label) {
-    drv_bname = bname;
+    set_drv_bname(bname);
     i64 unit = drv_parse(src, cfg, label);
-    i64 bi = backend_find(drv_bname);
-    if (bi < 0) backend_die(drv_bname);
+    i64 bi = backend_find(drv_bname());
+    if (bi < 0) backend_die(drv_bname());
     drv_mkdirs(out);
     unlink(out);                       // never rewrite a signed binary in place
     callp(backend_fn_at(bi), unit, out);
@@ -433,7 +487,7 @@ uptr drv_gen_compiler(uptr cout) {
     u8 b[BUF_SIZE];
     buf_init(b);
     drv_put(b, "// generated by `mc build` from ");
-    drv_put(b, cfg_file);
+    drv_put(b, cfg_file());
     drv_put(b, "\n");
     // M37: the host layer, before the core and whatever the core came from.
     // `<mc/host>` is not a file: it is the host file of the compiler running
@@ -488,7 +542,7 @@ uptr drv_runnable(uptr p) {
 // (--sysroot-dir / [sysroot].cache / ~/.mc/sysroots), then the message and exit
 // 2. `mc build` still never downloads: only `mc sysroot fetch --yes` does.
 uptr drv_sysroot() {
-    return sysroot_for(drv_os, drv_arch);
+    return sysroot_for(drv_os(), drv_arch());
 }
 
 // everything of `p` before its last '/', or "." when it has none
@@ -518,18 +572,18 @@ uptr drv_dirname(uptr p) {
 // It sits beside the output, `<dirname of [project].out>/stubs`, which for the
 // usual `out = "build/app"` is `build/stubs`.
 uptr drv_stubs() {
-    if (drv_stubs_cache != 0) return drv_stubs_cache;
+    if (drv_stubs_cache() != 0) return drv_stubs_cache();
     uptr out = toml_get("project.out");
     if (out == 0) toml_err_key("project.out", "missing key");
     uptr d = drv_path(tm_cat(drv_dirname(out), "/stubs"));
     drv_mkdirs(tm_cat(d, "/x"));
-    i64 n = stubs_write(drv_unit, d, drv_os, drv_arch);
+    i64 n = stubs_write(drv_unit(), d, drv_os(), drv_arch());
     out_str(1, "stubs ");
     out_num(1, n);
     out_str(1, " -> ");
     out_str(1, d);
     out_str(1, "\n");
-    drv_stubs_cache = d;
+    set_drv_stubs_cache(d);
     return d;
 }
 
@@ -589,7 +643,7 @@ void drv_entry(uptr entry, uptr out, uptr kind) {
     // M25: `mc sysroot stub` is the front half of a build and no more -- parse
     // the entry, write one stub per library it uses, stop. No object, no link,
     // and no [linker] required.
-    if (drv_stub_mode) {
+    if (drv_stub_mode()) {
         // M39.5: the role marker is what makes drv_parse resolve [target] after
         // user_init(), the same way a compiling build does. Without it this
         // path reached the stub writer with a pair nobody had checked, and a
@@ -598,7 +652,7 @@ void drv_entry(uptr entry, uptr out, uptr kind) {
         // and not DRV_ROLE_OBJ: writing a .tbd/.def needs the os and the arch,
         // never a backend, so a target registered with no object backend must
         // not be refused here.
-        drv_bname = DRV_ROLE_NONE;
+        set_drv_bname(DRV_ROLE_NONE);
         drv_parse(src, 1, entry);
         drv_stubs();
         return;
@@ -610,7 +664,7 @@ void drv_entry(uptr entry, uptr out, uptr kind) {
     }
     if (has_linker == 0) {
         drv_step("compile", entry, out);
-        dyn_static = drv_static;             // the one compile [target].link is about
+        dyn_static = drv_static();             // the one compile [target].link is about
         drv_compile(src, drv_path(out), DRV_ROLE_EXE, 1, entry);
         dyn_static = 0;
         return;
@@ -670,7 +724,7 @@ i64 drv_teach(uptr cout, uptr dir, i64 compiler_only) {
     st64(av + 8,  "build");
     st64(av + 16, dir);
     st64(av + 24, "--config");
-    st64(av + 32, cfg_file);
+    st64(av + 32, cfg_file());
     st64(av + 40, "--entry-only");
     i64 n = 6;
     // M44: --libs-dir has to reach the child, which re-reads the same TOML and
@@ -680,8 +734,8 @@ i64 drv_teach(uptr cout, uptr dir, i64 compiler_only) {
         st64(av + n * 8 + 8, dp_libs_opt);
         n = n + 2;
     }
-    if (drv_lim_mode == 1) { st64(av + n * 8, "--limits"); n = n + 1; }
-    if (drv_lim_mode == 2) { st64(av + n * 8, "--fix-limits"); n = n + 1; }
+    if (drv_lim_mode() == 1) { st64(av + n * 8, "--limits"); n = n + 1; }
+    if (drv_lim_mode() == 2) { st64(av + n * 8, "--fix-limits"); n = n + 1; }
     st64(av + n * 8, 0);
     i64 crc = drv_spawn(comp, av, 0);
     if (crc != 0 && crc != 3) return 1;
@@ -694,9 +748,9 @@ i64 drv_teach(uptr cout, uptr dir, i64 compiler_only) {
 // it; the report and the verdict only come out under --limits/--fix-limits.
 i64 drv_finish(uptr what) {
     lim_write_usage(drv_usage_file(), what);
-    if (drv_lim_mode == 0) return 0;
+    if (drv_lim_mode() == 0) return 0;
     lim_report(what);
-    if (drv_lim_mode == 2 && lim_fix(cfg_file)) return 0;
+    if (drv_lim_mode() == 2 && lim_fix(cfg_file())) return 0;
     return lim_exit_code();
 }
 
@@ -711,10 +765,10 @@ void drv_usage() { subcommand_usage(); }
 i64 drv_run(uptr dir, uptr cfg, i64 entry_only, i64 compiler_only) {
     if (dir == 0) dir = ".";
     if (cfg == 0) cfg = path_norm(tm_cat(dir, "/mc.toml"));
-    cfg_file = cfg;
+    set_cfg_file(cfg);
     toml_parse(cfg);
-    drv_tol = toml_bp("limits.tolerance", 2500, 0, 10000,
-                      "tolerance must be between 0 and 1");
+    set_drv_tol(toml_bp("limits.tolerance", 2500, 0, 10000,
+                        "tolerance must be between 0 and 1"));
 
     // M17/M33: the target comes out of the registry, never out of a list
     // written here. The two messages are built from the same table, so they
@@ -729,8 +783,8 @@ i64 drv_run(uptr dir, uptr cfg, i64 entry_only, i64 compiler_only) {
     if (os == 0) os = host_os();
     uptr arch = toml_get("target.arch");
     if (arch == 0) arch = host_arch();
-    drv_os = os;
-    drv_arch = arch;
+    set_drv_os(os);
+    set_drv_arch(arch);
     // M42 + the post-M42 patch: WHAT THE EXECUTABLE IS LINKED AGAINST -- the
     // two axes of the Linux family, in one vocabulary (docs/build.md § Linux
     // targets). `libc` is a FAMILY (`gnu` or `musl`) and picks the DT_NEEDED
@@ -761,9 +815,9 @@ i64 drv_run(uptr dir, uptr cfg, i64 entry_only, i64 compiler_only) {
     if (dyn_libc && !str_eq(dyn_libc, "gnu") && !str_eq(dyn_libc, "musl"))
         toml_err_key("target.libc",
                      "libc must be gnu or musl (a soname is not a value: gnu is libc.so.6, musl is libc.so)");
-    drv_static = 0;
+    set_drv_static(0);
     if (link) {
-        if (str_eq(link, "static"))       drv_static = 1;
+        if (str_eq(link, "static"))       set_drv_static(1);
         else if (!str_eq(link, "dynamic"))
             toml_err_key("target.link", "link must be dynamic or static");
     }
@@ -822,8 +876,8 @@ i64 drv_build(i64 argc, uptr argv) {
         }
         else if (str_eq(a, "--entry-only"))    entry_only = 1;
         else if (str_eq(a, "--compiler-only")) compiler_only = 1;
-        else if (str_eq(a, "--limits"))        drv_lim_mode = 1;
-        else if (str_eq(a, "--fix-limits"))    drv_lim_mode = 2;
+        else if (str_eq(a, "--limits"))        set_drv_lim_mode(1);
+        else if (str_eq(a, "--fix-limits"))    set_drv_lim_mode(2);
         else if (ld8(a) == '-')               { drv_usage(); return 1; }
         else if (dir == 0)                    dir = a;
         else                                  die2("duplicate directory", a);
@@ -859,7 +913,7 @@ i64 drv_limits(i64 argc, uptr argv) {
         else                     die2("duplicate directory", a);
         i = i + 1;
     }
-    drv_lim_mode = 1;
+    set_drv_lim_mode(1);
     if (path != 0 && drv_is_source(path)) {
         lim_compile_file(path);
         lim_report(path);

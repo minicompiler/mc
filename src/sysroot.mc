@@ -166,7 +166,7 @@ uptr sysroot_target(uptr os, uptr arch) { return tm_cat(tm_cat(os, "-"), arch); 
 // a path written in mc.toml is relative to the CONFIG's directory; with no
 // config -- `mc sysroot list|path` -- it is relative to the working directory
 uptr sr_path(uptr rel) {
-    if (cfg_file == 0) return rel;
+    if (cfg_file() == 0) return rel;
     return drv_path(rel);
 }
 
@@ -189,7 +189,7 @@ uptr sysroot_probe(uptr os, uptr arch) {
         // drv_sdk caches it, so asking twice runs `xcrun` once
         if (!host_has_sdk()) return 0;
         uptr t = "build/.mc-sdk";
-        if (cfg_file != 0) t = tm_cat(cfg_file, ".sdk");
+        if (cfg_file() != 0) t = tm_cat(cfg_file(), ".sdk");
         uptr d = drv_sdk(t);
         if (sr_try(d, os)) return d;
         return 0;
@@ -697,7 +697,7 @@ i64 sysroot_cmd(i64 argc, uptr argv) {
     // passed because it is the entry's externs that are wanted, never the
     // taught compiler's.
     if (str_eq(sub, "stub")) {
-        drv_stub_mode = 1;
+        set_drv_stub_mode(1);
         uptr dir = name;
         if (dir == 0) dir = ".";
         if (cfg == 0) cfg = tm_cat(dir, "/mc.toml");

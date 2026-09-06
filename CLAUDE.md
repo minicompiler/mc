@@ -3996,6 +3996,84 @@ agents (`.claude/agents/`): `stage0-dev` (C23), `mc-dev` (`.mc` code), `reviewer
   Docs: `docs/reference/hooks.md` § `machine`/`machine_use` (the four-row table of what a
   registration does to the machine in effect, and the `machine_use_if(host_machine())` correction
   two paragraphs down), `docs/reference/machine.md` § 1 (which stated the old rule twice).
+- The driver's state in one arena record (globals diet, C0): **twelve file-level globals in
+  `src/driver.mc` became one**, in the shape `src/sandbox.mc` uses for `sb_state`. Capacity work
+  only -- nothing the compiler emits changes. The reason is a number: the frozen seed's
+  `MAXGLOBALS` is 512, `scripts/check-limits.sh` fails at 90% (460), and `src/mc.mc` was at
+  **454/512 (88%)** with M48 still to land.
+  `cfg_file drv_sdk_cache drv_target drv_os drv_arch drv_stubs_cache drv_unit drv_stub_mode
+  drv_bname drv_static drv_lim_mode drv_tol` are now the twelve `DRV_*` fields of a 96-byte
+  record `drv_state` points at, allocated on first use by `drv_rec()` (`xalloc` + `mem_zero`) --
+  which is also where the two non-zero starting values live, `DRV_TARGET` -1 and `DRV_TOL` 2500,
+  so a reader that runs before any TOML was parsed sees exactly what the initialized globals
+  held. Each global kept its name as the accessor (`drv_os()` to read, `set_drv_os(v)` to write),
+  so every call site reads the same. Three files were touched, because two of the twelve are read
+  from outside `driver.mc` and always were: `src/pkg.mc` (`cfg_file`, 9 sites, including the
+  `set_cfg_file(cfg)` in `pkg_open_config`) and `src/sysroot.mc` (`cfg_file` twice and
+  `set_drv_stub_mode(1)` in `sysroot_cmd`). Both are in parts that include `driver.mc`
+  (`<mc/core_build>`, `<mc/core_pkg>`), and every part still stands on its own -- `check-parts`
+  is green.
+  -- cost (`git diff --numstat` on `src/`, the generated `src/bundle_data.mc` excluded):
+  `driver.mc` +116/-62, `pkg.mc` +9/-9, `sysroot.mc` +3/-3 = **128 added lines, 104 of them
+  neither comment nor blank**. The seed's rows move as expected: **globals 454/512 (88%) ->
+  443/512 (86%)**, exactly -11 (twelve replaced by one), and `funcs` 1673 -> 1698 / `lowered`
+  1657 -> 1682, the 25 new functions being 12 readers, 12 writers and `drv_rec`.
+  **The inertness proof is the whole point and it held.**
+  `scripts/check-inert.sh build/mc1.pre build/mc1` (pre = a `mc1` built from `origin/main`
+  0884e93): **33 objects identical** (`tests/*.mc` and `src/mc.mc`) plus byte-identical artefacts
+  for `examples/api`, `lang`, `conc`, `desktop` and `kernel`, each through the taught compiler its
+  own side builds (`--compiler-only` then `--entry-only`). The plain `mc build` road was measured
+  separately for the same reason and agrees: `build/api` 55632 B, `build/lang-demo` 36214 B,
+  `build/conc-demo` 55206 B and `build/kernel.bin` 3304 B are `cmp`-identical between the two
+  compilers. `diff <(mc1.pre --dump-asm src/mc.mc) <(mc1 --dump-asm src/mc.mc)` is **empty** --
+  that dump is of the SOURCE each compiler is given, and both compile the same tree identically.
+  What did move is the compiler's own body, and it is confined: compiling `origin/main`'s
+  `src/mc.mc` and this tree's with the same compiler gives **25 new function labels** (the
+  accessors and `drv_rec`), **none removed**, and of the 1657 functions both trees have, **24
+  differ** -- the 15 in `driver.mc`, 3 in `sysroot.mc` and 6 in `pkg.mc` that read or write one of
+  the twelve, and nothing else.
+  -- `stage0/` untouched, 2848/3000. `make bundle` re-run BEFORE bootstrapping (`src/driver.mc` is
+  bundled as `mc/driver`): 93 files, raw 1198910 -> LZ 560054, blob 561216 B.
+  `make check` green end to end (**RC 0, zero FAIL**): `test` 32/32, `check-lex` 163/163
+  (3 skipped), `check-ast`/`check-asm` 164/164, `check-obj` **32/32 identical to the frozen
+  seed**, `check-bundle` (lz round trip 117 cases), `bootstrap` at a fixed point
+  (`mc2.o == mc3.o`, 1283768 bytes; the `--dump-asm` diff between `mc1` and `mc2` is **empty**),
+  `check-surface` 32/32 + inert, `test-exe` 32/32, `check-mc` 15/15, `check-standalone`,
+  **`check-parts`** (the parts + `<mc/main>` == `<mc/core>`, 1283768 B; all six parts stand alone),
+  `check-toml` 10/10, **`check-build` 53/53**, **`check-pkg` 94/94**, `check-stubs` 9/9,
+  `check-sysroots` (13 rows), **`check-limits` 17/17 under 90% (globals 443/512, 86%)**,
+  `check-minimal`, `test-linux` 41/41 and `test-linux-x86_64` 39/39, the four `--exe` cells
+  44/44 + 44/44 + 42/42 + 42/42, `test-windows` 42/42 and `test-windows-x86_64` 40/40 objects
+  cross-compiled and linked, `check-examples`, `check-lang` 18, `check-conc` 21, `check-desktop`,
+  `check-float` (13/13 macos, 13/13 linux/aarch64, 13/13 linux/x86_64, 11/11 + 11/11 windows
+  objects), `check-wide`, `check-kernel` (QEMU 11.0.1), `check-avr`, `test-sandbox` 60 ok /
+  0 failed / 1 skipped, `check-docs` (199 symbols, 36 flags, 27 TOML keys, 10 directives,
+  51 samples, 383 links), `site` 91 pages + `check-site` 0 link problems + `check-site-linux`
+  11/11. `make check-linux-host` RC 0 over all four cells (aarch64 musl 41/41 and gnu 42/42,
+  x86_64 musl 39/39 and gnu 40/40), each after its own `mc2l.o == mc3l.o` and with the cross proof
+  against the macOS `build/mc2.o` green.
+  The five goldens rewritten **once**, each only after its own criterion: `mc2.sha256`
+  `2c6efc32...b95573` -> `38470e10413085868ee9dab94f42639f79d92a8e7853a49a55fe228c1dd6de2a`
+  (after the empty `--dump-asm` diff and `cmp build/mc2.o build/mc3.o`); the Linux pair deleted and
+  re-recorded by `make check-linux-host` -- `mc2-linux-arm64.sha256`
+  `3eefd537966783595b8e2045570e7b1d01939057f3e6ecf00c8263401a52d6ab`,
+  `mc2-linux-x86_64.sha256`
+  `6b5b78348fb1c8eba1f5f06f6ead872023df9ba15b4d507e825e4abc317e7054`, each recorded in its musl
+  cell and re-verified by the gnu cell of the same architecture; the Windows pair cross-computed
+  per `tests/golden/README.md` -- `mc2-windows-arm64.sha256`
+  `4a8e99ca9a9c480b0bd75d144058f56a0577f3df2d94dbf4212c5210a4d088c2` (1310361 B),
+  `mc2-windows-x86_64.sha256`
+  `d7c8e3e17d7c19abd4b77175405502a6b00fd0cece5ed307ddd5ab2736009ee1` (1347401 B), both also
+  written byte for byte by `build/mc2`.
+  Docs: nothing in `docs/reference/` named any of the twelve; `docs/build.md` § M39.5 mentioned
+  `drv_os`/`drv_arch` and now says `drv_os()`/`drv_arch()`, two fields of the driver's state
+  record. `docs/specs/M25.md` and `docs/specs/M39.md` are left as they are -- a spec records the
+  tree of its own day.
+  Seen and NOT done here: `src/deps.mc` carries **one** file-level global beside its `dp` record
+  (`dp_libs_opt`, `--libs-dir`), which is a saving of 1; `src/pkg.mc` and `src/fetch.mc` carry
+  none beside `pk` and `fx`. The cheap diets left are elsewhere and bigger -- the three object
+  writers, `backend_elf_exe.mc` 38, `backend_exe.mc` 27 and `backend_elf.mc` 17, which is the 82
+  the M43 step A entry already named.
 - Next: the **site + registry server, M47 S4-S6**, in `minicompiler/mc-registry`; then **M44 steps 4-5**
   (slim / install / upgrade), then **M42 step 2** (PE `--exe`, CI-gated on the Windows runners).
   **M46** only on the owner's request; **M43 Layer 2** after 1.0.0. M13 and M18 stay in the backlog

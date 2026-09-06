@@ -1734,8 +1734,9 @@ signed binary on macOS.
 parent refused a pair only the taught compiler it was about to build knew about — gap G1 of
 `docs/specs/M39.md`. A second entry point (`user_targets()`) was not the fix: `mc` has no weak
 definitions, so every existing taught compiler would have had to grow an empty body. The fix is a
-**deferral**. `drv_run` keeps the two values as strings (`drv_os`, `drv_arch`); `drv_entry` passes
-a *role* — `DRV_ROLE_OBJ` or `DRV_ROLE_EXE` — instead of a backend name; and `drv_backend_for`
+**deferral**. `drv_run` keeps the two values as strings (`drv_os()`, `drv_arch()`, two fields of
+the driver's state record); `drv_entry` passes a *role* — `DRV_ROLE_OBJ` or `DRV_ROLE_EXE` —
+instead of a backend name; and `drv_backend_for`
 turns the role into a name inside `drv_parse`, immediately after `user_init()` and before
 `parse_unit()`. The two diagnostics and the `requires [linker]: there is no direct executable`
 check moved with it and are unchanged, and `drv_teach`'s independent lookup of the **host** pair
