@@ -1107,16 +1107,27 @@ leg has to name its own tree: the matrix carries an `objs` column (`build/window
 `build/windows-objs-x86_64` for x86_64) and `MC_WINTESTS` is that column. A name that does not
 exist would not fail -- `scripts/bootstrap-windows.sh` re-cross-compiles the suite with the seed
 it just linked when `$MC_WINTESTS/manifest` is missing -- so the column is spelled out per entry
-rather than derived from the architecture, whose two spellings do not agree. A release therefore carries **five** tarballs and
-five checksums:
+rather than derived from the architecture, whose two spellings do not agree. A release therefore carries **ten** tarballs and
+ten checksums since M44 step 4 -- five full and five slim:
 
 ```
-mc-<VER>-macos-arm64.tar.gz
-mc-<VER>-linux-arm64.tar.gz
-mc-<VER>-linux-x86_64.tar.gz
-mc-<VER>-windows-arm64.tar.gz
-mc-<VER>-windows-x86_64.tar.gz
+mc-<VER>-macos-arm64.tar.gz          mc-<VER>-macos-arm64-slim.tar.gz
+mc-<VER>-linux-arm64.tar.gz          mc-<VER>-linux-arm64-slim.tar.gz
+mc-<VER>-linux-x86_64.tar.gz         mc-<VER>-linux-x86_64-slim.tar.gz
+mc-<VER>-windows-arm64.tar.gz        mc-<VER>-windows-arm64-slim.tar.gz
+mc-<VER>-windows-x86_64.tar.gz       mc-<VER>-windows-x86_64-slim.tar.gz
 ```
+
+The slim half is the same compiler without the bundle blob
+([reference/bundle.md](reference/bundle.md) § The slim flavour): the macOS job builds
+`dist/mc-slim` with `build/mc1 --exe src/mc_slim.mc` and cross-compiles four more objects
+(`make mc-linux-slim-obj`, `mc-linux-x86_64-slim-obj`, `mc-windows-slim-obj`,
+`mc-windows-x86_64-slim-obj`) into the same two artifacts the full objects travel in; each Linux
+and Windows leg links its slim object beside the full one and packages it with
+`scripts/release-assets.sh --slim`. The binary inside every archive is called `mc` (`mc.exe` on
+Windows), so a slim install is a drop-in; what differs is the one paragraph of `INSTALL.txt` that
+names `mc install`. The slim binaries are packaged and **not** bootstrapped: the fixed point is a
+property of the compiler, and a slim binary is the full one minus a data section.
 
 The Windows tarballs hold `mc.exe` rather than `mc` — a file that is not called `*.exe` cannot be
 launched — and `scripts/release-assets.sh` writes a Windows `INSTALL.txt` saying that the binary
