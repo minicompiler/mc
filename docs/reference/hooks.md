@@ -911,12 +911,35 @@ byte the one the untaught compiler writes**.
 | `syntax_infix(word, prec, &f)` | the *mark* is set, the effect is not | an operator is punctuation, and the identifier branch is the only one scoped — a taught operator's spelling cannot collide with a name |
 | `type_alias(name, base)` | yes | `word_add` |
 | `type_new(name, w, a, kind)` | yes | `word_add` — **except the core's own `i32`**, registered through the same road by `core_types_init()` and un-marked there: it is a core primitive, not something a module taught |
-| `#token`, `#infix`, `#prefix`, `#rule` | **no** | they reach `tok_add` directly, from a *directive in a source*. `while` and `for` come from `<prelude>` and the core itself uses them; a `#rule` word belongs to whoever included the rule, not to the module |
+| `#token`, `#infix`, `#prefix`, `#rule` | **no** | they reach `tok_add` directly, from a *directive in a source*. `while` and `for` come from `<prelude>` and the core itself uses them; a `#rule` word belongs to whoever included the rule, not to the module — see "a lexeme both roads created" below |
 | `intrinsic(name, …)` | **no** | it claims a call name, not a lexeme (§ 3) |
 | `syntax_lit`, `syntax_param`, `syntax_type`, `on_stmt`, `on_jump`, `on_source` | **no** | they claim no word: there is nothing to scope |
 
-The mark is per token entry, set by `word_add` alone — not an id threshold, because the two roads
-interleave: a `#rule` in a source adds tokens while a taught compiler is parsing.
+The mark is per token entry — not an id threshold, because the two roads interleave: a `#rule` in a
+source adds tokens while a taught compiler is parsing.
+
+**A lexeme both roads created.** `tok_add` is idempotent per lexeme, so the two roads are not
+exclusive: `syntax_stmt("while", &f)` marks the very token entry `<prelude>`'s
+`#rule stmt: while ( expr $c ) block $b` dispatches on. The entry carries a bit for each, and they
+say different things:
+
+* the **directive**'s bit wins in the lexer: such a lexeme is **never hidden**, in any source. It
+  belongs to whoever wrote the directive, and hiding it would make the rule unreachable in exactly
+  the sources the module does not claim — the core's own files included, which is what the hook
+  exists for.
+* the **module**'s bit still scopes its **handler**: in a claimed source the `syntax`/`syntax_stmt`/
+  `syntax_expr` handler runs; in an unclaimed one the dispatch falls through to the `#rule` (or the
+  core) road.
+
+So a module may teach `while` and still compile a file that `#include <prelude>`: the rule fires
+there and the handler fires in the module's own sources. `lib/user_claim_rule.mc` is that module,
+and `scripts/check-surface.sh` runs both halves of one program through it — 42 from the prelude's
+loop in the unclaimed `.mc` file, 6 from the module's own `while` in the claimed `.tk` one — with
+`--dump-tokens` of the unclaimed file byte for byte the default compiler's.
+
+Out of scope, deliberately: a word that is both a `#rule` literal and a taught **type**
+(`type_alias`/`type_new`). A type is resolved through `type_of_token`, which the dispatch rule
+above does not pass through, so such a word is a type in every source that lexes it as a word.
 
 **The replay rule is `on_source`'s, in the other direction.** `lex_init` pushes the entry *before*
 `user_init()` runs, so a registration made there arrives after the one source that matters most has

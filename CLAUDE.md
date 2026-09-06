@@ -3831,6 +3831,88 @@ agents (`.claude/agents/`): `stage0-dev` (C23), `mc-dev` (`.mc` code), `reviewer
   `mc2-windows-x86_64.sha256`
   `bebd088c036e53c8a00932693f83fffbfbac0c24899b63ea4dc700db60ae1a6a` (1339351 B), both also
   written byte for byte by `build/mc2`.
+- `source_claim`, the second half (coop patch for teko/ngen, owner-approved): **a lexeme that is
+  also a `#rule`/`#token`/`#infix` literal stays a word in unclaimed sources.** `stage0/` untouched
+  (2848/3000, `git diff origin/main -- stage0/` empty). The defect the consumer hit after PR #37,
+  reproduced in a pristine worktree at `origin/main` before anything was written: `tok_add` is
+  idempotent per lexeme, so `syntax_stmt("while", &h)` marks the very token entry `<prelude>`'s
+  `#rule stmt: while ( expr $c ) block $b` dispatches on, and `lex_word_id` then hid `while` in
+  every source the module did not claim -- the core's own files included. A program that
+  `#include <prelude>` and writes `while (i < 7) { ... }` came out of the taught compiler as
+  **`plain.mc:6: expected ; after expression`, exit 1** (the word lexed as an identifier, the
+  condition as a call, and then `{` arrived where the `;` was expected), while the default compiler
+  ran the same file to exit 42. PR #37's brief only covered distinct lexemes.
+  * **A second bit in the same field, not a second field.** `TE_TAUGHT` (offset 32 of a TokEnt,
+    `TE_SIZE` unchanged at 40) now carries `TE_TAUGHT_BIT 1` -- set by `word_add`, what
+    `source_claim` scopes -- and `TE_RULE_BIT 2`, set on the DIRECTIVE road by one helper in
+    `src/parse.mc`, `tok_add_dir`, at the three `tok_add` call sites that are a directive
+    (`do_rule`'s pattern literal, `#token`, `#infix`/`#prefix`). The two roads are not exclusive,
+    so neither bit speaks for the other: `tok_set_taught` preserves bit 2 (`core_types_init`'s
+    un-marking of `i32` still works), and `tok_set_rule` marks only a **word** entry -- a
+    punctuation lexeme is never resolved through `lex_word_id`, so the bit would have nothing to
+    say about `{` or `+=` and could only surprise a `syntax_stmt("{")`.
+  * **The lexer stops hiding it, the parser keeps scoping it.** `lex_word_id` returns the id for a
+    `TE_RULE` lexeme in any source (the rule has to fire where the module does not reach), and one
+    helper, `taught_here(tok)` = `lex_claimed() || !tok_is_rule(tok)`, guards the three
+    module-handler dispatches -- `parse_top` (`syntax_find`), `parse_stmt_core`
+    (`syntax_stmt_find`) and `parse_primary` (`syntax_expr_find`). The `*_find` functions
+    themselves are untouched, so `word_is_taught` and `parse_block`'s `syntax_stmt(K_LBRACE)` case
+    are exactly what they were. `syntax_infix` needs nothing: an operator is punctuation and never
+    goes through `lex_word_id`, and M21's "a `#infix` on the token drops the handler" stays.
+    Out of scope, written down: a word that is both a `#rule` literal and a taught TYPE
+    (`type_alias`/`type_new`) -- `type_of_token` is not consulted through `taught_here`.
+  * **Cost: 88 added lines in `src/`, 35 of them neither comment nor blank**
+    (`git diff --numstat src/`, ignoring the generated `src/bundle_data.mc`: `src/lex.mc` +56/-12,
+    `src/parse.mc` +32/-6). **Zero new globals** -- `check-limits` still reports
+    `globals 454/512, 88%`, the same row as before the patch.
+  Proof (`scripts/check-surface.sh`, three new `ok` lines) over `lib/claim_rule.mc` +
+  `lib/user_claim_rule.mc` + `lib/mc_claim_rule.mc`: a module that registers
+  `syntax_stmt("while", &cr_while)` -- a `while` that is **not a loop**, it runs its body at most
+  once -- and `source_claim` for `.tk` alone. One program in two files: the unclaimed `.mc` file
+  `#include <prelude>` and exits **42** under the taught compiler AND under `build/mc1` (the
+  prelude's loop), the claimed `.tk` file with the same six lines exits **6** (the module's `if`),
+  and `--dump-tokens` of the unclaimed file is byte for byte the default compiler's -- the bit
+  changes a dispatch, never a token. The three new `lib/` fixtures are deliberately NOT in
+  `tools/bundle.list` (the M41 precedent for check-script-only modules, which the PR #37 claim
+  fixtures already follow).
+  -- `make bundle` re-run BEFORE bootstrapping (`src/lex.mc` and `src/parse.mc` are bundled):
+  93 files, raw 1192948 -> LZ 557673, blob 558835 B. `make check` green end to end (**RC 0, zero
+  FAIL**): `budget` 2848/3000, `test` 32/32, `check-lex` 161/161 (3 skipped), `check-ast` 162/162,
+  `check-asm` 162/162, `check-obj` **32/32 identical to the frozen seed**, `check-bundle`,
+  `bootstrap` at a fixed point (`mc2.o == mc3.o`, 1279840 bytes; the `--dump-asm` diff between
+  `mc1` and `mc2` is **empty**), `check-surface` 32/32 + the three new source_claim cases + inert,
+  `test-exe` 32/32, `check-mc` 15/15, `check-standalone`, `check-parts`, `check-toml` 10/10,
+  `check-build` 53/53, `check-pkg` 94/94, `check-stubs` 9/9, `check-sysroots`, `check-limits`
+  **17/17 under 90%** (globals 454/512 = 88%, unchanged), `check-minimal`, `test-linux` 41/41 and
+  `test-linux-x86_64` 39/39, the four `--exe` cells 44/44 + 44/44 + 42/42 + 42/42,
+  `test-windows` 42/42 and `test-windows-x86_64` 40/40 objects cross-compiled, `check-examples`,
+  `check-lang` 18, `check-conc` 21, `check-desktop`, `check-float`, `check-wide`, `check-kernel`
+  (QEMU 11.0.1), `check-avr`, `test-sandbox` 60 ok / 0 failed / 1 skipped, `check-docs`
+  (199 symbols, 36 flags, 27 TOML keys, 10 directives, 51 samples, 382 links), `site` 91 pages +
+  `check-site` 0 link problems + `check-site-linux` 11/11.
+  `scripts/check-inert.sh build/mc1.pre build/mc1` (pre = a `mc1` built from `origin/main`
+  9c74738): **33 objects identical** (`tests/*.mc` and `src/mc.mc`) plus byte-identical artefacts
+  for `examples/api`, `lang`, `conc`, `desktop` and `kernel` -- nothing in the corpus registers a
+  claim, so `taught_here` answers 1 everywhere and the bit is never read.
+  `make check-linux-host` **RC 0 over all four cells** (aarch64 musl 41/41 and gnu 42/42, x86_64
+  musl 39/39 and gnu 40/40), each after its own `mc2l.o == mc3l.o` and with the cross proof
+  (`mc2l --backend=macho src/mc.mc` byte for byte the macOS `build/mc2.o`) green.
+  The five goldens rewritten **once**, each only after its own criterion: `mc2.sha256`
+  `322c1809...c29581` -> `4d9ca0735ae746d351e0368d9fb4dd9af572264b8a37a4dc594833c16463ad45`
+  (after the empty `--dump-asm` diff and `cmp build/mc2.o build/mc3.o`); the Linux pair deleted and
+  re-recorded by `make check-linux-host` -- `mc2-linux-arm64.sha256`
+  `276bd9a13171adee5d1b8a4090189413b96dba6b81619f65a613559eb455abba`,
+  `mc2-linux-x86_64.sha256`
+  `5f2b89327e5d0b746ff6867b62e39cdbcf80ae24e461628ccb67720d709b292e`, each recorded in its musl
+  cell and re-verified by the gnu cell of the same architecture; the Windows pair cross-computed
+  per `tests/golden/README.md` -- `mc2-windows-arm64.sha256`
+  `b73a72b1d109366d43e9e6ab1709bf4fd44e2cb4fdc30d3c36773c23fafcfe86` (1306476 B),
+  `mc2-windows-x86_64.sha256`
+  `18708fe4c2287d901796da8637bee5a297667a68f93b2349ccb95b7182aca498` (1342256 B), both also
+  written byte for byte by `build/mc2`.
+  Docs: `docs/reference/hooks.md` § `source_claim` (the table row, and a new "a lexeme both roads
+  created" paragraph: the directive's bit wins in the lexer, the module's bit still scopes the
+  handler), `docs/surface.md` § "Where a module's words apply".
 - Next: the **site + registry server, M47 S4-S6**, in `minicompiler/mc-registry`; then **M44 steps 4-5**
   (slim / install / upgrade), then **M42 step 2** (PE `--exe`, CI-gated on the Windows runners).
   **M46** only on the owner's request; **M43 Layer 2** after 1.0.0. M13 and M18 stay in the backlog

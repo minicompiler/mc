@@ -1474,6 +1474,88 @@ if [ "$clbuilt" = 1 ]; then
     fi
 fi
 
+# ---- source_claim: a lexeme a DIRECTIVE introduced is never hidden ----
+# The second half of the same collision, and the one distinct lexemes cannot
+# show: tok_add is idempotent, so syntax_stmt("while") marks the very token
+# entry <prelude>'s `#rule stmt: while ( expr $c ) block $b` dispatches on.
+# Before the TE_RULE bit that mark hid `while` in every unclaimed source and the
+# rule could not fire there -- measured, with the pre-fix compiler:
+#     .../plain.mc:6: expected ; after expression
+# (`while (i < 7)` lexed as an identifier and a call, and then `{` arrived where
+# the `;` was expected). The module's `while` runs its body at most once, so
+# which of the two fired is a number: 42 for the prelude's loop, 6 for the
+# module's `if`.
+cat > "$tmp/claim/plain.mc" <<'CLPLAIN'
+#include <prelude>
+
+i64 main() {
+    i64 i = 0;
+    i64 s = 0;
+    while (i < 7) { s = s + 6; i = i + 1; }
+    return s;
+}
+CLPLAIN
+cat > "$tmp/claim/dialect.tk" <<'CLDIA'
+i64 main() {
+    i64 i = 0;
+    i64 s = 0;
+    while (i < 7) { s = s + 6; i = i + 1; }
+    return s;
+}
+CLDIA
+
+clrule="build/mc-claim-rule"
+rm -f "$clrule"
+if ! msg=$("$mc1" --exe lib/mc_claim_rule.mc -o "$clrule" 2>&1); then
+    echo "FAIL: compiling lib/mc_claim_rule.mc: $msg"
+    fails=$((fails + 1))
+else
+    # (a) the unclaimed source: the prelude's rule fires, under BOTH compilers
+    rm -f "$tmp/claim/plain0" "$tmp/claim/plain1"
+    "$mc1"    --exe "$tmp/claim/plain.mc" -o "$tmp/claim/plain0" 2>/dev/null
+    "$tmp/claim/plain0" 2>/dev/null; rc0=$?
+    if ! msg=$("$clrule" --exe "$tmp/claim/plain.mc" -o "$tmp/claim/plain1" 2>&1); then
+        echo "FAIL source_claim #rule literal: the taught compiler refused an unclaimed source"
+        echo "  got: $msg"
+        fails=$((fails + 1))
+    else
+        "$tmp/claim/plain1"; rc1=$?
+        if [ "$rc0" = 42 ] && [ "$rc1" = 42 ]; then
+            echo "ok source_claim: <prelude>'s while still rules an unclaimed source (exit 42, both compilers)"
+        else
+            echo "FAIL source_claim #rule literal in an unclaimed source"
+            echo "  default=$rc0 taught=$rc1 (expected 42 and 42)"
+            fails=$((fails + 1))
+        fi
+    fi
+
+    # ...and the lexer says the same thing about that file under both compilers:
+    # the bit changes a dispatch, never a token
+    "$mc1"    --dump-tokens "$tmp/claim/plain.mc" > "$tmp/claim/tk0" 2>&1
+    "$clrule" --dump-tokens "$tmp/claim/plain.mc" > "$tmp/claim/tk1" 2>&1
+    if cmp -s "$tmp/claim/tk0" "$tmp/claim/tk1"; then
+        echo "ok source_claim: --dump-tokens of the unclaimed source is byte for byte the default's"
+    else
+        echo "FAIL source_claim: --dump-tokens moved for the unclaimed source"
+        fails=$((fails + 1))
+    fi
+
+    # (b) the claimed source: the MODULE's while, which is not a loop
+    rm -f "$tmp/claim/dia"
+    if ! msg=$("$clrule" --exe "$tmp/claim/dialect.tk" -o "$tmp/claim/dia" 2>&1); then
+        echo "FAIL source_claim #rule literal (dialect: $msg)"
+        fails=$((fails + 1))
+    else
+        "$tmp/claim/dia"; rc=$?
+        if [ "$rc" = 6 ]; then
+            echo "ok source_claim: the module's while owns the claimed .tk source (exit 6)"
+        else
+            echo "FAIL source_claim: the module's while in a claimed source (exit $rc, expected 6)"
+            fails=$((fails + 1))
+        fi
+    fi
+fi
+
 # And the inertness half: a module whose ONLY registration is source_claim and
 # whose handler claims every source has to produce exactly the tree and exactly
 # the object the compiler without the hook produces. 1 is not "no handler
