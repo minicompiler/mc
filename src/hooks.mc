@@ -781,9 +781,10 @@ i64 word_is_taught(i64 id) {
 // src/machine_arm64.mc selects instructions. The seam between them is a table of
 // `&fn`, one per task (docs/reference/machine.md), registered here. Same shape
 // as `backend()` -- a linear table in registration order, the last registration
-// of a name wins -- with one difference: registering a machine also MAKES IT THE
-// ONE IN EFFECT, because a machine is not chosen by a command-line flag but by
-// the target, and the compiler always has exactly one.
+// of a name wins -- with one difference: the compiler always has exactly one
+// machine IN EFFECT, because a machine is not chosen by a command-line flag but
+// by the target. A registration takes that place when the name is new or when
+// it replaces the name that holds it, and not otherwise; see `machine()` below.
 //
 // The ceiling is fixed on purpose. A machine does not scale with the program
 // being compiled (M23's rule for the tables that do): the compiler is built with
@@ -831,16 +832,53 @@ uptr mach_tabs_at(i64 i)  { return ld64(mach_tabs + i * 8); }
 // taught machine on `arm64` no longer walks the table towards `too many
 // machines`, which is the failure a user would have discovered by stacking two
 // modules that each teach a type family.
+//
+// What a registration does to the CURRENT machine -- the one gen_walk.mc drives
+// -- is three cases:
+//
+//   * there is none yet (mach_tab == 0): this one becomes it, which is how the
+//     first machine a compiler registers gets to be the answer for a compiler
+//     that names no other (lib/user_core_min.mc);
+//   * a NEW name becomes current, which is how a compiler taught a foreign
+//     target reaches its own machine on the raw single-file road: the host's
+//     name is not registered there at all, or is not the one meant, and the
+//     dumps have no backend to call machine_use for them (see below);
+//   * an EXISTING name becomes current only when it REPLACES the one that is
+//     current. That is the fix: re-registering a name is how a module derives
+//     a machine (lib/user_badmach.mc, <float>, lib/i128.mc), so the derived
+//     table has to take the place of the table it derives from -- but ONLY
+//     that place. A registration of some other registered name leaves the
+//     current machine alone.
+//
+// It used to take it in every case, which meant a module deriving all three
+// bundled machines in a row -- what teaching a type family looks like: one
+// derived copy per name, `<float>` does exactly that -- left `x86_64-win` in
+// effect on a macOS/aarch64 host, where src/cli.mc had already selected the
+// host's machine BEFORE user_init(). `mc build` never saw it (every backend
+// calls machine_use first, M37); the raw single-file road did, and
+// `mc x.mc --dump-asm` came out as Win64 x86-64.
+//
+// The narrower rule -- a new name keeping the old behaviour -- is not a
+// preference, it is a measurement. With a new name refused the current machine
+// too, `examples/kernel`'s own gate fails: examples/kernel/test.sh asks the
+// taught compiler for `--dump-syms` with no `--machine=`, and the kernel's
+// __text came out 2400 bytes / 83 relocations (the host's arm64) where the
+// riscv64 machine writes 3184 / 58, so 35 pc-relative displacements the sweep
+// recomputes from that placement disagreed. A compiler taught a target the host
+// does not have has exactly one machine that can be meant, and taking it away
+// would have made every such compiler name it on every dump.
 void machine(uptr name, uptr tab) {
     i64 i = machine_find(name);
+    i64 cur = 0;                       // 1 = this registration becomes the current machine
     if (i < 0) {
         if (nmachines >= MAXMACHINES) die2("too many machines", name);
         i = nmachines;
         nmachines = nmachines + 1;
         st64(mach_names + i * 8, name);
-    }
+        cur = 1;                       // a name nothing else answers to
+    } else if (mach_tabs_at(i) == mach_tab) cur = 1;   // it replaces the current one
     st64(mach_tabs + i * 8, tab);
-    mach_tab = tab;
+    if (mach_tab == 0 || cur) mach_tab = tab;
 }
 
 i64 machine_find(uptr name) {

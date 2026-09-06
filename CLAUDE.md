@@ -3913,6 +3913,89 @@ agents (`.claude/agents/`): `stage0-dev` (C23), `mc-dev` (`.mc` code), `reviewer
   Docs: `docs/reference/hooks.md` § `source_claim` (the table row, and a new "a lexeme both roads
   created" paragraph: the directive's bit wins in the lexer, the module's bit still scopes the
   handler), `docs/surface.md` § "Where a module's words apply".
+- `machine()`: a registration no longer steals the current machine (coop patch for teko/ngen,
+  owner-approved). `stage0/` untouched (2848/3000, `git diff origin/main -- stage0/` empty).
+  The defect, reported by the consumer with a `--dump-machine` transcript and **reproduced in a
+  pristine worktree of `origin/main` before anything was written**: `machine()` ended with an
+  unconditional `mach_tab = tab;`, so EVERY registration became the machine the walker drives --
+  a re-registration of an existing name included (M24's D5 reuses the name's slot, and moved the
+  current with it). `src/cli.mc` selects the HOST's machine (`machine_use_if(host_machine())`)
+  BEFORE `user_init()`, so a module that derives all three bundled machines under their own names
+  -- which is what teaching a type family looks like, one derived copy per name, and exactly what
+  `<float>` does -- left the LAST one in effect. Measured on this macOS/aarch64 host with a
+  fixture that changes not one slot: `machine x86_64-win (current)` where the stock compiler says
+  `machine arm64 (current)`, and `mc x.mc --dump-asm` printing **Win64 x86-64** (`push rbp` /
+  `mov [rbp-8], rcx`) for a program the same compiler builds correctly with `--exe`. `mc build`
+  never saw it, because every backend calls `machine_use` as its first statement (M37); the raw
+  single-file road -- no `[target]`, no backend for a dump -- did.
+  * **The rule, and it is the NARROWER of the two the brief offered, by measurement.** A
+    registration becomes current when there is no machine yet, when the name is **new**, or when
+    it **replaces the name that is current**; a registration of some other REGISTERED name does
+    not. The strict form ("a new name does not become current either") was implemented first and
+    **`make check-kernel` failed with it**: `examples/kernel/test.sh:423` asks the taught compiler
+    for `--dump-syms` with no `--machine=`, and the kernel's `__TEXT,__text` came out **2400 bytes
+    / 83 relocations** (the host's arm64) where the riscv64 machine writes **3184 / 58**, so the
+    sweep's independently recomputed pc-relative displacements disagreed -- `main.mc: 0 byte
+    mismatches, 35 wrong displacements`, `tests/sweep.mc: 25`, `800 generated functions: 39`,
+    3 FAILED, against `examples/kernel: OK` on `origin/main`. A compiler taught a target the host
+    does not have has exactly one machine that can be meant; taking it away would make every such
+    compiler name it on every dump. The measurement is written into the doc comment above
+    `machine()`, not just here.
+  * **Cost: 51 added lines in `src/`, 4 of them neither comment nor blank**
+    (`git diff --numstat src/`, ignoring the generated `src/bundle_data.mc`: `src/hooks.mc`
+    +43/-5, `src/cli.mc` +8/-6 -- the second file is comment only). **Zero new globals** (`cur` is
+    a local): `check-limits` still reports `globals 454/512, 88%`, the same row as before.
+  Proof (`scripts/check-surface.sh`, four new `ok` lines) over `lib/user_remach.mc` +
+  `lib/mc_remach.mc`: a module whose `user_init` copies and re-registers all three bundled
+  machines under their own names, in the order `arm64`, `x86_64`, `x86_64-win`, changing NO slot.
+  (1) `--dump-machine` shows `machine arm64 (current)`; (2) `--dump-asm` of a small program is
+  **byte for byte** `build/mc1`'s (pre-fix it was x86-64 text); (3) the derived compiler still
+  builds and runs a program with `--exe` (exit 42); (4) `--machine=x86_64` still selects it
+  explicitly. `lib/user_badmach.mc`'s M24 case is untouched and green -- it replaces one slot of
+  `arm64`, which IS current, so it stays current and `v(50) + v(8)` is still 42. The two new
+  `lib/` fixtures are deliberately NOT in `tools/bundle.list` (the M41 precedent for
+  check-script-only modules).
+  -- `make bundle` re-run BEFORE bootstrapping (`src/hooks.mc` and `src/cli.mc` are bundled):
+  93 files, raw 1195703 -> LZ 558997, blob 560159 B. `make check` green end to end (**RC 0, zero
+  FAIL**): `budget` 2848/3000, `test` 32/32, `check-lex` 163/163 (3 skipped), `check-ast` 164/164
+  (2 skipped), `check-asm` 164/164, `check-obj` **32/32 identical to the frozen seed**,
+  `check-bundle` (lz round trip 117 cases), `bootstrap` at a fixed point (`mc2.o == mc3.o`,
+  1281320 bytes; the `--dump-asm` diff between `mc1` and `mc2` is **empty**), `check-surface`
+  32/32 + the four new `machine()` cases + inert, `test-exe` 32/32, `check-mc` 15/15,
+  `check-standalone`, `check-parts`, `check-toml` 10/10, `check-build` 53/53, `check-pkg` 94/94,
+  `check-stubs` 9/9, `check-sysroots` (13 rows), `check-limits` **17/17 under 90%**
+  (globals 454/512 = 88%), `check-minimal`, `test-linux` 41/41 and `test-linux-x86_64` 39/39,
+  the four `--exe` cells 44/44 + 44/44 + 42/42 + 42/42, `test-windows` 42/42 and
+  `test-windows-x86_64` 40/40 objects cross-compiled (42 and 40 linked with `lld-link`),
+  `check-examples`, `check-lang` 18, `check-conc` 21, `check-desktop`, `check-float` (13/13 on
+  each of the three run legs, 11/11 + 11/11 windows objects, four llvm-mc sweeps), `check-wide`,
+  **`check-kernel` OK (0 skipped)** -- the gate the strict rule broke -- `check-avr` OK,
+  `test-sandbox` 60 ok / 0 failed / 1 skipped, `check-docs` (199 symbols, 36 flags, 27 TOML keys,
+  10 directives, 51 samples, 383 links), `site` 91 pages + `check-site` 0 link problems +
+  `check-site-linux` 11/11.
+  `scripts/check-inert.sh build/mc1.pre build/mc1` (pre = a `mc1` built from `origin/main`
+  ff74346): **33 objects identical** (`tests/*.mc` and `src/mc.mc`) plus byte-identical artefacts
+  for `examples/api`, `lang`, `conc`, `desktop` and `kernel` -- nothing in the corpus registers a
+  second machine under a name another machine already has.
+  `make check-linux-host` **RC 0 over all four cells** (aarch64 musl 41/41 and gnu 42/42, x86_64
+  musl 39/39 and gnu 40/40), each after its own `mc2l.o == mc3l.o` and with the cross proof
+  (`mc2l --backend=macho src/mc.mc` byte for byte the macOS `build/mc2.o`) green.
+  The five goldens rewritten **once**, each only after its own criterion: `mc2.sha256`
+  `4d9ca073...63ad45` -> `2c6efc3229f3395a68018afcc55bac0997770a8501106d9a39cb75524eb95573`
+  (after the empty `--dump-asm` diff and `cmp build/mc2.o build/mc3.o`); the Linux pair deleted
+  and re-recorded by `make check-linux-host` -- `mc2-linux-arm64.sha256`
+  `60082c7e3753c8e82651616d982346214a3d4037de1b9b7933444511b6cf62e9`,
+  `mc2-linux-x86_64.sha256`
+  `b69836286c23e38fa8644059f78ddb8673e8038ecf572d7911725df2ee6f8490`, each recorded in its musl
+  cell and re-verified by the gnu cell of the same architecture; the Windows pair cross-computed
+  per `tests/golden/README.md` -- `mc2-windows-arm64.sha256`
+  `9657897e62c7e61e2e3fa2881f19e2b7e39df6f9302bfb17eecfa15d55f4cd98` (1307956 B),
+  `mc2-windows-x86_64.sha256`
+  `bcdfff8a8a44d51c9c08ec101a2c75fcd81d3f7c284b9e6538cc3722419d54cc` (1343760 B), both also
+  written byte for byte by `build/mc2`.
+  Docs: `docs/reference/hooks.md` § `machine`/`machine_use` (the four-row table of what a
+  registration does to the machine in effect, and the `machine_use_if(host_machine())` correction
+  two paragraphs down), `docs/reference/machine.md` § 1 (which stated the old rule twice).
 - Next: the **site + registry server, M47 S4-S6**, in `minicompiler/mc-registry`; then **M44 steps 4-5**
   (slim / install / upgrade), then **M42 step 2** (PE `--exe`, CI-gated on the Windows runners).
   **M46** only on the owner's request; **M43 Layer 2** after 1.0.0. M13 and M18 stay in the backlog
