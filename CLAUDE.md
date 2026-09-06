@@ -4429,3 +4429,10 @@ agents (`.claude/agents/`): `stage0-dev` (C23), `mc-dev` (`.mc` code), `reviewer
   `docs/plan.md`. The docs landing page and the site's home page both link to `comparison.md` with
   the three headline numbers; `site/site.toml` gained `[site] home` (docs/home-extra.md) and
   `comparison` in the Internals section's reading order.
+  Second HTTP set merged (2026-09-06, same host, back to back with the first): eight more servers
+  (Node single-process and `cluster`, Rust `axum`, Python stdlib and uvicorn, Ruby WEBrick and
+  Puma, PHP's built-in server) under the same contract and harness — sources in `bench/http2/`,
+  full method and numbers in `bench/http2/RESULTS.md`/`results.json`, merged into the three HTTP
+  tables in `docs/comparison.md`. `py-stdlib`'s `ab -k` run failed on all 3 attempts (0 requests
+  in warm-up); its `oha` keep-alive and its no-keep-alive `ab` runs both succeeded, so the failure
+  is specific to that combination, not to keep-alive itself.

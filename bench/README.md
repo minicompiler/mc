@@ -156,11 +156,13 @@ The sources of the second HTTP round -- Node.js `http.createServer` single-proce
 Rust `axum` on tokio, Python stdlib `http.server` and ASGI/uvicorn, Ruby `WEBrick` and
 `rackup`/Puma, PHP's built-in server -- are in [`http2/`](http2/README.md), under the same
 contract and the same harness shape as round 1 (`http2/bench.py` is `http/bench.py` with the new
-server table). Their write-up, `http2/RESULTS.md`, does not exist yet: the round had not finished
-running when `docs/comparison.md` was written, so no round-2 row is in its tables. The soak below
-runs seven of them (`node-single`, `node-cluster`, `rust-axum`, `py-uvicorn`, `rb-puma`,
-`php-builtin`, and on request `py-stdlib`/`rb-webrick`) next to round 1's servers, on the same
-runners, which is where their first published numbers will come from.
+server table). Its write-up, `http2/RESULTS.md`, is done and merged into
+[`../docs/comparison.md`](../docs/comparison.md) alongside round 1's numbers; see
+[`http2/RESULTS.md`](http2/RESULTS.md) for every command, the environment, the eight servers'
+build/install steps and the one failure (`py-stdlib` under `ab -k`). The soak below runs seven of
+them (`node-single`, `node-cluster`, `rust-axum`, `py-uvicorn`, `rb-puma`, `php-builtin`, and on
+request `py-stdlib`/`rb-webrick`) next to round 1's servers, on the same runners, which is where
+their first soak numbers will come from.
 
 ## C. The soak (`soak/`)
 
