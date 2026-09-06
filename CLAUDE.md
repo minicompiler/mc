@@ -1729,7 +1729,7 @@ agents (`.claude/agents/`): `stage0-dev` (C23), `mc-dev` (`.mc` code), `reviewer
   instead of three. `src/pkg.mc` (1387) in the new part `<mc/core_pkg>` (`src/core_pkg.mc`):
   the index reader (`<registry>/index/<name>.toml`, `--registry URL|DIR`, `[registry].url`,
   default `https://minicompiler.dev/registry` -- **the owner decided the same day that a package
-  SERVER at minicompiler.dev, in the private `schivei/mc-registry`, PRODUCES this exact layout
+  SERVER at minicompiler.dev, in the private `minicompiler/mc-registry`, PRODUCES this exact layout
   from public git URLs validated in the sandbox; the compiler gains no client code**), MVS with
   the two-majors refusal and yanked rows skipped, the lock WRITER (sorted, `lib`/`deps` from the
   archive's own `mc.toml`, `sha256` the tree hash), the archive fetch in M25's order (download,
@@ -3216,7 +3216,7 @@ agents (`.claude/agents/`): `stage0-dev` (C23), `mc-dev` (`.mc` code), `reviewer
   `8e5e127dd96e0d125fd8757b662e6bca61b661d415cdd7349afc9791be14e544`, Linux `6002790c…344380` /
   `1ca2ea58…b15516`, Windows `478e2f28…a50520` / `6d49bfc6…3e70f05`.
 - Coop/ops patch (0.15.1, six items; the mc site is served on Linux by a server written in mc,
-  `schivei/mc-registry`, and that is what found the first four).
+  `minicompiler/mc-registry`, and that is what found the first four).
   1. **mcsite runs on Linux.** `site/gen/check.mc` declared `extern uptr _NSGetEnviron()`, which
      musl does not have, so an mcsite linked against musl failed to LOAD (`Error relocating
      build/mcsite: _NSGetEnviron`); the environment is now `main`'s third parameter, kept in
@@ -3323,7 +3323,7 @@ agents (`.claude/agents/`): `stage0-dev` (C23), `mc-dev` (`.mc` code), `reviewer
   `mc2-windows-x86_64.sha256`
   `67a23742efc58941dc9bfa4b3b1203d70b7183603e7ac18601e5ec210a4a4845` (1322720 B), both also
   produced byte for byte by `build/mc2`.
-- Next: the **site + registry server, M47 S4-S6**, in `schivei/mc-registry`; then **M44 steps 4-5**
+- Next: the **site + registry server, M47 S4-S6**, in `minicompiler/mc-registry`; then **M44 steps 4-5**
   (slim / install / upgrade), then **M42 step 2** (PE `--exe`, CI-gated on the Windows runners).
   **M46** only on the owner's request; **M43 Layer 2** after 1.0.0. M13 and M18 stay in the backlog
   (`docs/specs/M13.md`: sizing a program's memory at compile time -- the fixed 4 MiB arena in

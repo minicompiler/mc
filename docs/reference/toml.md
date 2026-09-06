@@ -50,7 +50,7 @@ geo = "1.2.0"              # a MINIMUM version; the lock pins the exact one
 geo = "../geo"
 
 [registry]                 # optional: where `mc pkg` looks a package up
-url = "https://raw.githubusercontent.com/schivei/mc-registry/main"
+url = "https://raw.githubusercontent.com/minicompiler/mc-registry/main"
 
 [limits]
 tolerance = 0.25

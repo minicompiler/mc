@@ -17,8 +17,8 @@
 #   2. build/mc-linux-<target> cross-built on macOS (docs/guide/90-linux-host.md)
 #   3. a release asset, downloaded and checksum-verified by this script:
 #
-#        https://github.com/schivei/mc/releases/download/vVER/mc-VER-linux-ARCH.tar.gz
-#        https://github.com/schivei/mc/releases/download/vVER/mc-VER-linux-ARCH.tar.gz.sha256
+#        https://github.com/minicompiler/mc/releases/download/vVER/mc-VER-linux-ARCH.tar.gz
+#        https://github.com/minicompiler/mc/releases/download/vVER/mc-VER-linux-ARCH.tar.gz.sha256
 #
 #      with ARCH = arm64 | x86_64 and VER the version without the `v`. `gh
 #      release download` is used when the GitHub CLI is on PATH (it follows the
@@ -54,7 +54,7 @@
 #
 # No "set -e": every step checks its own exit code and says what failed.
 
-repo="${MC_SEED_REPO:-schivei/mc}"
+repo="${MC_SEED_REPO:-minicompiler/mc}"
 use_exe=0
 libc="musl"
 seed=""

@@ -28,7 +28,7 @@ shell and the Makefile is GNU make.
 
 ```sh
 git config --global core.autocrlf false             # BEFORE cloning: see § 7
-git clone https://github.com/schivei/mc && cd mc
+git clone https://github.com/minicompiler/mc && cd mc
 choco install make llvm                             # GNU make; lld-link comes with LLVM
 scripts/bootstrap-windows.sh                        # fetches the seed, reaches the fixed point
 make check                                          # the Windows subset
@@ -39,8 +39,8 @@ cross-built compiler, § 5), then for `build/mc-windows-<target>.obj`, which it 
 is what the CI artifact holds — and otherwise downloads a release asset:
 
 ```
-https://github.com/schivei/mc/releases/download/v<VER>/mc-<VER>-windows-<arch>.tar.gz
-https://github.com/schivei/mc/releases/download/v<VER>/mc-<VER>-windows-<arch>.tar.gz.sha256
+https://github.com/minicompiler/mc/releases/download/v<VER>/mc-<VER>-windows-<arch>.tar.gz
+https://github.com/minicompiler/mc/releases/download/v<VER>/mc-<VER>-windows-<arch>.tar.gz.sha256
 ```
 
 with `<arch>` = `arm64` or `x86_64`. With the GitHub CLI on `PATH` it uses `gh release download`;

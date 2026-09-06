@@ -29,7 +29,7 @@ title_separator = " - "
 year = "2026"
 
 # Prefix of "Edit this page"; the page's path in the repository is appended.
-edit_url = "https://github.com/schivei/mc/blob/main/"
+edit_url = "https://github.com/minicompiler/mc/blob/main/"
 
 # search.json plus the header form and its inline script.
 search = true
