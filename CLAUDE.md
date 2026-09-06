@@ -4559,6 +4559,60 @@ agents (`.claude/agents/`): `stage0-dev` (C23), `mc-dev` (`.mc` code), `reviewer
   `mc2-windows-x86_64.sha256`
   `f756b2efa7c1a1b5cd26fcb6b5738a6c310b7347e00d9d43f5c1e3a0422e9cd4` (1370243 B), both also
   written byte for byte by `build/mc2`.
+- M48 C2 rebased onto `origin/main` b0c76a3 (PR #43, the typed `callp` cast + `<float>`'s arm64
+  single-precision conversions; PR #45, M48 C1 -- `[[permission]]`, `[tools]` and the kind) and
+  the five goldens re-recorded once. **No source file conflicted**: the three milestones do not
+  overlap in code -- #43 is `src/gen_resolve.mc`, `src/gen_walk.mc` and the two float machines,
+  C1 is `src/deps.mc` and `src/pkg.mc`, C2 is `src/sandbox*.mc`, `src/seccomp.mc`,
+  `src/sysno*.mc` and the three `src/host_*.mc` -- so the only conflicts were `CLAUDE.md` § State
+  (every entry kept: main's callp entry, C1's and C1's rebase entry, then C2's) and the six
+  generated/aggregated files, discarded on both sides and regenerated: `src/bundle_data.mc`
+  (`make bundle` re-run FIRST -- 93 files, raw 1257081 -> LZ 583197, blob 584359 B) and the five
+  `tests/golden/*.sha256`. `docs/reference/cli.md` auto-merged with both sides' text (C1's
+  `mc pkg sync`/`list` columns and `--long`, C2's six `mc sandbox` primitive rows and the four
+  refusals), and so did `docs/reference/hooks.md` and `docs/reference/sandbox.md`.
+  `make check` green end to end on the merged tree (**RC 0, zero FAIL**): `budget` 2848/3000,
+  `test` 32/32, `check-lex` 163/163 (3 skipped), `check-ast`/`check-asm` 164/164 (2 skipped),
+  `check-obj` **32/32 identical to the frozen seed**, `check-bundle` (reproducible + fresh, lz
+  round trip 117 cases), `bootstrap` at a fixed point (`mc2.o == mc3.o`, 1342520 bytes; the
+  `--dump-asm` diff between `mc1` and `mc2` is **empty**), `check-surface` 32/32 + 146 ok lines +
+  inert, `test-exe` 32/32, `check-mc` 16/16, `check-standalone`, `check-parts` (the parts +
+  `<mc/main>` == `<mc/core>`, 1342520 B), `check-toml` 10/10, `check-build` 53/53,
+  **`check-pkg` 114/114**, `check-stubs` 9/9, `check-sysroots` (13 rows),
+  **`check-limits` 17/17 under 90% (globals 445/512, 86%)**, `check-minimal`, `test-linux` 42/42
+  and `test-linux-x86_64` 40/40, the four `--exe` cells 45/45 (aarch64 musl) + 45/45 (aarch64
+  gnu) + 43/43 (x86_64 musl) + 43/43 (x86_64 gnu), `test-windows` 43/43 objects and 43 linked,
+  `test-windows-x86_64` 41/41 and 41 linked, `check-examples`, `check-lang` 18, `check-conc` 21,
+  `check-desktop`, **`check-float` ok on all five legs** (macos/aarch64 16/16, linux/aarch64
+  16/16, linux/x86_64 16/16, windows/aarch64 14/14 objects, windows/x86_64 14/14, 2 skipped each)
+  with the sweep at **60 (mach-o arm64), 60 (elf aarch64), 249 (elf x86_64), 232 (coff x86_64),
+  0 mismatches**, `check-wide`, `check-kernel` (`kernel.bin` 3304 B), `check-avr` (`avr.elf`
+  15255 B), **`test-sandbox` 73 ok / 0 failed / 1 skipped** (delegated to Lima `mc-k7`,
+  glibc/aarch64 -- C2's six primitives among them), `check-docs` (200 symbols, 42 flags, 31 TOML
+  keys, 10 directives, 52 samples, 392 links), `site` 92 pages + `check-site` (0 link problems) +
+  `check-site-linux` 11/11.
+  `make check-linux-host` RC 0 over all four cells (aarch64 musl: suite 42/42, `check-obj` 31/31,
+  `check-mc` 12/12, `test-exe` 31/31 via `--exe --libc=musl`, `check-limits` 17/17; aarch64 gnu
+  43/43 native; x86_64 musl 40/40, `check-obj` 29/29, `test-exe` 29/29; x86_64 gnu 41/41 native),
+  each after its own `mc2l.o == mc3l.o` (1686248 B and 1582168 B) and with the cross proof
+  (`mc2l --backend=macho src/mc.mc` byte for byte the macOS `build/mc2.o`) green.
+  `scripts/check-inert.sh <mc1 from origin/main b0c76a3> build/mc1`: **33 objects identical**
+  (`tests/*.mc` and `src/mc.mc`) plus byte-identical artefacts for `examples/api`, `lang`,
+  `conc`, `desktop` and `kernel` -- C2 is the sandbox and the host layer's `host_which`, and
+  nothing the compiler emits could move.
+  The five goldens rewritten **once**, each only after its own criterion: `mc2.sha256`
+  `044387b8920c959944621aa4d727a23311c7078d7ebf45b0640d0326cc0fe03a` (after the empty
+  `--dump-asm` diff and `cmp build/mc2.o build/mc3.o`); the Linux pair deleted and re-recorded by
+  `make check-linux-host` -- `mc2-linux-arm64.sha256`
+  `dc09357a0769936f376aed2363585a5a483e75f6fa3377d6a4c213eb5a415453`,
+  `mc2-linux-x86_64.sha256`
+  `0ad83b3a81c783e2bcdc5a3e3303d34c83144c6d54f5a7b857cc43a1a7a8e101`, each recorded in its musl
+  cell and re-verified by the gnu cell of the same architecture; the Windows pair cross-computed
+  per `tests/golden/README.md` -- `mc2-windows-arm64.sha256`
+  `85ea59403cf3932a5da522336175a58c02634ca1fcc2f5b70134789f09d6b574` (1371026 B),
+  `mc2-windows-x86_64.sha256`
+  `4e77010e2463929ed2fb8d07568a6abfea4b929c9e3dfc1f373ae09ba49fe707` (1411502 B), both also
+  written byte for byte by `build/mc2`.
 - Next: the **site + registry server, M47 S4-S6**, in `minicompiler/mc-registry`; then **M44 steps 4-5**
   (slim / install / upgrade), then **M42 step 2** (PE `--exe`, CI-gated on the Windows runners).
   **M46** only on the owner's request; **M43 Layer 2** after 1.0.0. M13 and M18 stay in the backlog
