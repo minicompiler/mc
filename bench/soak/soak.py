@@ -357,7 +357,11 @@ def main():
     q = subprocess.Popen(oha_cmd, stdout=oha_out, stderr=oha_err)
     died = None
     while q.poll() is None:
-        time.sleep(a.every)
+        # sleep in half-second slices so load_end_s is within 0.5 s of oha's exit
+        slept = 0.0
+        while slept < a.every and q.poll() is None:
+            time.sleep(0.5)
+            slept += 0.5
         if q.poll() is not None:
             break        # oha is done: the next sample is the post-load one, taken below
         s = take()

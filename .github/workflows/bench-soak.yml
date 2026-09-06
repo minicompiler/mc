@@ -38,14 +38,6 @@ on:
         type: string
   schedule:
     - cron: "0 3 * * 0"   # Sunday 03:00 UTC, the full hour with the defaults
-  # TEMPORARY, for this branch's acceptance only: GitHub only registers a workflow
-  # once it exists on the default branch or has run, so `gh workflow run --ref`
-  # cannot reach a new file on a feature branch. A pull request touching this file
-  # runs the 3-minute dry run over four servers (see the env: block); the trigger
-  # is removed once that run is green.
-  pull_request:
-    paths:
-      - ".github/workflows/bench-soak.yml"
 
 permissions:
   contents: read
@@ -57,11 +49,11 @@ concurrency:
 
 env:
   # the schedule carries no inputs: every empty value is the dispatch default
-  MINUTES: ${{ inputs.minutes || (github.event_name == 'pull_request' && '3') || '60' }}
+  MINUTES: ${{ inputs.minutes || '60' }}
   RATE: ${{ inputs.rate || '3000' }}
   CONNECTIONS: ${{ inputs.connections || '16' }}
   KEEPALIVE: ${{ inputs.keepalive }}
-  SERVERS: ${{ inputs.servers || (github.event_name == 'pull_request' && 'mc-forkka,go-nethttp,rust-axum,zig-threads') || 'all' }}
+  SERVERS: ${{ inputs.servers || 'all' }}
   OHA_VERSION: v1.16.0
   RUST_VERSION: "1.96.0"
   ZIG_VERSION: "0.16.0"

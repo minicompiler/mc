@@ -92,6 +92,11 @@ def analyse(name, run):
     f, samples, oha = run["facts"], run["samples"], run["oha"]
     t0 = f.get("load_start_s", 0.0)
     t1 = f.get("load_end_s", samples[-1]["t_s"] if samples else 0.0)
+    # the load window ends one second before oha's deadline (load_start + minutes), never at the
+    # moment soak.py saw oha exit: at the deadline oha closes every connection, and a sample taken
+    # in those seconds sees a server whose workers are already gone
+    if f.get("minutes"):
+        t1 = min(t1, t0 + float(f["minutes"]) * 60) - 1.0
     load = [s for s in samples if t0 <= s["t_s"] <= t1]
     dur_min = (t1 - t0) / 60 if t1 > t0 else 0.0
     r = {"server": name, "duration_min": round(dur_min, 2), "samples": len(samples), "error": f.get("error")}
@@ -342,7 +347,9 @@ def write_md(runs, results, outdir, log_rss):
           "whole run; `slope` is the least-squares fit of RSS against time over the window named in the",
           "verdict lines below, with its R^2. `%CPU` is the tree's CPU time per wall-clock second, averaged",
           "over the load (100 = one core); `CPU ms / 1k req` is the tree's CPU time over the load divided by",
-          "the requests oha counted -- the number comparable across concurrency shapes.", "",
+          "the requests oha counted -- the number comparable across concurrency shapes. `end` is the last",
+          "sample taken more than a second before oha's deadline (oha closes its connections at the",
+          "deadline, and a sample taken in those seconds sees a server whose workers are already gone).", "",
           "| server | RSS 1 min | 10 min | 30 min | 60 min | end | peak | slope KiB/min (R^2) | %CPU mean | CPU ms / 1k req | threads max | procs max |",
           "|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for n in names:
