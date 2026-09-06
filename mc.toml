@@ -23,6 +23,13 @@ name = "mc"
 # includes, so the package tree serves it as the repository does.
 lib = "src/core.mc"
 
+# The translation units the registry's validator compiles inside its box, each
+# on its own (docs/specs/M47-S5.md § 3: the lib alone needs a host layer first,
+# and the bundle carries alternatives -- two host layers, two system layers --
+# that cannot share one unit). The box is linux/x86_64. The compiler ignores
+# this key; the registry reads it (spec M47 § 22).
+check = ["src/mc_linux_x86_64.mc"]
+
 # Generated from tools/bundle.list -- `cut -f2 tools/bundle.list | LC_ALL=C sort -u`
 # (byte order: under a UTF-8 locale macOS collates `_` before `.`, and the
 # manifest order is what the tree hash is over) -- plus two files that list
