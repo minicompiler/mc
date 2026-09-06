@@ -547,13 +547,27 @@ i64 sb_path_ok(uptr p) {
 //
 // `err` is kept in the signature for that table, and for the one thing that
 // could still want it: a future --keep-going mode would answer it here.
+//
+// Not answering is only half of it: an unanswered notification is released,
+// with ENOSYS, the moment its LISTENER goes away, and P closes the listener as
+// soon as the supervisor loop ends -- about a millisecond after the kill it
+// just sent, and long before that kill has travelled through the pid namespace.
+// Measured on the Lima oracle (§ Implementation notes -- the forkbomb flake):
+// 14 runs in 100 of `forkbomb.mc --allow=threads` had the sixty-fifth fork come
+// back to the program as `errno 38` and print `forked 64`, with the report line
+// correct. So the three steps below are ONE decision and their order is the
+// whole of it: kill the task whose call this is, kill the box under it, and
+// only then let the notification go -- which is what sb_wait_gone() waits for,
+// POLLHUP on the listener being exactly "no process under that filter is left".
 void sb_refuse(uptr text, i64 err) {
     if (!sb_done()) {
         sb_say(tm_cat("refused: ", text));
         set_sb_rc(SB_EXIT_REFUSED);
         set_sb_done(1);
     }
+    sb_kill_pid(ld32(sb_notifp() + SB_NF_PID));
     sb_kill_box();
+    sb_wait_gone(SB_GONE_MS);
 }
 
 // let the kernel run the call after all

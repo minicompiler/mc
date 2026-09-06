@@ -667,6 +667,16 @@ takes to arrive — `tests/sandbox/shadow.mc` printed `shadow errno=13` and `con
 `socket refused` on some runs and not others. Left unanswered, the step's output ends exactly
 where the refusal happened, which is what makes an `.expect` file possible at all.
 
+Not answering is only half of it, and the other half is an **order**. A pending notification is
+also released when its *listener* goes away, and the kernel releases it with `ENOSYS`
+(`seccomp_unotify(7)`) — an ordinary failed call the program can act on. So the supervisor kills
+the task whose call it refused, kills the box under it, and only then lets the notification go:
+it waits (up to two seconds) for the listener to report `POLLHUP`, which is exactly *no process
+under that filter is left*. Without the wait the close won a race about one run in seven, and
+`tests/sandbox/forkbomb.mc --allow=threads` printed `forked 64` with `errno 38` beside a correct
+`refused: process limit (64)` (measured; `docs/specs/M43.md` § Implementation notes — the forkbomb
+flake).
+
 **What the numbers in a refusal are.** A system call number is a property of the architecture
 *and* of the C library that issued it. `socket` is 198 on AArch64 and 41 on x86-64; a `fork` is
 `clone` (220 / 56) under glibc, and `fork` (57) under musl on x86-64, where that system call
