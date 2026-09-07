@@ -377,7 +377,8 @@ output against `tests/toml/*.expect` — well-formed files and malformed ones al
 pretty-printer lives in that driver and **not** in `src/toml.mc` on purpose: `toml.mc` is part of
 `src/core.mc`, so every compiler binary carries it, and a dump nobody calls is a dozen string
 literals charged against a budget the C seed still caps at 2048 (`MAXSTRS` in
-`stage0/gen_arm64.c`; `make check-limits` is what watches how close `src/mc.mc` gets to it).
+`stage0/gen_arm64.c`; `make check-limits` reports how close `src/mc.mc` gets to it, and gates the
+seed core `src/mc_seed.mc` — the program `build/mc0` actually compiles — against it).
 
 ---
 
@@ -1559,21 +1560,35 @@ came in with M16 and M21, follow the same rule as the rest: the ELF section tabl
 before the first append, the fifth constant being `.note.GNU-stack` — and M21's four substitution
 arrays are parallel to the `#include` stack,
 so `lex_push_mem` re-sizes them with it. `stage0/*.c` keeps every one of its ceilings: the C seed
-is a seed and only ever has to compile `src/mc.mc`. `make check-limits` is what watches that gap —
-`mc limits src/mc.mc` against the constants read straight out of `stage0/mc.h` and `stage0/*.c`,
-failing at 90%:
+is a seed and only ever has to compile exactly one program.
+
+Since the bootstrap decoupling (`src/mc_seed.mc`) that program is no longer the full `src/mc.mc`:
+`build/mc0` compiles the minimal seed core `src/mc_seed.mc`, and the seed compiler it produces —
+which carries the same growable, mmap-backed arena every `mc1+` has — is what compiles the full
+`src/mc.mc`. So `make check-limits` watches `src/mc_seed.mc`, the thing `mc0` actually compiles,
+against the constants read straight out of `stage0/mc.h` and `stage0/*.c`, and fails at 90%:
 
 ```
 $ scripts/check-limits.sh build/mc1
-ok   tokens        51 / 2048     2%  (MAXTOK)
-ok   defines      676 / 2048    33%  (MAXDEFS)
-ok   funcs       1070 / 2048    52%  (MAXFUNCS)
-ok   globals      323 / 512     63%  (MAXGLOBALS)
-ok   strings      678 / 2048    33%  (MAXSTRS)
+seed guard: src/mc_seed.mc (what build/mc0 compiles) vs stage0's fixed MAX*
+ok   tokens        53 / 2048     2%  (MAXTOK)
+ok   defines      622 / 2048    30%  (MAXDEFS)
+ok   funcs        911 / 2048    44%  (MAXFUNCS)
+ok   globals      268 / 512     52%  (MAXGLOBALS)
+ok   strings      671 / 2048    32%  (MAXSTRS)
 ...
-ok   heap        29Mi / 64Mi    46%  (HEAP_SIZE, max RSS of build/mc0)
+ok   heap        15Mi / 64Mi    23%  (HEAP_SIZE, max RSS of build/mc0)
 17/17 seed limits under 90%
+
+dynamic-limits report (not gated): src/mc.mc under the growable arena
+     tolerance 0.25, verdict ok (heap in bytes, every other table in elements)
 ```
+
+The full `src/mc.mc` is bounded by the DYNAMIC arena (M23 mmap + the `src/limits.mc` pre-scan),
+not by stage0's fixed arrays, so gating it on those arrays would be a false ceiling — the exact
+one the decoupling removes. It gets the INFORMATIONAL `mc limits src/mc.mc` report printed after
+the gate: the full compiler's dynamic-arena verdict (`ok` / `grew` / `tight`), which never fails
+the build.
 
 ### `<float>`: a taught compiler in `[compiler] modules`
 
@@ -1608,8 +1623,10 @@ that `mc limits` prints as one line of `nodes`. The largest single contributor t
 them) because the frozen seed has no `#embed` — see `scripts/check-bundle.sh`.
 
 The seed cannot report its own high-water mark, and instrumenting it would be a change to the
-frozen seed, so the row uses the **maximum resident set size** of one real `build/mc0 src/mc.mc`
-run as the proxy (`/usr/bin/time -l`). The arena is a bss array, so only the pages the allocator
+frozen seed, so the row uses the **maximum resident set size** of one real
+`build/mc0 src/mc_seed.mc` run as the proxy (`/usr/bin/time -l`) — `src/mc_seed.mc` being the
+program `build/mc0` compiles since the decoupling. The arena is a bss array, so only the pages the
+allocator
 touched are resident; the measurement over-reports by the size of the binary itself, which is the
 safe direction for a guard. On a system without `/usr/bin/time -l` the row skips instead of
 failing.
@@ -1680,7 +1697,7 @@ make -C examples/api test        # test-oop + tests/lib_test.sh + test.sh
 | `test-windows` | `scripts/test-windows.sh`: every `tests/*.mc` without `// skip-windows` cross-compiled with `coff-obj-arm64`, every object's COFF header checked with `llvm-readobj` and every one of them linked with `lld-link` in its recorded mode. Nothing is executed — the `windows-11-arm` CI leg runs them. Guarded: skipped when `lld-link` or `llvm-dlltool` is missing |
 | `check-kernel` | `examples/kernel/test.sh`: the taught compiler out of `mc.toml`, the flat RISC-V image, both QEMU runs (transcript **and** exit code, 0 and 42), determinism, the two refusals by the default compiler, seven ABI assertions over `--dump-asm --machine=riscv64`, and the `llvm-mc` encoder sweep. Guarded: without `qemu-system-riscv64` the two runs are skipped, without `llvm-mc` the sweep is |
 | `check-avr` | `examples/avr/test.sh`: the RECREATED compiler out of `mc.toml` (`core = "<mc/core_min>"`), the ELF32 AVR firmware, both simulators (simavr for the transcript **and** the exit code, 0 and 1; `qemu-system-avr` for the same transcript on UART0), the two on-device sweeps under both, determinism, the three refusals by the default compiler, five ABI assertions over `--dump-asm --machine=avr`, four things the machine refuses rather than truncates, the `llvm-mc` encoder sweep and the field-by-field comparison against `avr-gcc`. Guarded: every external tool is optional and prints `SKIP` |
-| `check-limits` | `scripts/check-limits.sh`: `mc limits src/mc.mc` against the fixed `MAX*` constants still in `stage0/mc.h` and `stage0/*.c`, plus the seed's `HEAP_SIZE` against the max RSS of a real `build/mc0` run; fails when any of them is over 90% used |
+| `check-limits` | `scripts/check-limits.sh`: `mc limits src/mc_seed.mc` — the seed core `build/mc0` compiles since the decoupling — against the fixed `MAX*` constants still in `stage0/mc.h` and `stage0/*.c`, plus the seed's `HEAP_SIZE` against the max RSS of a real `build/mc0 src/mc_seed.mc` run; fails when any of them is over 90% used. Then an informational, un-gated `mc limits src/mc.mc` report — the full compiler's dynamic-arena verdict |
 
 ```
 $ scripts/check-toml.sh build/mc1
