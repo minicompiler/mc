@@ -58,7 +58,7 @@ cleanup() {
            "$here/tests/pkg/add/mc.lock" "$here/tests/pkg/add/deps" \
            "$here/tests/pkg/perm/build" "$here/tests/pkg/perm/deps" \
            "$here/tests/pkg/perm/mc.lock" "$here/tests/pkg/perm/wider.toml" \
-           "$here/tests/pkg/perm/wrong.toml"
+           "$here/tests/pkg/perm/wrong.toml" "$here/tests/pkg/app/replace.toml"
     git -C "$here" checkout -- tests/pkg/add/add.toml 2> /dev/null
 }
 trap cleanup EXIT INT TERM
@@ -217,6 +217,36 @@ build tests/pkg/app tests/pkg/app/obj.toml "$tmp/libs"
 want_exit "unfetched package" 2 && want_msg "unfetched package" "mathx 1.0.0 is not fetched"
 grep -q "mc pkg sync --yes" "$tmp/o" && ok "the refusal carries its run: line" \
     || fail "unfetched package" "no run: line"
+mv "$tmp/out/mathx-away" "$tmp/libs/mathx"
+
+# ---- 7b. [replace] decouples a dep from the fetch/lock/hash (M52 S1) ----
+# The measured bug: a dep in [deps] AND mc.lock but not fetched, pointed at a
+# local tree by [replace], died "is not fetched" (dep_resolve) before [replace]
+# was ever consulted. With the fix [replace] is applied first, the local tree
+# is compiled directly -- no fetched copy at the resolved location, no sha256
+# to match -- and a dep WITHOUT a [replace] still fails "is not fetched".
+sed 's|^\[deps\]|[replace]\nmathx = "../src/mathx-1.0.0"\n\n[deps]|' \
+    tests/pkg/app/obj.toml > "$tmp/out/replace.toml"
+cp "$tmp/out/replace.toml" tests/pkg/app/replace.toml
+mv "$tmp/libs/mathx" "$tmp/out/mathx-away"          # unfetched at the resolved location
+build tests/pkg/app tests/pkg/app/replace.toml "$tmp/libs"
+if want_exit "[replace] of an unfetched dep builds" 0; then
+    if grep -q "replaced mathx: ../src/mathx-1.0.0 -- not pinned by mc.lock" "$tmp/o"; then
+        ok "replaced mathx: the local tree is used, no fetch, no hash"
+    else
+        fail "[replace]" "no 'replaced mathx:' line in: $(cat "$tmp/o")"
+    fi
+    if cmp -s "$tmp/out/a1.o" tests/pkg/app/build/app.o; then
+        ok "the replaced tree is really compiled: object identical to the fetched build"
+    else
+        fail "[replace]" "the object differs from the fetched build"
+    fi
+fi
+# control: the SAME project WITHOUT the [replace] still fails "is not fetched"
+build tests/pkg/app tests/pkg/app/obj.toml "$tmp/libs"
+want_exit "unreplaced dep still refused (no blanket skip)" 2 \
+    && want_msg "unreplaced dep still refused (no blanket skip)" "mathx 1.0.0 is not fetched"
+rm -f tests/pkg/app/replace.toml
 mv "$tmp/out/mathx-away" "$tmp/libs/mathx"
 
 # ---- 8. vendoring is the offline road (acceptance 9) ----

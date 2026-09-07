@@ -1245,9 +1245,13 @@ void dep_resolve(i64 pk, uptr cfg) {
 // ---- [replace] (D11) ----
 // A local tree, for development: not pinned, not hashed, and announced, exactly
 // as Go's replace directive is and as go.sum omits it.
-void dep_replace(i64 pk, uptr cfg) {
+// Returns 1 when a [replace] applied (the caller then skips dep_resolve and the
+// hash check: a replaced package is a local tree the developer vouches for, so
+// it needs no fetched copy at the resolved location and no sha256 to match),
+// 0 when this name has no [replace] entry.
+i64 dep_replace(i64 pk, uptr cfg) {
     uptr p = toml_get(tm_cat("replace.", dp_name(pk)));
-    if (p == 0) return;
+    if (p == 0) return 0;
     uptr e = dp_at(pk);
     dp_set_dir(pk, tm_cat(path_join(cfg, p), "/"));
     st64(e + PK_HASH, 0);
@@ -1257,6 +1261,7 @@ void dep_replace(i64 pk, uptr cfg) {
     out_str(1, ": ");
     out_str(1, p);
     out_str(1, " -- not pinned by mc.lock\n");
+    return 1;
 }
 
 // ---- the entry point the driver calls ----
@@ -1309,14 +1314,23 @@ void deps_apply(uptr cfg) {
     // 4. each tree resolved, then REHASHED (D7): checked, not trusted. A tool
     //    row is skipped whole: its tree lives under ~/.mc/tools, `mc tool`
     //    owns it, and this build neither opens nor hashes it.
+    //    [replace] is consulted FIRST (M52 S1): a name pointed at a local tree
+    //    IS that tree, so it is not fetched at the resolved location and not
+    //    hashed against the lock. dep_replace sets the directory and zeroes
+    //    PK_HASH, so dep_resolve (which would die "is not fetched") is skipped
+    //    and the mismatch check below can never fire for it. dep_scan STILL
+    //    runs: it reads the local tree's [package].files into the boundary
+    //    table (deps_check_files) and requires its mc.toml -- a replaced tree
+    //    is vouched for, not unstructured. Its include root and its edges were
+    //    registered from the lock in dep_read_lock, so a replaced package is
+    //    still #include-able and its own [deps] still hold.
     i = 0;
     while (i < dp_npkg()) {
         if (dp_is_tool(i)) {
             i = i + 1;
             continue;
         }
-        dep_resolve(i, cfg);
-        dep_replace(i, cfg);
+        if (!dep_replace(i, cfg)) dep_resolve(i, cfg);
         uptr got = dep_scan(i);
         uptr want = dp_hash(i);
         if (want != 0 && !str_eq(got, want)) dep_mismatch(i);
