@@ -10,6 +10,13 @@
 # `make site` picks the config by `uname -s`; examples/conc/mc.linux.toml is the
 # same idea one directory over.
 #
+# This file has no [target], so the ELF writer's libc default (musl, M42)
+# applies: build/mcsite gets `/lib/ld-musl-<arch>.so.1` and runs on a MUSL
+# distribution (Alpine, and scripts/check-site-linux.sh's alpine:3 cell). ON A
+# GLIBC HOST (Ubuntu, Debian, Fedora) use site/mc.linux-gnu.toml instead, which
+# is this file with `[target] libc = "gnu"` -- the render is byte for byte the
+# same, only the interpreter path differs.
+#
 # One step: site/gen/main.mc compiled by the running compiler into an ELF
 # executable (the built-in elf-exe backend, M42). There is no [compiler] section
 # because mcsite teaches the compiler nothing - it USES the compiler's own

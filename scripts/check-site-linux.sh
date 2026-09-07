@@ -26,6 +26,15 @@
 #   build/mcsite site                             # render docs/ -> site/public
 #   build/mcsite site --check                     # the internal-link check
 #
+# It runs TWO cells per architecture: a MUSL one in alpine:3 with
+# site/mc.linux.toml (the ELF writer's default interpreter), and a GLIBC one in
+# ubuntu:latest with site/mc.linux-gnu.toml (`[target] libc = "gnu"`). The glibc
+# cell is what a report from the teko session asked for: mcsite built with the
+# default (musl) config gets `/lib/ld-musl-<arch>.so.1` and will not start on a
+# glibc runner. The render itself is libc-independent, so every cell has to come
+# out byte for byte the macOS reference; the libc only decides whether the
+# mcsite BINARY starts on that host.
+#
 # Without Docker it prints SKIPPED and exits 0: it is the same rule
 # scripts/test-linux.sh follows, and for the same reason -- a macOS laptop with
 # Docker Desktop stopped must still be able to run `make check`.
@@ -49,7 +58,6 @@ if ! command -v docker > /dev/null 2>&1 || ! docker info > /dev/null 2>&1; then
     exit 0
 fi
 
-img="alpine:3"
 tmp="${TMPDIR:-/tmp}/check-site-linux.$$"
 mkdir -p "$tmp"
 root=$(pwd)
@@ -79,60 +87,71 @@ cp -a site/public "$tmp/public-macos"
 ok "macos: $pages pages rendered (the reference)"
 
 # ---- 2. one cell per architecture ------------------------------------------
-cell() {                              # cell ARCH PLATFORM COMPILER-CONFIG COMPILER
-    arch="$1"; platform="$2"; cfg="$3"; cc="$4"
+cell() {              # cell ARCH PLATFORM LIBC IMAGE COMPILER-CONFIG SITE-CONFIG COMPILER
+    arch="$1"; platform="$2"; libc="$3"; img="$4"; cfg="$5"; scfg="$6"; cc="$7"
+    tag="linux/$arch $libc"
     rm -f "$cc"
     if ! msg=$("$mc" build src --config "$cfg" 2>&1); then
-        fail "linux/$arch: cross-building the compiler" "$msg"; return
+        fail "$tag: cross-building the compiler" "$msg"; return
     fi
-    ok "linux/$arch: $cc cross-built from this tree ($(wc -c < "$cc" | tr -d ' ') bytes)"
+    ok "$tag: $cc cross-built from this tree ($(wc -c < "$cc" | tr -d ' ') bytes)"
 
     # mc build site, inside the container
     rm -f build/mcsite
     if ! msg=$(docker run --rm --platform "$platform" -v "$root":/w -w /w "$img" \
-               "/w/$cc" build site --config site/mc.linux.toml 2>&1); then
-        fail "linux/$arch: mc build site" "$msg"; return
+               "/w/$cc" build site --config "$scfg" 2>&1); then
+        fail "$tag: mc build site" "$msg"; return
     fi
     if [ ! -f build/mcsite ]; then
-        fail "linux/$arch: mc build site" "no build/mcsite was written"; return
+        fail "$tag: mc build site" "no build/mcsite was written"; return
     fi
-    ok "linux/$arch: mc build site --config site/mc.linux.toml -> $msg"
+    ok "$tag: mc build site --config $scfg -> $msg"
 
     # render, into the same site/public the macOS run wrote
     rm -rf site/public
     if ! msg=$(docker run --rm --platform "$platform" -v "$root":/w -w /w "$img" \
                /w/build/mcsite site 2>&1); then
-        fail "linux/$arch: mcsite site" "$msg"; return
+        fail "$tag: mcsite site" "$msg"; return
     fi
     got=$(echo "$msg" | sed -n 's|^mcsite: \([0-9]*\) pages.*|\1|p')
     if [ "$got" != "$pages" ]; then
-        fail "linux/$arch: page count" "$got pages, macOS rendered $pages"; return
+        fail "$tag: page count" "$got pages, macOS rendered $pages"; return
     fi
-    ok "linux/$arch: $got pages rendered"
+    ok "$tag: $got pages rendered"
 
     if ! d=$(diff -r "$tmp/public-macos" site/public 2>&1); then
-        fail "linux/$arch: site/public differs from the macOS render" "$(echo "$d" | head -8)"
+        fail "$tag: site/public differs from the macOS render" "$(echo "$d" | head -8)"
         return
     fi
     n=$(find site/public -type f | wc -l | tr -d ' ')
-    ok "linux/$arch: site/public is byte for byte the macOS render ($n files, diff -r empty)"
+    ok "$tag: site/public is byte for byte the macOS render ($n files, diff -r empty)"
 
     # --check, in the container. alpine:3 has no python3, so the two Python
     # checkers report themselves skipped and the mc link check is what runs --
     # which is the half written in this language and the half that has to work.
     if ! msg=$(docker run --rm --platform "$platform" -v "$root":/w -w /w "$img" \
                /w/build/mcsite site --check 2>&1); then
-        fail "linux/$arch: mcsite site --check" "$(echo "$msg" | tail -5)"; return
+        fail "$tag: mcsite site --check" "$(echo "$msg" | tail -5)"; return
     fi
     line=$(echo "$msg" | grep 'link problems' | head -1)
     case "$line" in
-        *" 0 link problems") ok "linux/$arch: --check: $line" ;;
-        *) fail "linux/$arch: --check" "$line" ;;
+        *" 0 link problems") ok "$tag: --check: $line" ;;
+        *) fail "$tag: --check" "$line" ;;
     esac
 }
 
-cell aarch64 linux/arm64 src/mc.linux-aarch64.toml build/mc-linux-arm64
-cell x86_64  linux/amd64 src/mc.linux-x86_64.toml  build/mc-linux-x86_64
+# musl, in alpine:3 -- the default interpreter and the historical cells.
+cell aarch64 linux/arm64 musl alpine:3 \
+     src/mc.linux-aarch64.toml site/mc.linux.toml build/mc-linux-arm64
+cell x86_64  linux/amd64 musl alpine:3 \
+     src/mc.linux-x86_64.toml  site/mc.linux.toml build/mc-linux-x86_64
+
+# glibc, in ubuntu:latest -- site/mc.linux-gnu.toml, the case the teko report
+# asked for. A musl mcsite would not even start here.
+cell aarch64 linux/arm64 gnu ubuntu:latest \
+     src/mc.linux-aarch64-gnu.toml site/mc.linux-gnu.toml build/mc-linux-arm64-gnu
+cell x86_64  linux/amd64 gnu ubuntu:latest \
+     src/mc.linux-x86_64-gnu.toml  site/mc.linux-gnu.toml build/mc-linux-x86_64-gnu
 
 if [ "$fails" != 0 ]; then
     echo "check-site-linux: $fails of $total FAILED"

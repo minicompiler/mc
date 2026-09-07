@@ -1,0 +1,43 @@
+# mc.linux-gnu.toml - mcsite built by `mc build` ON A GLIBC LINUX HOST:
+#
+#   mc build site --config site/mc.linux-gnu.toml     # from the repository root
+#
+# It is site/mc.linux.toml with ONE key added and nothing else changed. Without
+# a `libc` line the ELF writer's default is musl (M42), so the rendered
+# build/mcsite gets `/lib/ld-musl-<arch>.so.1` as its PT_INTERP and will not
+# start on a glibc distribution (Ubuntu, Debian, Fedora): "cannot execute:
+# required file not found". `libc = "gnu"` names the FAMILY, and the family
+# picks both per-libc names at once -- the DT_NEEDED soname (`libc.so.6`) and
+# the loader path (`/lib/ld-linux-aarch64.so.1`, `/lib64/ld-linux-x86-64.so.2`)
+# -- exactly as the src/mc.linux-<arch>-gnu.toml compiler configs and the Linux
+# host CI legs do (docs/reference/toml.md, the [target] section).
+#
+# `os = "linux"` is named so the file is self-describing (and so `libc` is not
+# rejected as "applies to a linux target" if it is ever fed to a non-Linux
+# compiler), but there is no `arch`: absent, it defaults to the HOST's (M37,
+# driver.mc: target.arch defaults to host_arch()), so this one file serves a
+# glibc host on aarch64 and on x86_64 alike. `libc` is the one thing the writer
+# defaults to a constant rather than reading from the host, so it is the one
+# thing that has to be pinned here.
+#
+# The RENDER is independent of the libc: `docs/` comes out byte for byte the
+# same as the musl build and the macOS build (scripts/check-site-linux.sh proves
+# it). `libc` only decides whether the mcsite BINARY can start on this host.
+#
+# One step: site/gen/main.mc compiled by the running compiler into an ELF
+# executable (the built-in elf-exe backend, M42). There is no [compiler] section
+# because mcsite teaches the compiler nothing - it USES the compiler's own
+# lexer, through `#include <mc/lex>` from the bundle inside the binary.
+
+[project]
+name  = "mcsite"
+entry = "gen/main.mc"
+out   = "../build/mcsite"
+kind  = "exe"
+
+[target]
+os   = "linux"
+libc = "gnu"
+
+[include]
+paths = ["gen/linux"]

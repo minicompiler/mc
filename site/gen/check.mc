@@ -142,7 +142,14 @@ i64 ck_python(uptr script, uptr files) {
     }
     st64(av + (nf + 2) * 8, 0);
     i64 rc = ck_spawn(av);
-    if (rc < 0) {
+    // rc < 0 is posix_spawnp itself failing (python3 not on PATH, reported
+    // through the return, which is what glibc/musl do natively). rc == 127 is
+    // the same cause deferred to the child: POSIX lets posix_spawn succeed and
+    // the child exit 127 ("command not found") when the exec fails, which is
+    // what happens under qemu-emulated containers (a linux/amd64 image on an
+    // arm64 host). Either way python3 is absent -- skip, do not report a
+    // problem. checkhtml.py and contrast.py themselves exit only 0 or 1.
+    if (rc < 0 || rc == 127) {
         out_str(1, "mcsite: python3 not found, ");
         out_str(1, script);
         out_str(1, " skipped\n");
