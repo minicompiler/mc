@@ -376,9 +376,26 @@ containment rule every path in every manifest obeys (no `..`, no empty component
 control byte, none of the characters Windows reserves). A path on `net`, a name on `fs.*` and a
 kind outside the five are each refused at the offending key's own `file:line:col`.
 
-What enforces them is the sandbox around a tool (`mc tool`, not built yet); a library is compiled
-into your program, so what it declares is its author's statement and the install table says so in
-those words. See [packages.md](packages.md) § Permissions.
+What enforces them is the sandbox around a tool (`mc tool run`, [tools.md](tools.md)); a library is
+compiled into your program, so what it declares is its author's statement and the install table says
+so in those words. See [packages.md](packages.md) § Permissions.
+
+## `[tool]` — a tool install manifest
+
+`mc tool install` writes one manifest per installed version, `~/.mc/tools/<name>/v<ver>.toml`, as
+its last step (the claim). It is not written by a person and is not part of a project; `mc tool run`
+and `mc tool list` read it back. Its keys are under `[tool]`:
+
+| key | type | meaning |
+|---|---|---|
+| `tool.name` | string | the package name |
+| `tool.version` | string | the installed version |
+| `tool.bin` | string | the launcher's name in the bin directory |
+| `tool.out` | string | the built binary, relative to the staged tree (`project.out`) |
+| `tool.sha256` | string | the tree hash of the staged copy |
+| `tool.kind` | string | `tool` |
+| `tool.sandbox` | bool | whether the host it was installed on has a sandbox — a fact `mc tool list` shows; `mc tool run` decides afresh at run time |
+| `tool.permissions` | array | the accepted set, canonical and sorted, the same shape `mc.lock` carries |
 
 ## `[limits]`
 

@@ -87,6 +87,17 @@ uptr host_self_path() {
     return buf;
 }
 
+// M48 C3: the current working directory of the invocation -- see
+// src/host_macos.mc for why `mc tool` needs it. `getcwd` returns its buffer or
+// NULL under musl and glibc alike.
+extern uptr getcwd(uptr buf, i64 size);
+
+uptr host_getcwd() {
+    uptr buf = xalloc(4097);
+    if (getcwd(buf, 4096) == 0) return 0;
+    return buf;
+}
+
 // M25: the downloader `mc sysroot fetch` spawns, and its fallback. A
 // distribution ships one of the two; the CI runners have both.
 uptr host_downloader()     { return "curl"; }

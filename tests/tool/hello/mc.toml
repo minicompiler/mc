@@ -1,0 +1,24 @@
+# tests/tool/hello -- the tool `mc tool install` builds and runs (M48 C3).
+#
+# A `kind = "exe"` package: `mc tool install` compiles it on this machine with
+# the running compiler, stages it under ~/.mc/tools/hello_tool/v0.1.0/, and
+# writes a launcher ~/.mc/bin/hello that runs it through `mc tool run`. The one
+# permission it asks for is `fs.read workspace`: it opens the file named on its
+# command line and copies it to stdout, and on a host with a sandbox it may read
+# only under the directory it was invoked from (docs/reference/tools.md).
+[package]
+name    = "hello_tool"
+bin     = "hello"
+licence = "MIT"
+files   = ["main.mc"]
+
+[project]
+name  = "hello"
+entry = "main.mc"
+out   = "build/hello"
+kind  = "exe"
+
+[[permission]]
+kind   = "fs.read"
+path   = "workspace"
+reason = "reads the file it is asked to print"

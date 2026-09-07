@@ -65,6 +65,7 @@ CreateProcessA
 DeleteFileA
 ExitProcess
 GetCommandLineA
+GetCurrentDirectoryA
 GetEnvironmentVariableA
 GetExitCodeProcess
 GetFileAttributesA

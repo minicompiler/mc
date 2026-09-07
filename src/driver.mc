@@ -330,7 +330,12 @@ uptr drv_sdk(uptr tmpf) {
     // error, not a spawn that fails halfway through a build.
     if (!host_has_sdk())
         toml_err_key("linker.args", "{sdk} needs xcrun: it exists only on macos");
-    u8 fa[8];
+    // posix_spawn_file_actions_t is an 8-byte opaque pointer on macOS but a
+    // ~80-byte struct on glibc and musl, whose _init memsets the whole of it;
+    // an 8-byte buffer there corrupts the stack. 128 covers every host (the
+    // Windows shim's _init touches nothing). First exercised on Linux by
+    // `mc tool install` (M48 C3).
+    u8 fa[128];
     st64(fa, 0);
     if (posix_spawn_file_actions_init(fa) != 0) die("posix_spawn_file_actions_init failed");
     drv_mkdirs(tmpf);

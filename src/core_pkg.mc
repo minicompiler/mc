@@ -26,6 +26,7 @@
 #include "pkg.mc"
 #include "install.mc"
 #include "upgrade.mc"
+#include "tool.mc"
 
 // `update` is top-level and not `mc pkg update` (D21): the user-facing verbs
 // read like `mc build`, and the package-author and maintenance ones stay under
@@ -45,4 +46,11 @@ void mc_pkg_init() {
     // afterwards (§ D2, step 5).
     subcommand("upgrade", &upgrade_cmd,
         "       mc upgrade [VERSION] [--yes] [--no-install] [--to PATH] [--registry URL|DIR] [--libs-dir DIR]\n");
+    // `mc tool` is the package-of-programs half: install a `kind = "exe"`
+    // package on this machine, run it boxed under the permissions it declared
+    // and the developer confirmed (M48 C3). It is top-level beside `install`
+    // and `upgrade`, and it carries a hidden `box-args` verb -- the one place
+    // permissions become sandbox flags.
+    subcommand("tool", &tool_cmd,
+        "       mc tool install NAME[@VER]|[DIR] | list | remove NAME | upgrade [NAME] | run NAME [-- ARGS]\n            [--yes] [--registry URL|DIR] [--libs-dir DIR] [--bin-dir DIR] [--workspace DIR]\n");
 }

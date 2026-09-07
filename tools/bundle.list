@@ -63,6 +63,7 @@ mc/sysno_linux_x86_64	src/sysno_linux_x86_64.mc
 mc/sysroot	src/sysroot.mc
 mc/sysroots	src/sysroots.mc
 mc/toml	src/toml.mc
+mc/tool	src/tool.mc
 mc/upgrade	src/upgrade.mc
 mc/version	src/version.mc
 mc_badmach	lib/mc_badmach.mc

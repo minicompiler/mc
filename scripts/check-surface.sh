@@ -49,6 +49,26 @@
 mc0="${1:-build/mc0}"
 mc1="${2:-build/mc1}"
 
+# Since the bootstrap decoupling (PR #54) the frozen C seed `mc0` compiles only
+# the minimal src/mc_seed.mc: the whole src/mc.mc no longer fits in its fixed
+# 64 MiB arena (M48 C3 pushed even the plain compiler past it, and the taught
+# compilers below wire in a whole module on top). They are therefore built by
+# the SEED COMPILER build/mc_seed -- itself built BY mc0 and sharing its
+# codegen, but with the growable mmap arena every mc1+ has, so the taught
+# compiler it produces is byte for byte what mc0 would have produced with room.
+# Falls back to $mc1 when mc_seed is absent (the bootstrap fixed point proves
+# the two share codegen). Only the src/mc.mc compilations use it; the per-test
+# inertness and --dump-ast comparisons keep using the frozen $mc0 directly.
+seed="build/mc_seed"
+if [ -x "$seed" ]; then
+    echo "check-surface: using seed compiler $seed for the src/mc.mc compilations"
+else
+    seed="$mc1"
+    echo "check-surface: WARNING build/mc_seed is absent -- falling back to $mc1 for the" >&2
+    echo "check-surface: src/mc.mc compilations. A full build produces build/mc_seed; its" >&2
+    echo "check-surface: absence in CI is a regression, not a benign substitution." >&2
+fi
+
 for mc in "$mc0" "$mc1"; do
     if [ ! -x "$mc" ]; then
         echo "FAIL: compiler '$mc' not found or not executable"
@@ -74,7 +94,7 @@ if ! grep -q 'user_demo\.mc' "$user"; then
 fi
 
 mkdir -p build
-if ! msg=$("$mc0" src/mc.mc -o build/mc1s.o 2>&1); then
+if ! msg=$("$seed" src/mc.mc -o build/mc1s.o 2>&1); then
     echo "FAIL: compiling src/mc.mc with the demo wired in: $msg"
     exit 1
 fi
@@ -135,7 +155,7 @@ if ! grep -q 'user_tokadd\.mc' "$user"; then
     echo "FAIL: could not wire lib/user_tokadd.mc into $user"
     exit 1
 fi
-if ! msg=$("$mc0" src/mc.mc -o build/mc1t.o 2>&1); then
+if ! msg=$("$seed" src/mc.mc -o build/mc1t.o 2>&1); then
     echo "FAIL: compiling src/mc.mc with user_tokadd: $msg"
     fails=$((fails + 1))
 elif ! msg=$(scripts/link.sh build/mc1t build/mc1t.o 2>&1); then
@@ -1186,7 +1206,7 @@ if ! grep -q 'user_dupty\.mc' "$user"; then
     echo "FAIL: could not wire lib/user_dupty.mc into $user"
     exit 1
 fi
-if ! msg=$("$mc0" src/mc.mc -o build/mc1t.o 2>&1); then
+if ! msg=$("$seed" src/mc.mc -o build/mc1t.o 2>&1); then
     echo "FAIL: compiling src/mc.mc with user_dupty: $msg"
     fails=$((fails + 1))
 elif ! msg=$(scripts/link.sh build/mc1t build/mc1t.o 2>&1); then
@@ -1738,7 +1758,7 @@ if ! grep -q 'user_dupintrin\.mc' "$user"; then
     echo "FAIL: could not wire lib/user_dupintrin.mc into $user"
     exit 1
 fi
-if ! msg=$("$mc0" src/mc.mc -o build/mc1i.o 2>&1); then
+if ! msg=$("$seed" src/mc.mc -o build/mc1i.o 2>&1); then
     echo "FAIL: compiling src/mc.mc with user_dupintrin: $msg"
     fails=$((fails + 1))
 elif ! msg=$(scripts/link.sh build/mc1i build/mc1i.o 2>&1); then
@@ -1946,7 +1966,7 @@ dup_case() {
         echo "FAIL: could not wire lib/$1 into $user"
         exit 1
     fi
-    if ! msg=$("$mc0" src/mc.mc -o build/mc1d.o 2>&1); then
+    if ! msg=$("$seed" src/mc.mc -o build/mc1d.o 2>&1); then
         echo "FAIL: compiling src/mc.mc with $1: $msg"
         fails=$((fails + 1))
     elif ! msg=$(scripts/link.sh build/mc1d build/mc1d.o 2>&1); then

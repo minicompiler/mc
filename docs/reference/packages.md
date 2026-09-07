@@ -205,7 +205,7 @@ says `is not fetched` rather than reading it.
 > and checked by the registry where the package runs a test; a library runs inside your program and
 > is held to nothing at run time. `mc` prints that sentence with the table, and it does not say
 > "safe": it says what was checked. What enforces a TOOL's set is the sandbox `mc tool run` puts it
-> in, which is a later milestone.
+> in, on a host that has one; installing and running a tool is [tools.md](tools.md).
 
 **A package never defines `user_init`.** It exports `<name>_init()` and the project's own module
 calls it, because a compiler holds exactly one `user_init` and the order of initialisation is the

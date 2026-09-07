@@ -144,6 +144,7 @@ files = [
     "src/sysroot.mc",
     "src/sysroots.mc",
     "src/toml.mc",
+    "src/tool.mc",
     "src/upgrade.mc",
     "src/user.mc",
     "src/version.mc",

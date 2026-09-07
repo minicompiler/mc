@@ -96,6 +96,21 @@ uptr host_self_path() {
     return buf;
 }
 
+// M48 C3: the current working directory -- what `mc tool` resolves the
+// `workspace` permission against (§ 3.5) and what `mc tool box-args` prints.
+// `GetCurrentDirectoryA(size, buf)` returns the length written (a DWORD, read
+// through c_int like every narrow return); 0 or an over-long answer is no
+// answer. The name is in scripts/sysroot-windows.sh's kernel32.def.
+extern i64 GetCurrentDirectoryA(i64 size, uptr buf);
+
+uptr host_getcwd() {
+    uptr buf = xalloc(4097);
+    i64 n = c_int(GetCurrentDirectoryA(4096, buf));
+    if (n <= 0 || n >= 4096) return 0;
+    st8(buf + n, 0);
+    return buf;
+}
+
 // M25: `curl.exe` ships in System32 since Windows 10 1803 and is on PATH under
 // Git Bash. There is no second one to try.
 uptr host_downloader()     { return "curl.exe"; }

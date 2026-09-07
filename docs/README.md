@@ -48,6 +48,7 @@ against a run time still at `clang -O0` level — with the honest caveats and th
 | [cli.md](reference/cli.md) | every command, flag, dump and exit code |
 | [toml.md](reference/toml.md) | every `mc.toml` key: type, default, meaning |
 | [packages.md](reference/packages.md) | `[deps]` and `mc.lock`: the resolution order, the tree hash, the closure rule, the refusals |
+| [tools.md](reference/tools.md) | `mc tool`: install a program package, run it boxed, the permission-to-sandbox mapping |
 | [hooks.md](reference/hooks.md) | every public function of the parser and hook API |
 | [sysroot.md](reference/sysroot.md) | where a cross link finds its files: the resolution chain, the cache, the messages |
 | [objects.md](reference/objects.md) | the object model (`sec_*`, `sym_*`, `reloc_add`) and the codegen accessors (`gen_*`) |
