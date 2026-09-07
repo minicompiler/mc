@@ -428,7 +428,7 @@ void fa_cast(i64 ty, i64 d) {
         i64 r = fa_val_reg(d, FREG_S1);
         i64 rd = dst_reg(d);
         if (ty == ty_f64raw)          e2(FI_MOV_XD, rd, r);       // a bit move
-        else if (ty == TY_I64)        e2(fa_w(FI_FCVTZS_D, src), rd, r);
+        else if (type_signed(ty))     e2(fa_w(FI_FCVTZS_D, src), rd, r);
         else {
             e2(fa_w(FI_FCVTZU_D, src), rd, r);
             gen_cast(rd, ty);                            // then narrow, as the core does
@@ -439,7 +439,7 @@ void fa_cast(i64 ty, i64 d) {
     i64 r = val_reg(d, REG_S1);                          // integer -> float
     i64 rd = fa_dst_reg(d);
     if (src == ty_f64raw)    e2(FI_MOV_DX, rd, r);
-    else if (src == TY_I64)  e2(fa_w(FI_SCVTF_D, ty), rd, r);
+    else if (type_signed(src)) e2(fa_w(FI_SCVTF_D, ty), rd, r);
     else                     e2(fa_w(FI_UCVTF_D, ty), rd, r);
     fa_dst_done(d, rd);
 }
