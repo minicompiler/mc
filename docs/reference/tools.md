@@ -110,6 +110,16 @@ beneath it or beneath `$HOME`; `--at-path` binds each at its own absolute path i
 tool handed an absolute path (as an editor hands a language server `file:///…`) can reach it, and a
 path outside its granted roots is `sandbox: refused: open <path>`, exit 125.
 
+The **(none) row** — a tool that declares no permission — runs with its own install tree bound
+**read-only** (`--ro <tree> --at-path`) and with no granted writable root and nothing of yours bound
+at all: it can read nothing of your files and create nothing that survives. The one residual is that
+`mc sandbox exec` always overlays the binary's own directory as `/src`, a **copy-on-write** overlay,
+so the tool's current directory is technically writable — but every write lands in an ephemeral upper
+layer on the box tmpfs and the host tree is never touched, and the writes are discarded when the box
+exits. A literally read-only `/src` for `exec` is a future sandbox mode; the security property a
+zero-permission tool must have — it cannot reach your files and cannot persist anything — holds today,
+and `scripts/check-tool.sh` proves boxed that it cannot create a host-visible file.
+
 ## Boxed vs direct, and what is verified
 
 On Linux a tool that reads a file outside its `fs.read` root is stopped by the box, and one that
@@ -118,3 +128,29 @@ and Windows there is no box (see [sandbox.md](sandbox.md) § Hosts), so the perm
 and not enforced; the same install, the same manifest, and a tool you chose to install runs. What
 the registry verifies about a tool, and what it cannot verify about a library, is in
 [packages.md](packages.md) § Permissions.
+
+## Manifest integrity against a hostile package
+
+A tool package's `mc.toml` is attacker-controlled — it comes from a registry — so the compiler treats
+every field of it as untrusted:
+
+- **Values written into a generated manifest are escaped.** `mc tool install` records the tool's
+  `[project].out`, name, binary and permissions into `~/.mc/tools/<name>/v<ver>.toml`, and the lock
+  and cache-manifest writers record a fetched tree's own strings. Each free-text value is passed
+  through a TOML basic-string escaper first, so a value carrying a `"` and a newline — e.g.
+  `out = "app\"\n[tool]\npermissions = [...]"` — becomes one escaped string and cannot splice a
+  second table or key into the file. A control byte in such a value is refused outright.
+- **`mc tool run` re-validates the stored permissions.** Before any permission is mapped to a
+  sandbox flag, every line in the install manifest is checked against the same rules a
+  `[[permission]]` row passes at install — a syntactically valid, `..`-free, containment-checked
+  line — and a manifest carrying anything else (a hand edit, a corrupted file) is refused with
+  `the install manifest carries an invalid permission: <line>`. No unrecognized string ever falls
+  through to "the whole workspace, writable".
+- **A version is a version, not a path.** A `[[versions]].version` (or a lock or installed-index
+  version) that is not SemVer's charset — `[0-9A-Za-z.+_-]`, no leading dot, no `..` — is refused
+  before it becomes `~/.mc/tools/<name>/v<version>/` or `<libs>/<name>/v<version>/`, so a crafted
+  `version = "../../../../tmp/evil"` cannot stage or build a tree outside the package root.
+- **A permission set larger than the box is refused before you accept it.** A set that maps to more
+  read-only roots, writable roots, `--bin` programs or `--env` variables than the box accepts is
+  refused at install (`too many fs.read permissions for the box: N (at most 16)`), rather than being
+  accepted and locked and then refused at every later `mc tool run`.

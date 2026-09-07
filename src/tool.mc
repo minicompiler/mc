@@ -71,11 +71,13 @@ uptr tool_bin_dir() {
 }
 
 uptr tool_dir(uptr name, uptr ver) {
+    ver = dep_ver_path(ver);
     return tm_cat(tm_cat(tm_cat(tool_tools_root(), "/"), name),
                   tm_cat(tm_cat("/v", ver), "/"));
 }
 
 uptr tool_manifest_path(uptr name, uptr ver) {
+    ver = dep_ver_path(ver);
     return tm_cat(tm_cat(tm_cat(tool_tools_root(), "/"), name),
                   tm_cat(tm_cat("/v", ver), ".toml"));
 }
@@ -125,7 +127,12 @@ uptr tool_resolve_path(uptr path) {
         if (home == 0) dep_die("a home/ permission needs a home directory", path, 0);
         return tm_cat(tm_cat(home, "/"), rel);
     }
-    return tl_ws();
+    // An unrecognized permission path must NEVER fall through to "the whole
+    // workspace, writable" (M48 C3 review, finding 2): every caller has already
+    // run dep_perm_line_ok / dep_perm_path_ok, so this is a hard error, not a
+    // default.
+    dep_die("an unrecognized permission path", path, 0);
+    return 0;
 }
 
 // One canonical permission line -> its sandbox tokens, appended to `av` from
@@ -294,16 +301,21 @@ void tool_write_manifest(uptr name, uptr ver, uptr bin, uptr out, uptr sha,
                         i64 nperm, uptr perms) {
     u8 b[BUF_SIZE];
     buf_init(b);
+    // Every free-text field is escaped (M48 C3 review, finding 1). `out` above
+    // all: it is [project].out read verbatim from an attacker-controlled tree,
+    // and a raw newline plus a doubled quote in it would splice a second [tool]
+    // table -- with its own `permissions` -- into this manifest, which tool_run
+    // would then read back and grant. toml_esc also refuses a control byte.
     drv_put(b, "# written by `mc tool install` -- do not edit\n[tool]\nname        = \"");
-    drv_put(b, name);
+    drv_put(b, toml_esc(name));
     drv_put(b, "\"\nversion     = \"");
-    drv_put(b, ver);
+    drv_put(b, toml_esc(ver));
     drv_put(b, "\"\nbin         = \"");
-    drv_put(b, bin);
+    drv_put(b, toml_esc(bin));
     drv_put(b, "\"\nout         = \"");
-    drv_put(b, out);
+    drv_put(b, toml_esc(out));
     drv_put(b, "\"\nsha256      = \"");
-    drv_put(b, sha);
+    drv_put(b, toml_esc(sha));
     drv_put(b, "\"\nkind        = \"tool\"\n");
     // the amendment: a fact `mc tool list` shows, not a flag anyone set
     drv_put(b, "sandbox     = ");
@@ -314,7 +326,7 @@ void tool_write_manifest(uptr name, uptr ver, uptr bin, uptr out, uptr sha,
     while (i < nperm) {
         if (i > 0) drv_put(b, ", ");
         drv_put(b, "\"");
-        drv_put(b, ld64(perms + i * 8));
+        drv_put(b, toml_esc(ld64(perms + i * 8)));
         drv_put(b, "\"");
         i = i + 1;
     }
@@ -470,6 +482,57 @@ void tool_fetch_missing() {
     }
 }
 
+// ---- the box's per-kind ceilings (§ 4, M48 C3 review, finding 4) ----
+// A permission set that maps to more sandbox roots than the box accepts is
+// accepted and locked at install but refused at every `mc tool run`
+// (`too many --ro directories`, exit 2). These mirror src/sandbox.mc's
+// SB_MAXRO / SB_MAXRW / SB_MAXBIN / SB_MAXENV -- copied, not shared, because
+// core_pkg (this part) is compiled before core_sandbox and mc-slim omits the
+// sandbox entirely. scripts/check-tool.sh drives a set past each so the two
+// cannot drift silently. A `tmp` path is `--tmp` (no ceiling) and `net` is
+// `--allow=net` (no ceiling), so neither counts.
+#define TOOL_MAXRO  16
+#define TOOL_MAXRW  16
+#define TOOL_MAXBIN  8
+#define TOOL_MAXENV  8
+
+// Count the per-kind sandbox roots a canonical permission set maps to and
+// refuse it before the user is asked to accept it, naming the kind that
+// overflows. Read at install time from the tool's INDEX ROW, so the refusal
+// comes before the --yes prompt and before any fetch.
+void tool_check_capacity(i64 n, uptr perms) {
+    i64 ro = 0;
+    i64 rw = 0;
+    i64 nbin = 0;
+    i64 nenv = 0;
+    i64 i = 0;
+    while (i < n) {
+        uptr line = ld64(perms + i * 8);
+        uptr p = opt_val(line, "fs.read ");
+        if (p != 0) {
+            if (!str_eq(p, "tmp")) ro = ro + 1;
+        } else {
+            p = opt_val(line, "fs.write ");
+            if (p != 0) {
+                if (!str_eq(p, "tmp")) rw = rw + 1;
+            } else if (opt_val(line, "exec ") != 0) {
+                nbin = nbin + 1;
+            } else if (opt_val(line, "env ") != 0) {
+                nenv = nenv + 1;
+            }
+        }
+        i = i + 1;
+    }
+    if (ro > TOOL_MAXRO)
+        dep_die("too many fs.read permissions for the box", tm_cat(tm_num_str(ro), " (at most 16)"), 0);
+    if (rw > TOOL_MAXRW)
+        dep_die("too many fs.write permissions for the box", tm_cat(tm_num_str(rw), " (at most 16)"), 0);
+    if (nbin > TOOL_MAXBIN)
+        dep_die("too many exec permissions for the box", tm_cat(tm_num_str(nbin), " (at most 8)"), 0);
+    if (nenv > TOOL_MAXENV)
+        dep_die("too many env permissions for the box", tm_cat(tm_num_str(nenv), " (at most 8)"), 0);
+}
+
 // ---- install one tool by name (§ 3.1) ----
 i64 tool_install(uptr name, uptr ver) {
     pkg_require(name, ver);
@@ -480,6 +543,9 @@ i64 tool_install(uptr name, uptr ver) {
     if (!str_eq(ld64(pk_vr(r) + VR_KIND), "tool"))
         pkg_die1(name, "is a library, not a tool: add it to a project's [deps]");
     pkg_check_kinds();
+    // capacity pre-flight: refuse a set the box can never run BEFORE the user
+    // is asked to accept it (finding 4)
+    tool_check_capacity(ld64(pk_vr(r) + VR_PERMN), ld64(pk_vr(r) + VR_PERMP));
     tool_plan_missing();
     // the plan is the prompt, and it carries the permission table (§ 4.2). No
     // accepted set is loaded: an install has no prior lock, so every permission
@@ -697,6 +763,20 @@ i64 tool_run(uptr name, i64 argc, uptr argv, i64 args, uptr ws_override) {
         j = j + 1;
     }
     toml_pop(frame);
+    // Re-validate every stored permission before ANY of it is mapped to a
+    // sandbox flag (M48 C3 review, finding 2). The install manifest is a file
+    // on disk that could have been corrupted or hand-edited; a line that is not
+    // one this compiler could itself have written from a valid [[permission]]
+    // row -- an injected `fs.write home/../..`, an unrecognized word -- must be
+    // refused, never mapped through tool_resolve_path's fallback.
+    j = 0;
+    while (j < np) {
+        if (!dep_perm_line_ok(ld64(perms + j * 8)))
+            pkg_die1(pkg_what(name, ver),
+                     tm_cat("the install manifest carries an invalid permission: ",
+                            ld64(perms + j * 8)));
+        j = j + 1;
+    }
     if (out == 0) pkg_die1(pkg_what(name, ver), "the install manifest names no binary");
     uptr binpath = path_join(tm_cat(tool_dir(name, ver), "mc.toml"), out);
     i64 nargs = argc - args;
@@ -705,7 +785,7 @@ i64 tool_run(uptr name, i64 argc, uptr argv, i64 args, uptr ws_override) {
     if (host_sandbox_supported()) {
         tool_resolve_ws(ws_override);
         // <self> sandbox exec <derived flags> <binpath> <args...>
-        uptr av = xalloc((nargs + 3 * np + 8) * 8);
+        uptr av = xalloc((nargs + 3 * np + 12) * 8);
         i64 n = 0;
         st64(av + n * 8, tool_self()); n = n + 1;
         st64(av + n * 8, "sandbox");   n = n + 1;
@@ -713,6 +793,20 @@ i64 tool_run(uptr name, i64 argc, uptr argv, i64 args, uptr ws_override) {
         j = 0;
         u8 pn[8];
         st64(pn, n);
+        // The (none) row (§ 4.1): a tool that declares no permission runs with
+        // its own install tree bound READ-ONLY at its own path, so it cannot
+        // rewrite its own files and there is no granted writable root at all.
+        // (The `exec` model still overlays the binary's directory as an
+        // ephemeral copy-on-write /src, so the tool's cwd is writable but its
+        // writes are discarded and never touch the host tree -- see
+        // docs/reference/tools.md.)
+        if (np == 0) {
+            i64 m = ld64(pn);
+            st64(av + m * 8, "--ro");                 m = m + 1;
+            st64(av + m * 8, tool_dir(name, ver));    m = m + 1;
+            st64(av + m * 8, "--at-path");            m = m + 1;
+            st64(pn, m);
+        }
         while (j < np) {
             tool_flags(ld64(perms + j * 8), av, pn, 1);
             j = j + 1;

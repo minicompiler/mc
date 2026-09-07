@@ -45,6 +45,40 @@ void dep_die(uptr msg, uptr det, uptr run) {
     _exit(2);
 }
 
+// Escape a free-text value for a TOML basic string, so a value read from a
+// fetched, attacker-controlled manifest cannot splice a second key or table
+// into a file this compiler GENERATES -- the mc.lock, a cache manifest, or an
+// install manifest. Without it, `[project].out = "app\"\n[tool]\npermissions =
+// [...]\n#"` (tm_str decodes \" and \n) would write a second `[tool]` table
+// into ~/.mc/tools/<name>/v<ver>.toml, and toml.mc has no duplicate-table check,
+// so a spliced permission would then be read back and granted (M48 C3 review,
+// finding 1). tm_str decodes exactly \n \t \r \" \\, so those are what is
+// produced here; any other control byte (< 0x20, or DEL) is refused -- a
+// generated manifest value is ASCII text and a raw control byte is malformed
+// input, not something to smuggle through a doubled quote or a newline.
+uptr toml_esc(uptr s) {
+    u8 b[BUF_SIZE];
+    buf_init(b);
+    i64 i = 0;
+    loop {
+        i64 c = ld8(s + i);
+        if (c == 0) break;
+        if (c == '\\')      { buf_u8(b, '\\'); buf_u8(b, '\\'); }
+        else if (c == '"')  { buf_u8(b, '\\'); buf_u8(b, '"'); }
+        else if (c == '\n') { buf_u8(b, '\\'); buf_u8(b, 'n'); }
+        else if (c == '\t') { buf_u8(b, '\\'); buf_u8(b, 't'); }
+        else if (c == '\r') { buf_u8(b, '\\'); buf_u8(b, 'r'); }
+        else if (c < 32 || c == 127) {
+            dep_die("a control byte in a value written to a manifest", s, 0);
+        } else {
+            buf_u8(b, c);
+        }
+        i = i + 1;
+    }
+    buf_u8(b, 0);
+    return buf_p(b);
+}
+
 // ---- the name rule (§ 1) ----
 // [a-z][a-z0-9_]*, at most 32 bytes: a bare TOML key, a valid path component on
 // all three hosts, and a valid identifier prefix (`geo_init`). Upper case and
@@ -242,6 +276,40 @@ i64 ver_cmp(uptr a, uptr b) {
 i64 ver_major(uptr a) {
     i64 i = 0;
     return ver_field(a, &i);
+}
+
+// A version string that is about to become a filesystem path component:
+// <libs>/<name>/v<version>/ and ~/.mc/tools/<name>/v<version>/. SemVer's charset
+// and nothing else -- [0-9A-Za-z.+_-], non-empty, at most 64 bytes, no leading
+// dot and no `..` anywhere -- so `version = "../../../../tmp/evil"` cannot stage
+// or build a tree outside the package root. `/` and the backslash are excluded
+// by the charset. This predates M48 (a crafted [[versions]].version reaches a
+// path through `mc pkg sync`/`add` and `mc tool install`), and it is the one
+// gate between a registry string and a path (M48 C3 review, finding 3).
+i64 dep_ver_ok(uptr v) {
+    i64 n = cstrlen(v);
+    if (n == 0 || n > 64) return 0;
+    if (ld8(v) == '.') return 0;
+    i64 i = 0;
+    while (i < n) {
+        i64 c = ld8(v + i);
+        i64 ok = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z')
+                 || (c >= 'A' && c <= 'Z')
+                 || c == '.' || c == '+' || c == '_' || c == '-';
+        if (!ok) return 0;
+        if (c == '.' && i + 1 < n && ld8(v + i + 1) == '.') return 0;
+        i = i + 1;
+    }
+    return 1;
+}
+
+// The belt-and-braces guard the four path builders (pkg_libs_dir/manifest,
+// tool_dir/manifest_path) call the instant a version becomes a path, whatever
+// its source -- a registry row, a lock, or the installed index -- so that no
+// road reaches a path with a version dep_ver_ok would refuse.
+uptr dep_ver_path(uptr v) {
+    if (!dep_ver_ok(v)) dep_die("a version is not usable as a path", v, 0);
+    return v;
 }
 
 // ---- the state: one arena record, so this file costs two globals ----
@@ -631,6 +699,26 @@ i64 dep_read_perms(uptr pout) {
     }
     st64(pout, set);
     return m;
+}
+
+// Re-validate a CANONICAL permission line -- `fs.read workspace`, `fs.write
+// workspace/build`, `net`, `exec sh`, `env HOME` -- the shape the lock and the
+// install manifest store. It is the inverse of what dep_perm_line produces:
+// 1 exactly when this compiler could have written the line from a valid
+// [[permission]] row. `mc tool run` runs it over every permission it reads back
+// from the install manifest before mapping any to a sandbox flag (M48 C3 review,
+// finding 2): a hand-edited or spliced manifest must never grant more than a
+// syntactically valid, `..`-free, containment-checked line, and no unrecognized
+// string may fall through to "the whole workspace, writable".
+i64 dep_perm_line_ok(uptr line) {
+    if (str_eq(line, "net")) return 1;
+    uptr p = opt_val(line, "fs.read ");
+    if (p == 0) p = opt_val(line, "fs.write ");
+    if (p != 0) return dep_perm_path_ok(p);
+    uptr w = opt_val(line, "exec ");
+    if (w == 0) w = opt_val(line, "env ");
+    if (w != 0) return dep_perm_word_ok(w);
+    return 0;
 }
 
 // the index of the first `[project]` key of the manifest already parsed, -1
@@ -1051,6 +1139,9 @@ void dep_read_lock(uptr cfg) {
         uptr vr = toml_get(tm_cat(key, "version"));
         if (nm == 0) toml_err_key(tm_cat(key, "name"), "missing key");
         if (vr == 0) toml_err_key(tm_cat(key, "version"), "missing key");
+        // a lock row is local but can be hand-edited: a version that would
+        // escape <libs>/<name>/v<version>/ is refused before it becomes a path
+        if (!dep_ver_ok(vr)) toml_err_key(tm_cat(key, "version"), "not a usable version");
         uptr e = pkgs + i * PK_SIZE;
         st64(e + PK_NAME, nm);
         st64(e + PK_VER, vr);

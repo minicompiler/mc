@@ -331,6 +331,10 @@ void pkg_index_read(uptr name, uptr file) {
         uptr key = tm_cat(tm_cat("versions.", tm_num_str(i)), ".");
         uptr ver = toml_get(tm_cat(key, "version"));
         if (ver == 0) toml_err_key(tm_cat(key, "version"), "missing key");
+        // a registry string that is about to become <libs>/<name>/v<version>/:
+        // refuse `../..` at the row, before MVS or a fetch stages a path (M48
+        // C3 review, finding 3)
+        if (!dep_ver_ok(ver)) toml_err_key(tm_cat(key, "version"), "not a usable version");
         uptr dk = tm_cat(key, "deps");
         i64 nd = toml_count(dk);
         uptr dp8 = xalloc(nd * 8 + 8);
@@ -632,6 +636,7 @@ uptr pkg_libs_dir(uptr name, uptr ver) {
     uptr root = deps_libs_root();
     if (root == 0)
         dep_die("nowhere to put a package", "no --libs-dir and no HOME", 0);
+    ver = dep_ver_path(ver);
     return tm_cat(tm_cat(tm_cat(root, "/"), name), tm_cat(tm_cat("/v", ver), "/"));
 }
 
@@ -639,6 +644,7 @@ uptr pkg_libs_manifest(uptr name, uptr ver) {
     uptr root = deps_libs_root();
     if (root == 0)
         dep_die("nowhere to put a package", "no --libs-dir and no HOME", 0);
+    ver = dep_ver_path(ver);
     return tm_cat(tm_cat(tm_cat(root, "/"), name), tm_cat(tm_cat("/v", ver), ".toml"));
 }
 
@@ -672,17 +678,17 @@ void pkg_write_manifest(uptr name, uptr ver, uptr url, uptr sha, uptr dir) {
     u8 b[BUF_SIZE];
     buf_init(b);
     drv_put(b, "# written by `mc pkg sync` -- do not edit\n[source]\nname    = \"");
-    drv_put(b, name);
+    drv_put(b, toml_esc(name));
     drv_put(b, "\"\nversion = \"");
-    drv_put(b, ver);
+    drv_put(b, toml_esc(ver));
     drv_put(b, "\"\n");
     if (url != 0) {
         drv_put(b, "url     = \"");
-        drv_put(b, url);
+        drv_put(b, toml_esc(url));
         drv_put(b, "\"\n");
     }
     drv_put(b, "sha256  = \"");
-    drv_put(b, sha);
+    drv_put(b, toml_esc(sha));
     drv_put(b, "\"\n");
     // one [[file]] per hashed file, in manifest order: this is what lets a
     // mismatch name the FILE that moved, since the lock pins one hash per
@@ -694,9 +700,9 @@ void pkg_write_manifest(uptr name, uptr ver, uptr url, uptr sha, uptr dir) {
         uptr rel = "mc.toml";
         if (i >= 0) rel = ld64(names + i * 8);
         drv_put(b, "\n[[file]]\npath   = \"");
-        drv_put(b, rel);
+        drv_put(b, toml_esc(rel));
         drv_put(b, "\"\nsha256 = \"");
-        drv_put(b, sha256_file(path_join(dir, rel)));
+        drv_put(b, toml_esc(sha256_file(path_join(dir, rel))));
         drv_put(b, "\"\n");
         i = i + 1;
     }
@@ -888,9 +894,9 @@ void pkg_write_lock(uptr path) {
         toml_pop(frame);
         // every key padded to the width of `permissions`, which is the widest
         drv_put(b, "\n[[package]]\nname        = \"");
-        drv_put(b, name);
+        drv_put(b, toml_esc(name));
         drv_put(b, "\"\nversion     = \"");
-        drv_put(b, ver);
+        drv_put(b, toml_esc(ver));
         drv_put(b, "\"\n");
         // `kind` and `bin` are written for a TOOL only: absent is `lib`, which
         // is what every row of every lock written before M48 says (§ 4.3)
@@ -898,24 +904,26 @@ void pkg_write_lock(uptr path) {
             drv_put(b, "kind        = \"tool\"\n");
             if (bin != 0) {
                 drv_put(b, "bin         = \"");
-                drv_put(b, bin);
+                drv_put(b, toml_esc(bin));
                 drv_put(b, "\"\n");
             }
         }
         if (lib != 0) {
+            // package.lib is a free-text path from a FETCHED tree: escaped so a
+            // crafted `lib = "x\"\n[[package]]..."` cannot splice a lock row
             drv_put(b, "lib         = \"");
-            drv_put(b, lib);
+            drv_put(b, toml_esc(lib));
             drv_put(b, "\"\n");
         }
         if (rep != 0) {
             // D11: a replaced package is not pinned and not hashed, exactly as
             // go.sum omits a path-replaced module
             drv_put(b, "path        = \"");
-            drv_put(b, rep);
+            drv_put(b, toml_esc(rep));
             drv_put(b, "\"\n");
         } else {
             drv_put(b, "sha256      = \"");
-            drv_put(b, dep_hash_tree(dir, -1));
+            drv_put(b, toml_esc(dep_hash_tree(dir, -1)));
             drv_put(b, "\"\n");
         }
         drv_put(b, "deps        = [");
@@ -923,7 +931,7 @@ void pkg_write_lock(uptr path) {
         while (i < nd) {
             if (i > 0) drv_put(b, ", ");
             drv_put(b, "\"");
-            drv_put(b, ld64(dnames + i * 8));
+            drv_put(b, toml_esc(ld64(dnames + i * 8)));
             drv_put(b, "\"");
             i = i + 1;
         }
@@ -935,7 +943,7 @@ void pkg_write_lock(uptr path) {
         while (i < nperm) {
             if (i > 0) drv_put(b, ", ");
             drv_put(b, "\"");
-            drv_put(b, ld64(perms + i * 8));
+            drv_put(b, toml_esc(ld64(perms + i * 8)));
             drv_put(b, "\"");
             i = i + 1;
         }
@@ -1410,9 +1418,11 @@ i64 pkg_vendor() {
 // spelling like `[ deps ]` -- because writing a second one would be worse than
 // saying so.
 void pkg_dep_line(uptr b, uptr name, uptr ver) {
+    // name is a bare key already through dep_name_ok; ver is a basic string and
+    // is escaped as a rule (M48 C3 review, finding 1)
     drv_put(b, name);
     drv_put(b, " = \"");
-    drv_put(b, ver);
+    drv_put(b, toml_esc(ver));
     drv_put(b, "\"\n");
 }
 

@@ -1,0 +1,22 @@
+# tests/tool/inject -- a tool whose [project].out embeds a TOML-injection payload
+# (M48 C3 review, finding 1). Everything after `build/inject` in `out` is a
+# doubled quote, a newline, and a crafted `[tool]` table that grants a write
+# permission the developer never declared. toml_esc turns the whole thing into a
+# single escaped string; without it, the install manifest carried the second
+# table and `mc tool run` granted `fs.write home/../../../../tmp/pwned`.
+[package]
+name    = "inject_tool"
+bin     = "inject"
+licence = "MIT"
+files   = ["main.mc"]
+
+[project]
+name  = "inject"
+entry = "main.mc"
+kind  = "exe"
+out   = "build/inject\"\n[tool]\npermissions = [\"fs.write home/../../../../tmp/pwned\"]\n#"
+
+[[permission]]
+kind   = "fs.read"
+path   = "workspace"
+reason = "the only permission this tool actually declares"

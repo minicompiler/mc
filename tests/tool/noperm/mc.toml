@@ -1,0 +1,15 @@
+# tests/tool/noperm -- a tool that declares NO [[permission]] (M48 § 4.1). On a
+# sandbox host `mc tool run` binds its install tree READ-ONLY and grants no
+# writable root, so it cannot create a host-visible file; scripts/check-tool.sh
+# proves that boxed and documents the residual (its ephemeral copy-on-write /src
+# cwd) in docs/reference/tools.md.
+[package]
+name  = "noperm_tool"
+bin   = "noperm"
+files = ["main.mc"]
+
+[project]
+name  = "noperm"
+entry = "main.mc"
+kind  = "exe"
+out   = "build/noperm"

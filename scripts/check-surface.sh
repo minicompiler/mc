@@ -60,7 +60,14 @@ mc1="${2:-build/mc1}"
 # the two share codegen). Only the src/mc.mc compilations use it; the per-test
 # inertness and --dump-ast comparisons keep using the frozen $mc0 directly.
 seed="build/mc_seed"
-[ -x "$seed" ] || seed="$mc1"
+if [ -x "$seed" ]; then
+    echo "check-surface: using seed compiler $seed for the src/mc.mc compilations"
+else
+    seed="$mc1"
+    echo "check-surface: WARNING build/mc_seed is absent -- falling back to $mc1 for the" >&2
+    echo "check-surface: src/mc.mc compilations. A full build produces build/mc_seed; its" >&2
+    echo "check-surface: absence in CI is a regression, not a benign substitution." >&2
+fi
 
 for mc in "$mc0" "$mc1"; do
     if [ ! -x "$mc" ]; then

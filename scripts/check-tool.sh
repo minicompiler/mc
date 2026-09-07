@@ -248,5 +248,144 @@ else
     fail "run after remove" "exit $rc: $(cat "$tmp/o")"
 fi
 
+# =========================== 6. security (M48 C3 review) =====================
+# A tool package's mc.toml is attacker-controlled (fetched from a registry).
+# Each case here reproduces one escalation and asserts it is closed.
+
+# --- finding 1: [project].out injection is escaped, not spliced ---
+# inject_tool's `out` embeds `"`+newline+`[tool]`+a write permission. Before
+# toml_esc the install manifest carried a SECOND [tool]/permissions and the
+# spliced write was granted; now the whole thing is one escaped string.
+IH=$(PATH="$realpath_env" sh scripts/pkg-hash.sh tests/tool/inject)
+cp -R tests/tool/inject "$tmp/stage/inject_tool-0.1.0"
+( cd "$tmp/stage" && PATH="$realpath_env" tar -czf "$tmp/reg/inject_tool-0.1.0.tar.gz" inject_tool-0.1.0 )
+cat > "$tmp/reg/index/inject_tool.toml" <<EOF
+[package]
+name = "inject_tool"
+[[versions]]
+version     = "0.1.0"
+url         = "$tmp/reg/inject_tool-0.1.0.tar.gz"
+strip       = 1
+sha256      = "$IH"
+deps        = []
+kind        = "tool"
+bin         = "inject"
+permissions = ["fs.read workspace"]
+licence     = "MIT"
+EOF
+run tool install inject_tool --yes --registry "$reg" --libs-dir "$tmp/l" --bin-dir "$tmp/b"
+man="$tmp/tools/inject_tool/v0.1.0.toml"
+ntool=$(grep -c '^\[tool\]' "$man" 2>/dev/null)
+permline=$(grep '^permissions' "$man" 2>/dev/null)
+if [ "$rc" = 0 ] && [ "$ntool" = 1 ] \
+   && [ "$permline" = 'permissions = ["fs.read workspace"]' ]; then
+    ok "finding 1: [project].out injection escaped -- one [tool] table, only the declared permission"
+else
+    fail "finding 1 injection" "exit $rc; [tool]x$ntool; perms=[$permline]; $(cat "$man" 2>&1)"
+fi
+# and box-args maps only the declared fs.read, never a --rw for the spliced write
+( cd "$tmp/ws" && PATH="$realpath_env" "$mc" tool box-args "$tmp/tools/inject_tool/v0.1.0/mc.toml" ) > "$tmp/ba3" 2>&1
+if grep -q '^--ro ' "$tmp/ba3" && ! grep -q '^--rw ' "$tmp/ba3"; then
+    ok "finding 1: box-args maps only --ro (the declared fs.read), no injected --rw"
+else
+    fail "finding 1 box-args" "$(cat "$tmp/ba3")"
+fi
+
+# --- finding 2: tool run re-validates the stored permissions ---
+# hand-corrupt the just-installed manifest with an injected `fs.write home/..`
+# (a `..` a valid [[permission]] row could never produce) and run it: refused
+# on every host, before any flag is mapped.
+sed 's|permissions = \["fs.read workspace"\]|permissions = ["fs.read workspace", "fs.write home/../../tmp/pwned"]|' "$man" > "$man.x" && mv "$man.x" "$man"
+run tool run inject_tool --libs-dir "$tmp/l" --bin-dir "$tmp/b"
+if [ "$rc" != 0 ] && grep -q "the install manifest carries an invalid permission" "$tmp/o"; then
+    ok "finding 2: tool run refuses a manifest with an injected ../ permission ($(grep -o 'invalid permission.*' "$tmp/o" | head -1))"
+else
+    fail "finding 2 re-validation" "exit $rc: $(cat "$tmp/o")"
+fi
+
+# --- finding 3: a version with `..` is refused before it becomes a path ---
+cat > "$tmp/reg/index/badver.toml" <<EOF
+[package]
+name = "badver"
+[[versions]]
+version     = "../../../../tmp/evilver"
+url         = "$tmp/reg/hello_tool-0.1.0.tar.gz"
+strip       = 1
+sha256      = "$H"
+kind        = "tool"
+bin         = "badver"
+EOF
+rm -rf /tmp/evilver
+run tool install "badver@../../../../tmp/evilver" --registry "$reg" --libs-dir "$tmp/l" --bin-dir "$tmp/b"
+if [ "$rc" != 0 ] && grep -q "not a usable version" "$tmp/o" && [ ! -e /tmp/evilver ]; then
+    ok "finding 3: a version with .. is refused before staging ($(grep -o '[^ ]*: not a usable version' "$tmp/o" | head -1))"
+else
+    fail "finding 3 version" "exit $rc: $(cat "$tmp/o"); staged=$( [ -e /tmp/evilver ] && echo yes || echo no)"
+fi
+
+# --- finding 4: a permission set past the box's per-kind ceilings is refused ---
+# at install, before the user accepts -- not at every later `mc tool run`.
+rows=""
+i=0
+while [ "$i" -lt 20 ]; do rows="$rows\"fs.read workspace/d$i\", "; i=$((i + 1)); done
+cat > "$tmp/reg/index/bigperm.toml" <<EOF
+[package]
+name = "bigperm"
+[[versions]]
+version     = "0.1.0"
+url         = "$tmp/reg/hello_tool-0.1.0.tar.gz"
+strip       = 1
+sha256      = "$H"
+kind        = "tool"
+bin         = "bigperm"
+permissions = [$(printf '%s' "$rows" | sed 's/, $//')]
+EOF
+run tool install bigperm --yes --registry "$reg" --libs-dir "$tmp/l" --bin-dir "$tmp/b"
+if [ "$rc" != 0 ] && grep -q "too many fs.read permissions for the box" "$tmp/o" \
+   && [ ! -f "$tmp/tools/bigperm/v0.1.0.toml" ]; then
+    ok "finding 4: >16 fs.read refused at install ($(grep -o 'too many.*' "$tmp/o" | head -1))"
+else
+    fail "finding 4 capacity" "exit $rc: $(cat "$tmp/o")"
+fi
+
+# --- finding 5: the (none) row -- a zero-permission tool cannot write ---
+NH=$(PATH="$realpath_env" sh scripts/pkg-hash.sh tests/tool/noperm)
+cp -R tests/tool/noperm "$tmp/stage/noperm_tool-0.1.0"
+( cd "$tmp/stage" && PATH="$realpath_env" tar -czf "$tmp/reg/noperm_tool-0.1.0.tar.gz" noperm_tool-0.1.0 )
+cat > "$tmp/reg/index/noperm_tool.toml" <<EOF
+[package]
+name = "noperm_tool"
+[[versions]]
+version     = "0.1.0"
+url         = "$tmp/reg/noperm_tool-0.1.0.tar.gz"
+strip       = 1
+sha256      = "$NH"
+kind        = "tool"
+bin         = "noperm"
+permissions = []
+EOF
+run tool install noperm_tool --yes --registry "$reg" --libs-dir "$tmp/l" --bin-dir "$tmp/b"
+npm="$tmp/tools/noperm_tool/v0.1.0.toml"
+if [ "$rc" = 0 ] && grep -q '^permissions = \[\]$' "$npm"; then
+    ok "finding 5: a zero-permission tool installs with permissions = []"
+else
+    fail "finding 5 install" "exit $rc: $(cat "$tmp/o"); $(cat "$npm" 2>&1)"
+fi
+# boxed: its install tree is bound read-only and nothing of the user's is bound,
+# so it cannot create a host-visible file (docs/reference/tools.md records that
+# its ephemeral copy-on-write /src cwd remains writable but never touches the
+# host). Only a working sandbox can show it; elsewhere it runs directly.
+if [ "$boxed" = 1 ]; then
+    rm -f "$tmp/ws/created-by-noperm"
+    ( cd "$tmp/ws" && HOME="$tmp/nohome" "$tmp/b/noperm" "$tmp/ws/created-by-noperm" ) > "$tmp/o" 2>&1
+    if [ ! -e "$tmp/ws/created-by-noperm" ]; then
+        ok "finding 5 boxed: a zero-permission tool cannot create a host-visible file"
+    else
+        fail "finding 5 boxed write" "the file was created: $(cat "$tmp/o")"
+    fi
+else
+    skip "finding 5 boxed" "no working sandbox here; the tool runs directly (see docs/reference/tools.md)"
+fi
+
 echo "check-tool: $((total - fails))/$total"
 [ "$fails" -eq 0 ]
