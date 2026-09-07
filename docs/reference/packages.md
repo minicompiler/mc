@@ -460,6 +460,11 @@ with the same layout is a registry too, read in place, which is what a private t
 `git clone` and one line of TOML. A URL registry is fetched one file at a time into
 `<libs>/index/<name>.toml`, the snapshot every later `mc pkg` in that project reads.
 
+Publishing into that server is a website, a GitHub Release and a CI action, none of it in the
+compiler: [guide/27-publishing.md](../guide/27-publishing.md). An account there may hold API
+tokens (`/me` > Tokens, scope `poll` only) with which the CI action polls a repository as the
+account rather than anonymously; the guide's § 7 says what they buy and what they cannot do.
+
 ### Minimal version selection
 
 Go's algorithm (`cmd/go/internal/mvs`), exactly:

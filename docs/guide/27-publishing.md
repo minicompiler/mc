@@ -54,19 +54,19 @@ Two sets of names cannot be registered by an ordinary account:
 
 * **The compiler's own reserved set**, refused wherever a name is read — `[deps]`, `[replace]`,
   `mc pkg add`, `mc pkg check` of an index file: `mc`, every `mc/...` name, `deps`, `build`.
-  `mc` is the compiler's own package (§ 11 below); a taught compiler assembled from a foreign `mc`
+  `mc` is the compiler's own package (§ 12 below); a taught compiler assembled from a foreign `mc`
   would not be the compiler that built it.
 * **The registry's own reserved prefixes**, checked when you register: any name matching `mc*` or
   `minicompiler*` — case-insensitively, and the same after stripping `-`/`_` (so `m-c` and
   `mini_compiler` are caught too) — is reserved for the registry's administrator. A registration
   attempt with such a name is refused at the form with `name reserved for the administrator`. This
-  is how `mc` itself (§ 11) and any `mc*`-looking package stay official; a server policy is allowed
+  is how `mc` itself (§ 12) and any `mc*`-looking package stay official; a server policy is allowed
   to be stricter than the language's own name rule, never looser.
 
 Beyond the reserved names, a name is a first-come resource: **first registration wins**, by the
 exact `(host, owner, repo)` triple of the git URL — `.../geo`, `.../geo.git` and `.../GEO` are one
 repository and cannot register twice. If somebody else already holds the name you want, the
-remedy is `transfer` (§ 8) — a name never changes; who owns it can.
+remedy is `transfer` (§ 9) — a name never changes; who owns it can.
 
 ## 3. Registering, once, on `/me`
 
@@ -81,7 +81,7 @@ remedy is `transfer` (§ 8) — a name never changes; who owns it can.
 
    | check | refusal |
    |---|---|
-   | the URL is `https://github.com/<owner>/<repo>` (GitHub only, for now — § 9) | `only public GitHub repositories for now` |
+   | the URL is `https://github.com/<owner>/<repo>` (GitHub only, for now — § 10) | `only public GitHub repositories for now` |
    | the triple is not already registered | `that repository is already registered` |
    | the repository's `mc.toml`, at its default branch, can be read over the raw content endpoint | `the repository has no readable mc.toml at its default branch` (this is also what a *private* repository looks like: nothing else checks visibility separately) |
    | the file parses and has a `[package].name` | `the repository's mc.toml could not be read` / `the repository's mc.toml has no [package].name` |
@@ -113,7 +113,7 @@ The archive the registry serves is still the tag's own source archive
   `mc pkg add`/`mc update` without naming it explicitly (`mc pkg add name@1.2.0-rc.1`) — the same
   rule [reference/packages.md § 10](../reference/packages.md#versions-and-pre-releases) states for
   consuming one.
-* A **published row never changes** except to gain `yanked = true` (§ 6). There is no way to edit
+* A **published row never changes** except to gain `yanked = true` (§ 8). There is no way to edit
   or re-publish a version once it exists; a mistake is a new tag and a new Release.
 
 ## 5. What the validator does, and what the report shows
@@ -131,7 +131,7 @@ from CI, from the schedule, or from an administrator:
 3. On success: a deterministic archive is built from the checkout, the row is inserted, and
    `index/<name>.toml` is regenerated and written atomically. On any refusal: nothing is
    published, and the report — the sandbox's named `refused:`/`killed:` line, or the compiler's own
-   diagnostic — is what you (and CI, § 7) read back; the same commit is not retried automatically
+   diagnostic — is what you (and CI, § 6) read back; the same commit is not retried automatically
    until you ask for a poll again.
 
 The report is public at `<registry>/jobs/<id>` (plain text, `state: queued|running|done|failed`)
@@ -190,9 +190,9 @@ Docker, no third-party action) does exactly this:
 
 **Inputs**: `registry` (default `https://minicompiler.dev`), `index` (default
 `https://pkg.minicompiler.dev`), `repository` (default `${{ github.repository }}`), `tag`, `wait`
-(default `true`), `timeout` (default `900`), and `token` — accepted today, sent nowhere: it is
-reserved for a later account-scoped API token that will let CI perform a *first* registration
-too. Until then, registering (§ 3) is always a person, once, on `/me`.
+(default `true`), `timeout` (default `900`), and `token`, optional: an account token from `/me`,
+with which the same poll runs as you (§ 7). With or without one, registering (§ 3) is a person,
+once, on `/me`.
 
 `@v1` is a moving tag, the same convention GitHub's own actions use; pin a commit SHA instead if
 you want the exact bytes you reviewed to never move under you.
@@ -202,7 +202,61 @@ repository, sixty an hour per source address, three hundred an hour in all) and 
 register a package nor name one — the reserved prefixes and "first registration wins" are
 untouched by this road.
 
-## 7. `yank`, and what it does not do
+## 7. Per-account tokens
+
+The poll in § 6 has no account: the registry validates a registered repository whoever asked, and
+that is enough for the ordinary release. What an anonymous poll cannot be is *yours*. Two things
+follow from that. A `(tag, commit)` the box already refused is not retried until a **person**
+asks (§ 5): an anonymous poll steps over it, so a `pending` repository whose first validation
+failed, or a Release you re-created on the same commit after a transient refusal, waits for
+somebody to press "Poll now" on `/me`. And an anonymous job is queued behind every person's job
+and charged to the shared buckets, so when a repository or an address is at its ceiling the poll
+is the scheduler's problem and not something you can ask for again.
+
+An **account token** makes the CI poll a person's poll: it is recorded as your request
+(`origin = 'user'`, `requested_by` = your account), it is claimed ahead of the anonymous queue, it
+overrides the "already refused for this commit" memory exactly as the button on `/me` does, and
+it is charged to your own budget first (sixty an hour per account, then the three shared ones).
+The registry checks that the account behind the token **owns the repository** and polls the
+packages of it that are yours.
+
+**Creating one.** On <https://minicompiler.dev/me>, under **Tokens**: a name, an optional life in
+days, and the value is shown **once**, on the page the form answers, and never again. It is
+`mcr_` + 43 characters of base64url, 47 bytes, the `mcr_` prefix being there so that a token in a
+paste or a log is recognisable as this registry's credential (and so a secret scanner can flag
+it). The page keeps the first ten characters beside the name so you can tell tokens apart. An
+account holds at most **50 live tokens**; past that the form answers `At most 50 tokens per
+account: revoke one first.`, and revoking one on the same page makes room. Revoke a token there
+too when a workflow stops needing it, or when it may have leaked.
+
+**Passing it to the action.** Store the value as a repository secret (Settings > Secrets and
+variables > Actions), say `MC_REGISTRY_TOKEN`, and add one line to the step of § 6:
+
+```yaml
+      - uses: minicompiler/register-action@v1
+        with:
+          tag: ${{ inputs.tag || github.event.release.tag_name }}
+          token: ${{ secrets.MC_REGISTRY_TOKEN }}
+```
+
+The action sends it as `Authorization: Bearer <token>` on `POST /poll`, handed to `curl` as a
+config line on its standard input, never on a command line and never printed; it masks the value
+in the job log first thing and refuses, without echoing it, a value that is not a token by shape.
+The registry's answers: `401` (`WWW-Authenticate: Bearer`) for a token that was revoked, has
+expired, or was never one, which the action reports as `the token was refused (revoked, expired,
+or not a token)`; `403` when the token's account does not own the repository, or still has a
+registry document to accept (§ 3), which the action reports in those words. Without the input the
+request is byte for byte the anonymous one of § 6.
+
+**What it cannot do.** A token's only scope is `poll`. It cannot register a repository (§ 3 stays
+a person, once), it cannot `yank` (§ 8), it cannot report, transfer, export or erase, and it
+opens no session: nothing a person does on `/me` can be done with it. That is deliberate, and it
+is why a leaked token is a nuisance and not a loss: the worst it can do is queue a bounded
+validation of a repository you own, sixty times an hour. Wider scopes wait until there is a
+reason to carry the risk; the column that would hold them exists so that adding one is a value
+and not a migration.
+
+## 8. `yank`, and what it does not do
 
 ```console
 $ curl -X POST https://minicompiler.dev/repos/<id>/versions/<version>/yank ...
@@ -213,13 +267,13 @@ version `yanked = true` in the index: `mc pkg add` and `mc update` stop choosing
 **in** the index and its archive stays served — a lock that already pins it keeps working. This is
 Go's `retract`, not a deletion.
 
-**There is no unyank.** A leaked or over-broadly-scoped credential can yank every version an
-account owns and that cannot be undone by the same road — the mitigation (an API token scoped
-without `yank`) is part of the account-token feature not yet shipped (§ 6's `token` input).
+**There is no unyank.** A leaked session could yank every version an account owns and that
+cannot be undone by the same road — which is why an account token (§ 7) carries no `yank` scope:
+the credential a workflow holds can queue a poll and nothing irreversible.
 `delist` — stronger, removing a version from the index and the page entirely — is reserved for a
 legal order and is an administrator action, never self-service.
 
-## 8. Reporting a problem, and the policies
+## 9. Reporting a problem, and the policies
 
 Every package page has a report form (logged in, rate-limited): abuse, malware, a licence
 dispute, a name takeover claim, a privacy concern, or something else — it goes into a moderation
@@ -236,15 +290,16 @@ erasure keeps your published versions published (a lock somewhere depends on the
 moderation record of reports made *about* your packages, but scrubs the text of reports **you**
 filed and every personally identifying field.
 
-## 9. What is not built yet
+## 10. What is not built yet
 
 * **GitHub only.** The host allowlist admits `github.com` alone; other forges (GitLab, Bitbucket)
   are a stated intention for after `mc`'s 1.0.0, one more allowlist entry and one more
   "does this tag have a release" question each.
-* **No account-scoped API tokens yet** — that is what turns on the action's `token` input and
-  what would let CI perform a first registration and a scoped yank.
+* **A first registration from CI.** An account token (§ 7) is scoped to `poll` alone, so
+  registering (§ 3) is still a person, once, on `/me`; a `register` scope, and a scoped `yank`,
+  are a later decision, taken only when there is a reason to carry the risk.
 
-## 10. Consuming what you (or anyone) published
+## 11. Consuming what you (or anyone) published
 
 This is [Using a package](25-packages.md)'s subject, in full — `[deps]`, `mc pkg sync`,
 `mc.lock`, the tree hash, vendoring — and does not change once your package is registered:
@@ -285,7 +340,7 @@ url = "https://pkg.example.com"
 `mc pkg check` — what the registry itself runs to validate an index row — and every other `mc pkg`
 subcommand take `--registry`/`[registry].url` the same way.
 
-## 11. The owner's own repository does this
+## 12. The owner's own repository does this
 
 `minicompiler/mc` — this repository — is a package too, and it is what the release workflow
 publishes on every tag. Its root [`mc.toml`](../../mc.toml) carries:
