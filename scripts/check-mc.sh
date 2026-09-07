@@ -21,6 +21,23 @@ fi
 mkdir -p build/tests-mc
 fails=0
 total=0
+skips=0
+
+# M49: the two-level `// skip-<os>:` / `// skip-<arch>:` header every other
+# runner already honours (scripts/test-linux.sh, scripts/test-windows.sh). It
+# was not needed here while tests/mc/ held only portable cases; 100-opt-opcode
+# writes an AArch64 word by hand, so on an x86_64 host it is four bytes of
+# garbage and the test segfaults -- which is what its header says and what
+# tests/031-opcode.mc has said since M17 step B. The pair comes from the
+# COMPILER's own answer, so a compiler cross-built for another host is not
+# asked to run its tests here at all.
+host_os=$("$mc" --host 2>/dev/null | sed -n 's|^os ||p')
+host_arch=$("$mc" --host 2>/dev/null | sed -n 's|^arch ||p')
+skip_reason() {
+    r=$(sed -n "s|^// skip-$host_os: *||p" "$1" | head -1)
+    [ -n "$r" ] || r=$(sed -n "s|^// skip-$host_arch: *||p" "$1" | head -1)
+    printf '%s' "$r"
+}
 
 # M38: on Windows a program that is not called *.exe cannot be launched.
 hostexe=""
@@ -29,6 +46,12 @@ case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) hostexe=".exe" ;; esac
 for f in tests/mc/*.mc; do
     [ -f "$f" ] || continue
     name=$(basename "$f" .mc)
+    why=$(skip_reason "$f")
+    if [ -n "$why" ]; then
+        echo "skip $name — $why"
+        skips=$((skips + 1))
+        continue
+    fi
     total=$((total + 1))
     obj="build/tests-mc/$name.o"
     exe="build/tests-mc/$name$hostexe"
@@ -135,5 +158,9 @@ else
 fi
 if [ "$long_ok" = "1" ]; then echo "ok long-list (150000 elements)"; else fails=$((fails + 1)); fi
 
-echo "$((total - fails))/$total mc-only tests passed"
+if [ "$skips" != 0 ]; then
+    echo "$((total - fails))/$total mc-only tests passed ($skips skipped on $host_os/$host_arch)"
+else
+    echo "$((total - fails))/$total mc-only tests passed"
+fi
 [ "$fails" -eq 0 ]

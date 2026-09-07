@@ -233,7 +233,11 @@ void fa_save_live(i64 depth) {
         if (fa_is_float(walk_depth_type(d))) {
             if (fa_in_reg(d)) em(FI_STR_D, FREG_BASE + d, REG_FRAME, 0 - slot_depth(d));
         } else {
-            if (in_reg(d)) em(I_STR, REG_BASE + d, REG_FRAME, 0 - slot_depth(d));
+            // M49 (contract version 5): the integer half reads the depth through
+            // val_reg, never as REG_BASE + d. With the allocator on, the value of
+            // a depth may live in a callee-saved register the walker handed out,
+            // and REG_BASE + d is then a stale x9.
+            if (in_reg(d)) em(I_STR, val_reg(d, REG_S1), REG_FRAME, 0 - slot_depth(d));
         }
         d = d + 1;
     }
@@ -246,6 +250,10 @@ void fa_restore_live(i64 depth) {
         if (fa_is_float(walk_depth_type(d))) {
             if (fa_in_reg(d)) em(FI_LDR_D, FREG_BASE + d, REG_FRAME, 0 - slot_depth(d));
         } else {
+            // M49: the counterpart of the save above. This one WRITES the depth's
+            // own register, so it stays REG_BASE + d -- an aliased depth still
+            // answers its allocatable register through val_reg, and the value the
+            // save wrote into the slot is the same value either way.
             if (in_reg(d)) em(I_LDR, REG_BASE + d, REG_FRAME, 0 - slot_depth(d));
         }
         d = d + 1;
@@ -293,6 +301,30 @@ void fa_param(i64 ty, i64 i, i64 off) {
     em(I_LDR, REG_S1, REG_FP, 16 + fa_pstk * 8);
     em(mem_op(ty, 1), REG_S1, REG_FRAME, 0 - off);
     fa_pstk = fa_pstk + 1;
+}
+
+// M49, contract version 5: a machine that overrides MTASK_PARAM MUST override
+// MTASK_PARAM_REG, and this is why. The bundled a64_param_reg reads argument `i`
+// out of `x_i`, because on the integer-only ABI the source index IS the register
+// number. Here it is not: fa_param walks its own NGRN/NSRN/stack counters, so a
+// float in position 0 and an integer in position 1 make `i` and the register
+// disagree from the second parameter on. Inheriting the bundled slot put the
+// WRONG REGISTER in the local -- measured, tests/float/019-putf64.mc printed
+// `0. -1.3 0.4` where it prints `3.500 -1.25 0`.
+//
+// The type is never a float: the walker only ever allocates a TK_INT or TK_SINT
+// (docs/specs/M49.md § 4.1), so this is the integer arm of fa_param with a
+// register instead of a frame slot as its destination.
+void fa_param_reg(i64 ty, i64 i, i64 r) {
+    if (fa_is_float(ty)) die("float parameter in an allocatable register");
+    if (fa_ngrn < REG_ARGS) {
+        e2(I_MOV, REG_ALLOC + r, fa_ngrn);
+        fa_ngrn = fa_ngrn + 1;
+    } else {
+        em(I_LDR, REG_ALLOC + r, REG_FP, 16 + fa_pstk * 8);
+        fa_pstk = fa_pstk + 1;
+    }
+    gen_cast(REG_ALLOC + r, ty);                 // the register holds the extended eight bytes
 }
 
 // a float constant is its BIT PATTERN, materialised into an integer scratch and
@@ -458,9 +490,8 @@ void fa_args(i64 dbase, i64 na) {
             if (fa_is_float(ty)) {
                 em(FI_STR_D, fa_val_reg(d, FREG_S1), REG_SP, nstk * 8);
             } else {
-                i64 r = REG_S1;
-                if (in_reg(d)) r = REG_BASE + d;
-                else           em(I_LDR, REG_S1, REG_FRAME, 0 - slot_depth(d));
+                // M49: val_reg, for the reason fa_save_live gives above
+                i64 r = val_reg(d, REG_S1);
                 em(I_STR, r, REG_SP, nstk * 8);
             }
             nstk = nstk + 1;
@@ -670,6 +701,7 @@ void machine_arm64_float_init() {
     }
     machine_slot(fa_tab, MTASK_PROLOGUE,     &fa_prologue);
     machine_slot(fa_tab, MTASK_PARAM,        &fa_param);
+    machine_slot(fa_tab, MTASK_PARAM_REG,    &fa_param_reg);
     machine_slot(fa_tab, MTASK_CONST,        &fa_const);
     machine_slot(fa_tab, MTASK_BIN,          &fa_bin);
     machine_slot(fa_tab, MTASK_CMP,          &fa_cmp);

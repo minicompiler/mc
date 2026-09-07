@@ -292,15 +292,32 @@ L1:
 | `x8` | scratch, used only for the quotient of `%` (`REG_TMP`) |
 | `x9..x15` | expression depths 0..6 (`REG_BASE 9`, `REG_MAX 6`) |
 | `x16`, `x17` | spill scratch (`REG_S1`/`REG_S2`), and `x16` carries the pointer of `callp` |
-| `x18..x28` | **never written, never read** |
+| `x18` | **never written, never read** — Apple's platform register, and the allocator never hands it out |
+| `x19..x28` | **never written, never read on the plain road**; with `--opt=1`, one per allocated local, saved in the prologue and restored before the epilogue (M49) |
 | `x29`, `x30` | frame pointer and link register, saved and restored by every function |
 | `sp` | the frame; locals live at `[sp, #k]` |
 
 Depth 7 and beyond spills to the frame through `x16`/`x17`. `x18..x28` are the callee-saved half of
-the ABI that generated code never uses: `--dump-asm src/mc.mc` is 58 355 lines and mentions none of
-them. A taught runtime may therefore keep state in `x19..x28` across generated code — a coroutine
-switch, a thread pointer — and a future register allocator that spent them would silently break
-every such runtime, which is exactly why the claim is written down and tested.
+the ABI, and on the **plain road** generated code never uses any of them: `--dump-asm src/mc.mc` is
+127 113 lines and mentions none of them.
+
+**With `--opt=1` (M49) that changes for `x19..x28`, and only in the way a C caller already allows.**
+The register allocator gives one of them to a local or a parameter for the length of a function; the
+prologue writes each one it uses into an ordinary frame slot right after the frame reserve, and the
+epilogue reads it back just before `add sp`, so a caller never sees one of its own callee-saved
+registers change. The frame record stays unconditional, the epilogue is still `add sp` / `ldp` /
+`ret`, and `x0` is still untouched by it — every claim of this section holds on both roads.
+`scripts/check-surface.sh` asserts it per function over the whole of `src/mc.mc`: 1787 functions,
+3011 allocated registers, every one saved and restored, and `x18` named nowhere.
+
+The one sentence that is **withdrawn for `--opt=1`** is the old permission to keep runtime state in
+`x19..x28` across generated code — a coroutine switch, a thread pointer. It still holds on the plain
+road, which is the default; a runtime that relies on it must not be compiled with `--opt=1`, and
+nothing in this tree does (grep over `*.mc`/`*.lx`: no file under `lib/` or `examples/` names
+`x19..x28`, and the two float machines use `v16..v23`). `#opcode`, `emit()` and `reloc()` are the
+other half of the same rule and are handled by exclusion: a function containing one is never
+allocated at all, so its hand-written words keep every register they name
+([machine.md](machine.md) § 5, `docs/specs/M49.md` § 4.1).
 
 ### A narrow result is extended by the CALLER, and by the callee too (M45)
 

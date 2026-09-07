@@ -206,7 +206,56 @@ still unconditional, the epilogue is still `add sp` / `ldp` / `ret`, and a stack
 debugger finds a saved register at a fixed `[sp, #k]`.
 
 The walker asks for the count through `i64 walk_reg_count()`, which answers **0 whenever
-`walk_opt()` is 0**: an optimizer that is off asks nothing of the machine at all.
+`walk_opt()` is 0**: an optimizer that is off asks nothing of the machine at all. A machine that
+answers a non-zero count and leaves one of the other five null is a bug in that machine, and it is
+said so: `mc: machine answers MTASK_REG_COUNT but leaves a version 5 slot empty`.
+
+**Two obligations come with the version, and both were found by running the code.**
+
+1. **Read a depth through `val_reg(d, scratch)`, never as `REG_BASE + d`.** Since version 5 the
+   value of a depth may live in an allocatable register rather than in the depth's own — that is
+   what `MTASK_REG_LOAD` records, and it emits no instruction at all — so `val_reg` is the only
+   function that knows where it is. A derived machine that computes the register itself reads a
+   stale `x9`. `lib/machine_arm64_float.mc` did exactly that in its own `fa_save_live` and in its
+   stack-argument path and was corrected with this version; `lib/machine_x86_64_float.mc` has the
+   same three lines and will need the same correction when the x86-64 allocator lands (D2).
+2. **A machine that overrides `MTASK_PARAM` MUST override `MTASK_PARAM_REG`.** The bundled
+   `a64_param_reg` reads argument `i` out of `x_i`, because on an integer-only ABI the source index
+   *is* the register number. On a float ABI it is not — `fa_param` walks its own NGRN/NSRN/stack
+   counters, so a float in position 0 and an integer in position 1 make `i` and the register
+   disagree from the second parameter on. Inheriting the bundled slot put the wrong register in the
+   local, measured: `tests/float/019-putf64.mc` printed `0. -1.3 0.4` where it prints
+   `3.500 -1.25 0`. `lib/machine_arm64_float.mc` and `lib/i128.mc` (whose own counter skips a
+   register for the even-pair rule) each carry a `*_param_reg` of their own for this reason.
+
+### What the arm64 allocator does
+
+`a64_reg_count()` answers **10**: `x19..x28`, with `r` meaning `x(19 + r)`. `x18` is never
+allocated. The saves and restores are plain `str`/`ldr` into frame slots, so the allocator adds **no
+instruction form at all** — measured, the set of distinct mnemonics in `src/mc.mc`'s object is the
+same on both roads, and the 2284 distinct instructions of the optimized object re-assemble byte for
+byte under `llvm-mc -triple=aarch64-apple-macos`.
+
+Two things make an allocated local usable as an operand directly, and both are private to the
+machine:
+
+* **the alias table.** `MTASK_REG_LOAD(d, r)` emits nothing and records `dalias[d] = 19 + r`;
+  `val_reg(d, …)` answers that register, and every task that produces a NEW value at `d` clears the
+  entry (one line in `dst_done`, which every value-producing task already ends with). `save_live`
+  and `restore_live` skip an aliased depth entirely: its value is in a register the callee is
+  required to preserve, so the frame round trip around a call is dead work. Aliases are cleared at
+  every `MTASK_LABEL` — a control-flow merge, where a value carried in an alias could have arrived
+  by another path — and after every `MTASK_REG_STORE`.
+* **the store rewrite.** `MTASK_REG_STORE(ty, 0, r)` looks at the instruction just emitted; if it
+  WROTE the depth's own register (a whitelist: the eleven three-operand forms, `msub`, `mvn`, `neg`,
+  `cset`, the three immediate forms, `mov`/`mov w`, the three sign extensions and the load half of
+  the memory table — never a store, whose `rd` is its SOURCE, and never `movz`/`movk`, which come in
+  chains of up to four writing the same register), its destination is retargeted at the local's
+  register and no `mov` is emitted. That is what makes `x = x * C + K` end in `add x19, x9, x10` and
+  `i = i + 1` in `add x21, x21, x10`.
+
+Measured on `bench/mc/bench.mc`: the `mix` loop body goes from 50 instructions per iteration to 24,
+with no memory traffic at all, and the whole workload from 1.157 s to 0.749 s.
 
 The operator vocabulary the tasks speak:
 

@@ -117,6 +117,46 @@ void pr_ret(i64 d)                     { pr_task(); pr_d(d); callp(pr_of(MTASK_R
 void pr_jz(i64 d, i64 l)               { pr_task(); pr_d(d); callp(pr_of(MTASK_JZ), d, l); }
 void pr_jnz(i64 d, i64 l)              { pr_task(); pr_d(d); callp(pr_of(MTASK_JNZ), d, l); }
 
+// ---- M49: the six version 5 slots ------------------------------------------
+// Two claims, and both are wrong code rather than a diagnostic if they fail.
+//
+//   1. ON THE PLAIN ROAD NOT ONE OF THEM IS EVER CALLED. `--opt=0` is the
+//      reference every determinism gate compares against, and the cheapest way
+//      to be sure the allocator is inert is to have a machine say so out loud.
+//   2. Every MTASK_REG_SAVE has its MTASK_REG_RESTORE in the same function, and
+//      the register index is inside 0..count-1. A save without a restore hands
+//      a caller its callee-saved register back changed -- the one failure the
+//      dump-level assertion in scripts/check-surface.sh also looks for, checked
+//      here from the other side, while the instructions are being chosen.
+i64 pr_regs = 0;                      // MTASK_REG_* calls seen
+i64 pr_open = 0;                      // saves not yet matched by a restore
+
+void pr_v5(i64 r) {
+    pr_regs = pr_regs + 1;
+    if (walk_opt() == 0) pr_bad("a version 5 slot on the plain road: register", r);
+    if (r < 0 || r >= callp(pr_of(MTASK_REG_COUNT))) pr_bad("allocatable register out of range:", r);
+}
+
+void pr_prologue() {
+    if (pr_open) pr_bad("a function ended with unrestored registers:", pr_open);
+    pr_open = 0;
+    callp(pr_of(MTASK_PROLOGUE));
+}
+void pr_epilogue() {
+    if (pr_open) pr_bad("registers saved and not restored:", pr_open);
+    callp(pr_of(MTASK_EPILOGUE));
+}
+void pr_reg_load(i64 d, i64 r)          { pr_task(); pr_d(d); pr_v5(r);
+                                          callp(pr_of(MTASK_REG_LOAD), d, r); }
+void pr_reg_store(i64 ty, i64 d, i64 r) { pr_task(); pr_d(d); pr_v5(r);
+                                          callp(pr_of(MTASK_REG_STORE), ty, d, r); }
+void pr_reg_save(i64 r, i64 off)        { pr_v5(r); pr_open = pr_open + 1;
+                                          callp(pr_of(MTASK_REG_SAVE), r, off); }
+void pr_reg_restore(i64 r, i64 off)     { pr_v5(r); pr_open = pr_open - 1;
+                                          callp(pr_of(MTASK_REG_RESTORE), r, off); }
+void pr_param_reg(i64 ty, i64 i, i64 r) { pr_v5(r);
+                                          callp(pr_of(MTASK_PARAM_REG), ty, i, r); }
+
 void pr_init() {
     pr_tab  = xalloc(MTASK_COUNT * 8);
     pr_orig = xalloc(MTASK_COUNT * 8);
@@ -147,6 +187,13 @@ void pr_init() {
     machine_slot(pr_tab, MTASK_RET,          &pr_ret);
     machine_slot(pr_tab, MTASK_JZ,           &pr_jz);
     machine_slot(pr_tab, MTASK_JNZ,          &pr_jnz);
+    machine_slot(pr_tab, MTASK_PROLOGUE,     &pr_prologue);
+    machine_slot(pr_tab, MTASK_EPILOGUE,     &pr_epilogue);
+    machine_slot(pr_tab, MTASK_REG_LOAD,     &pr_reg_load);
+    machine_slot(pr_tab, MTASK_REG_STORE,    &pr_reg_store);
+    machine_slot(pr_tab, MTASK_REG_SAVE,     &pr_reg_save);
+    machine_slot(pr_tab, MTASK_REG_RESTORE,  &pr_reg_restore);
+    machine_slot(pr_tab, MTASK_PARAM_REG,    &pr_param_reg);
     machine("arm64-probe", pr_tab);
 }
 
@@ -155,7 +202,9 @@ void pr_report() {
     out_num(2, pr_tasks);
     out_str(2, " tasks, ");
     out_num(2, pr_depths);
-    out_str(2, " depths\n");
+    out_str(2, " depths, ");
+    out_num(2, pr_regs);
+    out_str(2, " v5 slot calls\n");
 }
 
 // the same three calls backend_macho makes, with the probe machine in effect

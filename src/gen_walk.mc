@@ -169,7 +169,11 @@ uptr mtask_name(i64 t) {
 #define LOC_TYPE  8
 #define LOC_OFF  16
 #define LOC_NELEM 24
-#define LOC_SIZE 32
+// M49: the allocatable register this local lives in, -1 = none. A local with a
+// register has NO frame slot (LOC_OFF is 0 and nothing reads it), which is why
+// every reader tests this field FIRST.
+#define LOC_REG  32
+#define LOC_SIZE 40
 
 // ---- StrEnt: literal already emitted in __cstring, to deduplicate by content ----
 #define STR_BYTES 0
@@ -294,6 +298,8 @@ void set_loc_name(uptr e, uptr v)  { st64(e + LOC_NAME, v); }
 void set_loc_type(uptr e, i64 v)   { st64(e + LOC_TYPE, v); }
 void set_loc_off(uptr e, i64 v)    { st64(e + LOC_OFF, v); }
 void set_loc_nelem(uptr e, i64 v)  { st64(e + LOC_NELEM, v); }
+i64  loc_reg(uptr e)   { return ld64(e + LOC_REG); }
+void set_loc_reg(uptr e, i64 v)    { st64(e + LOC_REG, v); }
 
 // ---- StrEnt accessors ----
 uptr ste_at(i64 i)     { return strs + i * STR_SIZE; }
@@ -527,6 +533,7 @@ void local_add(uptr name, i64 type, i64 off, i64 nelem) {
     set_loc_type(e, type);
     set_loc_off(e, off);
     set_loc_nelem(e, nelem);
+    set_loc_reg(e, 0 - 1);                       // M49: in memory unless gen_func says otherwise
     nlocals = nlocals + 1;
 }
 
@@ -685,6 +692,228 @@ i64 bin_op(i64 op, i64 sgn) {
     return -1;
 }
 
+// ---- M49: the register allocator's pre-pass ---------------------------------
+// One walk over a function's body, in node order, BEFORE a single instruction
+// is emitted. It answers one question per declaration: is this local or
+// parameter worth a callee-saved register for the length of the function? The
+// answer goes into the resolver's side table (RES_REG, keyed by the DECLARING
+// node) and gen_func reads it back.
+//
+// Everything here is deterministic by construction (docs/determinism.md rules 1
+// and 2): candidates are kept in DECLARATION order, the score is an integer,
+// and selection is "take the highest score not yet taken, first in declaration
+// order on a tie". No hashing, no sorting, no pointer ever compared.
+//
+// State is ONE arena record with a fixed inline width, and that width is a
+// CAPACITY, not a ceiling on correctness: a function with more than OPT_MAX
+// locals in scope is simply left alone (`bad`), and a candidate past OPT_MAX is
+// not considered. Either way the function still compiles, on the plain road's
+// rules.
+#define OPT_MAX   128
+#define OPT_N       0                 // candidates found
+#define OPT_NREG    8                 // registers allocated in this function
+#define OPT_BAD    16                 // 1 = this function is excluded entirely
+#define OPT_DEPTH  24                 // loop nesting, during the scan
+#define OPT_NLOC   32                 // locals in scope, during the scan
+#define OPT_STACK  40                 // OPT_MAX declaring nodes, by local index
+#define OPT_NODE 1064                 // OPT_STACK + OPT_MAX * 8
+#define OPT_SCORE 2088                // OPT_NODE  + OPT_MAX * 8
+#define OPT_SAVE  3112                // OPT_SCORE + OPT_MAX * 8; 16 frame slots
+#define OPT_SIZE  3240
+
+uptr opt_state = 0;                   // the one global the optimizer costs
+
+uptr opt_rec() {
+    if (opt_state == 0) {
+        opt_state = xalloc(OPT_SIZE);
+        mem_zero(opt_state, OPT_SIZE);
+    }
+    return opt_state;
+}
+
+i64 opt_nreg()          { return ld64(opt_rec() + OPT_NREG); }
+i64 opt_save_at(i64 r)  { return ld64(opt_rec() + OPT_SAVE + r * 8); }
+
+// 8^depth, capped at 8^3: a use inside three loops already outweighs anything
+// a straight-line function can accumulate, and the cap keeps the score small
+// enough that no sum can overflow.
+i64 opt_weight() {
+    i64 d = ld64(opt_rec() + OPT_DEPTH);
+    if (d <= 0) return 1;
+    if (d == 1) return 8;
+    if (d == 2) return 64;
+    return 512;
+}
+
+// a scalar of an integer kind, not an array, whose address is never taken
+i64 opt_eligible(i64 ty, i64 nelem, i64 nd) {
+    if (nelem) return 0;                         // an array IS its address
+    if (res_addr_taken(nd)) return 0;            // `&x` somewhere in this function
+    i64 k = type_kind(ty);
+    if (k != TK_INT && k != TK_SINT) return 0;   // a float, a wide or an opaque stays in memory
+    return type_width(ty) <= 8;
+}
+
+i64 opt_find(i64 nd) {
+    uptr r = opt_rec();
+    i64 i = 0;
+    loop {
+        if (i >= ld64(r + OPT_N)) break;
+        if (ld64(r + OPT_NODE + i * 8) == nd) return i;
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+// one use of the local at index `li`, weighted by the loop depth it sits in
+void opt_use(i64 li) {
+    uptr r = opt_rec();
+    if (li < 0 || li >= OPT_MAX) return;
+    i64 k = opt_find(ld64(r + OPT_STACK + li * 8));
+    if (k < 0) return;
+    st64(r + OPT_SCORE + k * 8, ld64(r + OPT_SCORE + k * 8) + opt_weight());
+}
+
+// declares `nd` at the next local index, replaying exactly the push/pop
+// res_func and gen_func do, and considers it as a candidate
+void opt_decl(i64 nd, i64 ty, i64 nelem, i64 init) {
+    uptr r = opt_rec();
+    i64 li = ld64(r + OPT_NLOC);
+    if (li >= OPT_MAX) { st64(r + OPT_BAD, 1); return; }
+    st64(r + OPT_STACK + li * 8, nd);
+    st64(r + OPT_NLOC, li + 1);
+    if (!opt_eligible(ty, nelem, nd)) return;
+    i64 k = ld64(r + OPT_N);
+    if (k >= OPT_MAX) return;
+    st64(r + OPT_NODE + k * 8, nd);
+    i64 sc = 0;
+    if (init) sc = opt_weight();                 // the initialiser is a use
+    st64(r + OPT_SCORE + k * 8, sc);
+    st64(r + OPT_N, k + 1);
+}
+
+void opt_expr(i64 n) {
+    if (n == 0) return;
+    i64 k = nd_kind(n);
+    if (k == N_IDENT) {
+        if (res_kind(n) == RK_LOCAL) opt_use(res_decl(n));
+        return;
+    }
+    if (k == N_BINARY) { opt_expr(nd_a(n)); opt_expr(nd_b(n)); return; }
+    if (k == N_UNARY)  { opt_expr(nd_a(n)); return; }
+    if (k == N_CAST)   { opt_expr(nd_a(n)); return; }
+    if (k == N_CALL) {
+        // `#opcode`, emit() and reloc() write words that NAME REGISTERS by hand
+        // (docs/reference/objects.md § 4), so a function containing one is left
+        // alone entirely -- the allocator must not put a local in a register
+        // such a word may be using.
+        i64 rk = res_kind(n);
+        if (rk == RK_OPCODE) { st64(opt_rec() + OPT_BAD, 1); return; }
+        if (rk == RK_INTRIN && (res_decl(n) == IN_EMIT || res_decl(n) == IN_RELOC)) {
+            st64(opt_rec() + OPT_BAD, 1);
+            return;
+        }
+        i64 a = nd_a(n);
+        loop {
+            if (a == 0) break;
+            opt_expr(a);
+            a = nd_next(a);
+        }
+        return;
+    }
+    // N_INT, N_STR and N_ADDR count nothing: a literal has no declaration and
+    // the operand of an `&` is excluded by res_addr_taken before it gets here
+}
+
+void opt_stmt(i64 n) {
+    if (n == 0) return;
+    uptr r = opt_rec();
+    i64 k = nd_kind(n);
+    if (k == N_BLOCK) {
+        i64 mark = ld64(r + OPT_NLOC);           // scope: the names disappear here
+        i64 s = nd_a(n);
+        loop {
+            if (s == 0) break;
+            opt_stmt(s);
+            s = nd_next(s);
+        }
+        st64(r + OPT_NLOC, mark);
+        return;
+    }
+    if (k == N_VAR) {
+        i64 init = 0;
+        if (nd_val(n) == 0 && nd_a(n)) { opt_expr(nd_a(n)); init = 1; }
+        opt_decl(n, nd_type(n), nd_val(n), init);
+        return;
+    }
+    if (k == N_ASSIGN) {
+        opt_expr(nd_a(n));
+        if (res_kind(n) == RK_LOCAL) opt_use(res_decl(n));
+        return;
+    }
+    if (k == N_IF) {
+        opt_expr(nd_a(n));
+        opt_stmt(nd_b(n));
+        opt_stmt(nd_c(n));
+        return;
+    }
+    if (k == N_LOOP) {
+        st64(r + OPT_DEPTH, ld64(r + OPT_DEPTH) + 1);
+        opt_stmt(nd_a(n));
+        st64(r + OPT_DEPTH, ld64(r + OPT_DEPTH) - 1);
+        return;
+    }
+    if (k == N_RETURN)   { opt_expr(nd_a(n)); return; }
+    if (k == N_EXPRSTMT) { opt_expr(nd_a(n)); return; }
+    // N_BREAK and N_CONTINUE name nothing
+}
+
+// the whole pre-pass for one function. With walk_opt() == 0, walk_reg_count()
+// answers 0 and this returns after clearing the record: no node is looked at,
+// no slot is called, and gen_func's three new loops all have zero iterations --
+// which is what makes the plain road byte-identical by construction.
+void opt_scan(i64 f) {
+    uptr r = opt_rec();
+    st64(r + OPT_N, 0);
+    st64(r + OPT_NREG, 0);
+    st64(r + OPT_BAD, 0);
+    st64(r + OPT_DEPTH, 0);
+    st64(r + OPT_NLOC, 0);
+    i64 nr = walk_reg_count();
+    if (nr <= 0) return;
+    if (nr > 16) nr = 16;                        // the width of the save table
+    if (mach_opt(MTASK_REG_LOAD) == 0 || mach_opt(MTASK_REG_STORE) == 0
+        || mach_opt(MTASK_REG_SAVE) == 0 || mach_opt(MTASK_REG_RESTORE) == 0
+        || mach_opt(MTASK_PARAM_REG) == 0)
+        die("machine answers MTASK_REG_COUNT but leaves a version 5 slot empty");
+    i64 p = nd_a(f);
+    loop {
+        if (p == 0) break;
+        opt_decl(p, nd_type(p), 0, 1);           // a parameter arrives initialized
+        p = nd_next(p);
+    }
+    opt_stmt(nd_b(f));
+    if (ld64(r + OPT_BAD)) return;
+    i64 taken = 0;
+    loop {
+        if (taken >= nr) break;
+        i64 best = 0 - 1;
+        i64 bs = 2;                              // the threshold: a score of 3 or more
+        i64 i = 0;
+        loop {
+            if (i >= ld64(r + OPT_N)) break;
+            i64 sc = ld64(r + OPT_SCORE + i * 8);
+            if (sc > bs) { bs = sc; best = i; }  // strictly: the FIRST wins a tie
+            i = i + 1;
+        }
+        if (best < 0) break;
+        st64(r + OPT_SCORE + best * 8, 0 - 1);   // taken
+        set_res_reg(ld64(r + OPT_NODE + best * 8), taken + 1);
+        taken = taken + 1;
+    }
+    st64(r + OPT_NREG, taken);
+}
+
 // ---- expressions ----
 void gen_value(i64 n, i64 depth) {    // where a value is mandatory
     gen_expr(n, depth);
@@ -738,6 +967,10 @@ void gen_binary(i64 n, i64 depth) {
 void gen_ident(i64 n, i64 depth) {
     if (res_kind(n) == RK_LOCAL) {
         uptr e = loc_at(res_decl(n));
+        // M49: a register-resident local, tested first. On the plain road
+        // loc_reg is -1 for every local and the two calls below are the text
+        // this function always had.
+        if (loc_reg(e) >= 0) { callp(mach(MTASK_REG_LOAD), depth, loc_reg(e)); return; }
         if (loc_nelem(e)) callp(mach(MTASK_LOCAL_ADDR), depth, loc_off(e));
         else              callp(mach(MTASK_LOCAL_LOAD), loc_type(e), depth, loc_off(e));
         return;
@@ -952,6 +1185,17 @@ void gen_var(i64 n) {
         return;
     }
     if (nd_a(n)) gen_value(nd_a(n), 0);          // initializer before the name exists
+    // M49: the allocator's answer for THIS declaration. A register-resident
+    // local takes no frame slot at all, so slot_new is not called for it and
+    // the frame of a function whose locals all fit in registers is only the
+    // save area.
+    i64 r = res_reg(n) - 1;
+    if (r >= 0) {
+        local_add(nd_name(n), ty, 0, 0);
+        set_loc_reg(loc_at(nlocals - 1), r);
+        if (nd_a(n)) callp(mach(MTASK_REG_STORE), ty, 0, r);
+        return;
+    }
     // M24: the slot is the TYPE's width, not 8. Provably byte-identical for all
     // seven core types -- slot_new rounds (size + 7) & ~7, so 1..8 give the same
     // offset -- and a 16-byte taught type gets 16.
@@ -964,6 +1208,10 @@ void gen_assign(i64 n) {
     gen_value(nd_a(n), 0);
     if (res_kind(n) == RK_LOCAL) {
         uptr e = loc_at(res_decl(n));
+        // M49: MTASK_REG_STORE carries the type, because a register holds the
+        // extended eight bytes and the truncation happens here, at the store,
+        // instead of at every load the way a narrow frame slot does it.
+        if (loc_reg(e) >= 0) { callp(mach(MTASK_REG_STORE), loc_type(e), 0, loc_reg(e)); return; }
         callp(mach(MTASK_LOCAL_STORE), loc_type(e), 0, loc_off(e));
         return;
     }
@@ -1159,11 +1407,39 @@ void gen_func(i64 f, i64 text) {
     nlabels = nlabels + 1;
     i64 lepi = nlabels;
 
+    opt_scan(f);                                  // M49: before a single instruction
+
     callp(mach(MTASK_PROLOGUE));
+    // M49: the saves come BEFORE the parameters, which is a DEVIATION from
+    // docs/specs/M49.md § 4.3's sketch and the one order that can be right --
+    // MTASK_PARAM_REG writes the allocatable register, so saving after it would
+    // save the parameter and hand the caller its register back changed. A save
+    // reads x19..x28 and writes the frame, so it cannot disturb the argument
+    // registers, and the ABI claim "the prologue never writes x0..x7"
+    // (docs/reference/objects.md § 4) holds on this road too. The save area is
+    // ordinary frame slots: the frame record stays unconditional and a stack
+    // walker still finds everything at a fixed [sp, #k].
+    i64 r = 0;
+    loop {
+        if (r >= opt_nreg()) break;
+        i64 soff = slot_new(walk_word());
+        st64(opt_rec() + OPT_SAVE + r * 8, soff);
+        callp(mach(MTASK_REG_SAVE), r, soff);
+        r = r + 1;
+    }
     i64 i = 0;
     i64 p = nd_a(f);
     loop {                                       // params: the ABI registers go to the frame
         if (p == 0) break;
+        i64 pr = res_reg(p) - 1;                 // M49: ...or straight to a register
+        if (pr >= 0) {
+            local_add(nd_name(p), nd_type(p), 0, 0);
+            set_loc_reg(loc_at(nlocals - 1), pr);
+            callp(mach(MTASK_PARAM_REG), nd_type(p), i, pr);
+            i = i + 1;
+            p = nd_next(p);
+            continue;
+        }
         i64 off = slot_new(type_width(nd_type(p)));   // M24, as in gen_var
 
         local_add(nd_name(p), nd_type(p), off, 0);
@@ -1174,6 +1450,16 @@ void gen_func(i64 f, i64 text) {
     gen_stmt(nd_b(f), lepi);
     if (pend_type() >= 0) err_node(pend_node(), "reloc without an immediately following emit");
     callp(mach(MTASK_LABEL), lepi);
+    // M49: the restores, in reverse, between the epilogue label and the frame
+    // release. MTASK_RET has already put the result where the ABI wants it, and
+    // a restore must not touch that register -- which is why this is a task and
+    // not a rewrite of MTASK_EPILOGUE.
+    r = opt_nreg() - 1;
+    loop {
+        if (r < 0) break;
+        callp(mach(MTASK_REG_RESTORE), r, opt_save_at(r));
+        r = r - 1;
+    }
     callp(mach(MTASK_EPILOGUE));
 
     i64 frame = align_up(frame_off, walk_align());  // the stack aligned to the word pair
