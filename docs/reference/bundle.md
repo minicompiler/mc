@@ -178,7 +178,10 @@ and `examples/lang` are.
 Both machines carry the two widths in one table and pick the single-precision row of an operation
 from the double one (`fa_w` on AArch64, `fx_w2` on x86-64): the arithmetic pair, `fneg`/`fabs`/
 `fsqrt`/`fmov`, the compares, the load, the store **and the four conversions** — `scvtf`, `ucvtf`,
-`fcvtzs`, `fcvtzu`. An indirect call returns a float when the cast says so, `(f64) callp(p, x)`
+`fcvtzs`, `fcvtzu`. Which of each pair is emitted is decided by `type_signed`, not by the type id:
+a **signed** narrow integer (`i32`, `i16`, `i8` — M45's `TK_SINT`) converts through `scvtf`/`fcvtzs`
+and an unsigned one (`u8`/`u16`/`u32`) through `ucvtf`/`fcvtzu`, so `(f64)(i32)(-5)` is `-5.0` and not
+`4294967291.0`. An indirect call returns a float when the cast says so, `(f64) callp(p, x)`
 ([language.md](language.md) § 7): `MTASK_CALLP` reads `walk_ret_type()`, which is the type of the
 call node.
 
