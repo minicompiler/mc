@@ -371,6 +371,12 @@ replaced geo: ../geo -- not pinned by mc.lock
 
 Go's `go.sum` omits path-replaced modules for the same reason.
 
+A replaced name also does **not** have to be fetched at its resolved location: the local tree is
+what the build compiles, so the "is not fetched" requirement is skipped for it (a name in `[deps]`
+with **no** `[replace]` is still fetched and hashed as before). The local tree must still be a real
+package — its own `mc.toml` and `[package].files` are read, so a file it does not declare still
+fails the boundary check, and its own `[deps]` still hold.
+
 ## 8. Refusals
 
 Every one of these is exit **2** — "the environment is not ready" — except the two that are about
