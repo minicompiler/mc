@@ -248,6 +248,12 @@ check-build: build/mc1
 check-pkg: build/mc1 build/mc-exe bootstrap
 	scripts/check-pkg.sh build/mc1
 
+# M48 C3: `mc tool` -- install, run boxed, remove, list, box-args. It builds a
+# fixture tool with the compiler under test (a spawn of `mc build`), so it needs
+# a working host compiler; the boxed cases self-skip where there is no sandbox.
+check-tool: $(MC)
+	sh scripts/check-tool.sh $(MC)
+
 # M16: the musl sysroot for linux/aarch64, copied out of alpine:3. Cached: the
 # script does nothing when the four files are already there.
 sysroot-linux:
@@ -636,14 +642,14 @@ check-skipped:
 endif
 
 ifeq ($(HOST),Linux)
-check: budget bootstrap-linux check-lex check-ast check-asm check-obj check-bundle check-mc test-exe check-toml check-sysroots check-limits check-shim test-sandbox check-skipped
+check: budget bootstrap-linux check-lex check-ast check-asm check-obj check-bundle check-mc test-exe check-toml check-tool check-sysroots check-limits check-shim test-sandbox check-skipped
 else ifneq (,$(WINHOST))
 # M38: the Windows subset. Everything not here needs `mc` plus something this
 # host does not have -- the C seed, the Mach-O direct-executable backend, GTK4,
 # Docker or python3 -- and `check-skipped` prints the reason for each one.
 check: budget bootstrap-windows check-lex check-ast check-asm check-obj check-bundle check-mc check-toml check-sysroots check-limits check-skipped
 else
-check: budget test check-lex check-ast check-bundle check-asm check-obj bootstrap check-surface check-opt test-exe check-mc check-standalone check-parts check-toml check-build check-pkg check-sysroots check-stubs check-limits check-minimal test-linux test-linux-x86_64 test-windows test-windows-x86_64 check-examples check-lang check-conc check-desktop check-float check-wide check-kernel check-avr check-docs site check-site check-site-linux test-linux-exe test-linux-x86_64-exe test-sandbox
+check: budget test check-lex check-ast check-bundle check-asm check-obj bootstrap check-surface check-opt test-exe check-mc check-standalone check-parts check-toml check-build check-pkg check-tool check-sysroots check-stubs check-limits check-minimal test-linux test-linux-x86_64 test-windows test-windows-x86_64 check-examples check-lang check-conc check-desktop check-float check-wide check-kernel check-avr check-docs site check-site check-site-linux test-linux-exe test-linux-x86_64-exe test-sandbox
 endif
 
 budget:
@@ -664,7 +670,7 @@ bench: build/mc1
 
 .PHONY: bootstrap-linux mc-linux mc-linux-x86_64 mc-linux-obj mc-linux-x86_64-obj mc-slim mc-linux-slim-obj mc-linux-x86_64-slim-obj mc-windows-slim-obj mc-windows-x86_64-slim-obj
 .PHONY: check-site-linux
-.PHONY: check-linux-host check-skipped check-shim test-sandbox sandbox-trace sandbox-trace-check mc-linux-gnu mc-linux-x86_64-gnu
+.PHONY: check-tool check-linux-host check-skipped check-shim test-sandbox sandbox-trace sandbox-trace-check mc-linux-gnu mc-linux-x86_64-gnu
 .PHONY: bootstrap-windows mc-windows mc-windows-x86_64 mc-windows-obj mc-windows-x86_64-obj
 .PHONY: all stage0 stage0-san test check-lex check-ast check-asm check-obj mc1 mc-seed bootstrap check-surface test-exe bundle check-bundle check-mc check-standalone check-parts check-toml check-build check-pkg check-sysroots check-stubs check-limits sysroot-linux sysroot-linux-x86_64 sysroot-windows sysroot-windows-x86_64 test-linux test-linux-x86_64 test-windows test-windows-x86_64 check-examples check-lang check-conc check-docs site check-site check budget clean check-desktop check-minimal mcrt-windows mcrt-windows-x86_64 check-float check-wide check-kernel check-avr check-opt test-linux-exe test-linux-x86_64-exe bench
 

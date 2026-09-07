@@ -572,6 +572,24 @@ refusals it shares with `mc pkg add` (`is yanked`, `no such version in the regis
 `mc 0.15.18 -> 0.16.0 (/usr/local/bin/mc)` and `mc 0.16.0 is the newest` are on stdout with exit 0
 and are not diagnostics.
 
+### `mc tool`
+
+`mc tool` shares the plan, the permission table and the fetch refusals with `mc pkg` (the `mc pkg`
+table above); these are its own.
+
+| message | exit | cause | fix |
+|---|---|---|---|
+| `mc: hello_tool: is not installed` | 1 | `mc tool run`/`remove`/`upgrade` for a name with no install manifest under the tools root | `mc tool install NAME`, or check `--libs-dir`/`--bin-dir` |
+| `mc: hello_tool: is a library, not a tool: add it to a project's [deps]` | 1 | `mc tool install` named a package the registry publishes as `kind = "lib"` | it is a dependency, not a program; put it under `[deps]` |
+| `mc: the workspace is your home directory` + `run: mc tool run NAME --workspace DIR` | 2 | `mc tool run` from `$HOME` with a `workspace` permission would grant every file you own | run it from the project, or name the directory with `--workspace` |
+| `mc: the workspace is the filesystem root` + the same `run:` line | 2 | the same, from `/` | `--workspace DIR` |
+| `mc: the tool did not build: hello_tool 0.1.0` | 2 | the spawned `mc build` of the staged tree failed | the tool's own build error is printed above this line |
+| `mc: nowhere to install a tool: no --libs-dir and no HOME` | 2 | there is no `<mc home>` to put the tool under | `--libs-dir DIR` (its parent is the tools/bin root) |
+| `mc: cannot write the launcher: PATH` | 2 | the bin directory is not writable | `--bin-dir DIR` |
+
+`installed hello_tool 0.1.0 (hello) -> …`, `add … to your PATH`, `removed hello_tool` and
+`no tools installed` are on stdout with exit 0 and are not diagnostics.
+
 ---
 
 ## Reproducing them

@@ -232,7 +232,12 @@ void fetch_refuse(uptr archive, uptr why, uptr member) {
 // runs a program with stdout redirected into `outfile` -- drv_sdk's file-action
 // trick, which is the only way this language captures output (no pipes)
 i64 fetch_spawn_to(uptr prog, uptr av, uptr outfile) {
-    u8 fa[8];
+    // posix_spawn_file_actions_t is an 8-byte opaque pointer on macOS but a
+    // ~80-byte struct on glibc and musl, whose _init memsets the whole of it;
+    // an 8-byte buffer there corrupts the stack. 128 covers every host (the
+    // Windows shim's _init touches nothing). First exercised on Linux by
+    // `mc tool install` (M48 C3).
+    u8 fa[128];
     st64(fa, 0);
     if (posix_spawn_file_actions_init(fa) != 0) die("posix_spawn_file_actions_init failed");
     drv_mkdirs(outfile);

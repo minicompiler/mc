@@ -119,6 +119,19 @@ uptr host_self_path() {
     return buf;
 }
 
+// M48 C3: the current working directory of the invocation, absolute, or 0. It
+// is what `mc tool` resolves the `workspace` permission against (§ 3.5) and
+// what `mc tool box-args` prints -- one place, so `mc tool run` and the
+// registry's validator agree on where the box's read root is. `getcwd` returns
+// its buffer or NULL, which is the same shape on macOS and Linux.
+extern uptr getcwd(uptr buf, i64 size);
+
+uptr host_getcwd() {
+    uptr buf = xalloc(4097);
+    if (getcwd(buf, 4096) == 0) return 0;
+    return buf;
+}
+
 // M25: the program `mc sysroot fetch` spawns to download a pinned archive, and
 // the one it falls back to. `mc` speaks no HTTP and no TLS (docs/specs/M25.md
 // § 2); /usr/bin/curl ships with macOS, so there is nothing to fall back to.

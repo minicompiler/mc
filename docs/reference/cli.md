@@ -20,6 +20,7 @@ usage: mc build [DIR] [--config FILE] [--compiler-only] [--limits|--fix-limits] 
        mc update [NAME] [DIR] [--yes] [--registry URL|DIR] [--libs-dir DIR]
        mc install [VERSION] [--from-tree DIR] [--yes] [--force] [--registry URL|DIR] [--libs-dir DIR]
        mc upgrade [VERSION] [--yes] [--no-install] [--to PATH] [--registry URL|DIR] [--libs-dir DIR]
+       mc tool install NAME[@VER]|[DIR] | list | remove NAME | upgrade [NAME] | run NAME [-- ARGS]
        mc sandbox run|exec [OPTS] PATH [--] [ARGS]
        mc sandbox check
 ```
@@ -519,6 +520,38 @@ mc: mc 0.0.0-dev is a development build: build from the tree
 The library tree is installed by **spawning the new binary** (`mc install --yes`), because the
 directory is named after the version the compiler reports and the process that must ask is the one
 that was just written. Its exit status is this command's.
+
+## 3g. `mc tool` — install and run a program package
+
+```
+mc tool install NAME[@VERSION] [--yes] [--registry URL|DIR] [--libs-dir DIR] [--bin-dir DIR]
+mc tool install [DIR] [--config FILE] [--yes] ...      every [tools] of a project
+mc tool list    [--libs-dir DIR] [--bin-dir DIR]
+mc tool remove  NAME [--libs-dir DIR] [--bin-dir DIR]
+mc tool upgrade [NAME] [--yes] ...
+mc tool run     NAME [--workspace DIR] [--] [ARGS]
+```
+
+A tool is a package of `kind = "exe"` ([packages.md](packages.md) § 3, [tools.md](tools.md)).
+`install` resolves it in the same graph `mc pkg` uses — its own `[deps]` are libraries — prints the
+plan and a **permission table**, and stops without `--yes`; with `--yes` it fetches into `<libs>`,
+stages a buildable copy under `~/.mc/tools/<name>/v<ver>/`, builds it by spawning this compiler, and
+writes a one-line launcher `~/.mc/bin/<bin>`. `run` is what the launcher calls: on a host with a
+sandbox it boxes the tool under the permissions it declared ([sandbox.md](sandbox.md) § The
+primitives), and on a host without one it runs the binary directly (the M48 amendment — the same
+install everywhere, no `--unconfined`).
+
+`box-args <mc.toml>` is a hidden verb that prints the derived `mc sandbox exec` flags one per line;
+it is the ONE definition of what each permission means, shared by `mc tool run` and a registry
+validator.
+
+| flag | meaning |
+|---|---|
+| `--yes` | accept the plan and the permissions; without it, nothing is fetched or staged |
+| `--registry URL\|DIR` | where the index is read, as for `mc pkg` |
+| `--libs-dir DIR` | where fetched trees live (`~/.mc/libs`); the tools root is its parent's `tools/` and the default bin directory its parent's `bin/`, so CI can run with no `HOME` |
+| `--bin-dir DIR` | where the launcher is written, instead of `<mc home>/bin` |
+| `--workspace DIR` | the directory the `workspace` permission grants at run time; the default is the current directory, and `$HOME` and `/` are refused without it ([tools.md](tools.md) § The workspace) |
 
 ## 3c. `mc sandbox` — compile and run something you do not trust
 

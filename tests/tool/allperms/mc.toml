@@ -1,0 +1,40 @@
+# tests/tool/allperms -- one manifest with a row of every permission kind and
+# path form, so `mc tool box-args` can be shown to map each to its sandbox
+# primitive (M48 § 4.1). Nothing builds it; it is `mc tool box-args`'s fixture.
+[package]
+name    = "allperms"
+bin     = "allperms"
+files   = ["main.mc"]
+
+[project]
+name  = "allperms"
+entry = "main.mc"
+out   = "build/allperms"
+kind  = "exe"
+
+[[permission]]
+kind = "fs.read"
+path = "workspace"
+
+[[permission]]
+kind = "fs.write"
+path = "workspace/out"
+
+[[permission]]
+kind = "fs.read"
+path = "home/.cache/allperms"
+
+[[permission]]
+kind = "fs.write"
+path = "tmp"
+
+[[permission]]
+kind = "net"
+
+[[permission]]
+kind = "exec"
+name = "sh"
+
+[[permission]]
+kind = "env"
+name = "HOME"
