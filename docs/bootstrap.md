@@ -338,6 +338,30 @@ outside it. What the slim flavour is for is a machine that already has, or is wi
 the `mc` package: see [reference/bundle.md](reference/bundle.md) § The slim flavour and
 [reference/cli.md](reference/cli.md) § 3e.
 
+## Keeping an installed `mc` up to date
+
+A binary that came out of a release replaces itself:
+
+```
+mc upgrade                              # the plan: which version, which archive, which file
+mc upgrade --yes                        # download, verify, replace, install the matching tree
+```
+
+It resolves the newest non-yanked, non-pre-release version of the `mc` package, derives the
+release asset for this host from the index row's tag archive, checks it against the `.sha256`
+published beside it BEFORE unpacking, runs the extracted compiler once to confirm it reports the
+version that was asked for, and renames it over the running binary -- a new inode, which is what
+macOS needs for a signed file. Then it spawns the NEW binary to install the library tree that
+matches its version. A second run says `mc <version> is the newest`.
+
+A compiler built from this checkout reports `0.0.0-dev` and refuses that road
+(`build from the tree`, `run: make mc1`); `mc upgrade <VERSION>` still works there and does what
+it says. On Windows a running `.exe` cannot be replaced, so the new compiler is left as
+`mc.exe.new` with the `move` command printed. Details, including the air-gapped form
+(`--registry DIR` over a directory holding the release) and what the checksum does and does not
+prove, are in [reference/cli.md](reference/cli.md) § 3f and
+[reference/packages.md](reference/packages.md) § 11.
+
 ## Binaries are not versioned
 
 `.gitignore` already ignores `build/` (and `*.o`, `*.dSYM`) — `mc0`, `mc1`, `mc2`, `mc3`, and

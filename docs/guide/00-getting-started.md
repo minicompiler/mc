@@ -31,6 +31,22 @@ refuses to run an ad-hoc signed binary that has it. Removing the attribute is a 
 whoever downloaded the file; the signature itself stays valid
 (`codesign --verify --verbose=4 mc`).
 
+### Keeping it up to date
+
+Once `mc` is on your PATH it updates itself:
+
+```sh
+mc upgrade            # what it would do: the version, the archive, the file it replaces
+mc upgrade --yes      # do it
+```
+
+It downloads the release for this host, checks it against the checksum published beside it, runs
+the new compiler once to confirm it is the version it claims, and renames it over the old one. A
+second run says `mc <version> is the newest`. A compiler you built from a checkout reports
+`0.0.0-dev` and refuses -- rebuild it from the tree instead.
+[reference/cli.md](../reference/cli.md) § 3f has the rest, including what the checksum proves and
+what it does not.
+
 ### From source
 
 ```sh

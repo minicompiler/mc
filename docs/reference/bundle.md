@@ -42,7 +42,7 @@ byte for byte what it was. See [packages.md](packages.md) § 2.
 
 ## The catalogue
 
-The manifest is `tools/bundle.list`, one `NAME<TAB>PATH` per line, sorted by name: 83 entries,
+The manifest is `tools/bundle.list`, one `NAME<TAB>PATH` per line, sorted by name: 97 entries,
 plus `mc/bundle_data`, which is regenerated on demand (see below). Those are the names `<...>`
 accepts.
 
@@ -108,6 +108,8 @@ and supplying that function *is* a taught compiler ([hooks.md](hooks.md)).
 | `<mc/deps>` | `src/deps.mc` — `[deps]`, `mc.lock`, the tree hash (M44) |
 | `<mc/fetch>` | `src/fetch.mc` — getting a file, unpacking an archive (M44) |
 | `<mc/pkg>` | `src/pkg.mc` — the registry, MVS, the lock writer (M44) |
+| `<mc/install>` | `src/install.mc` — `mc install`, the compiler's own package (M44) |
+| `<mc/upgrade>` | `src/upgrade.mc` — `mc upgrade`, the compiler replacing itself (M44) |
 | `<mc/sysroot>` | `src/sysroot.mc` |
 | `<mc/sysroots>` | `src/sysroots.mc` |
 | `<mc/stubs>` | `src/stubs.mc` |
@@ -237,12 +239,14 @@ this table cannot drift from the code.
 | `<mc/core_writers>` | `src/core_writers.mc` | `sha256` `macho` `backend_exe` `backend_elf` `backend_elf_exe` `backend_coff` | `mc_writers_init()` — the eight `backend()` and five `target()` registrations |
 | `<mc/core_build>` | `src/core_build.mc` | `sha256` `toml` `deps` `driver` `fetch` `sysroots` `sysroot` `stubs` `limits` | `mc_build_init()` — `mc build`, `mc limits`, `mc sysroot`, the pre-scan, and the READ side of packages |
 | `<mc/core_bundle>` | `src/core_bundle.mc` | `bundle_data` `bundle` | `mc_bundle_init()` — `#include <name>` itself |
-| `<mc/core_pkg>` | `src/core_pkg.mc` | `core_build` `pkg` `install` | `mc_pkg_init()` — `mc pkg`, `mc update` and `mc install` ([packages.md](packages.md)) |
+| `<mc/core_pkg>` | `src/core_pkg.mc` | `core_build` `pkg` `install` `upgrade` | `mc_pkg_init()` — `mc pkg`, `mc update`, `mc install` and `mc upgrade` ([packages.md](packages.md)) |
 | `<mc/core_sandbox>` | `src/core_sandbox.mc` | `sandbox` | `mc_sandbox_init()` — `mc sandbox run\|exec\|check` ([sandbox.md](sandbox.md)) |
 
 `<mc/core_pkg>` gained `src/install.mc` with M44 step 4: `mc install`, the subcommand that puts the
 `mc` package itself under `<libs>` — which is where a compiler assembled WITHOUT
-`<mc/core_bundle>` reads every `<name>` from (§ The slim flavour below).
+`<mc/core_bundle>` reads every `<name>` from (§ The slim flavour below) — and `src/upgrade.mc`
+with step 5: `mc upgrade`, which replaces the BINARY from a release and then spawns the new one to
+install the tree that matches it ([cli.md](cli.md) § 3f).
 
 The two files M41 split out are bundled under their own names too: `<mc/objmodel>`
 (`src/objmodel.mc`, the section/symbol/relocation model every writer reads) and `<mc/cli>`

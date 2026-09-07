@@ -723,6 +723,43 @@ files = [ "lib/backend_arm64.mc", …, "tools/bundle.list" ]
   the five real project configs are `src/mc.<target>.toml`. `mc build .` at the
   root is `mc.toml: missing key: project.entry`, on purpose.
 
+### `mc upgrade` — the binary, not the source
+
+`mc install` puts this package's SOURCE where `#include <name>` reads it.
+`mc upgrade` replaces the BINARY, and the two roads meet in the index file: the
+version is resolved out of the same `mc` rows (newest non-yanked,
+non-pre-release, unless one is named), and the tree that matches the new binary
+is installed afterwards by spawning it (`mc install --yes`), so a full binary
+and a slim one both end up consistent with themselves.
+
+The index row carries the **tag archive** — a registry of sources has nothing
+else to carry — so the address of the compiled binaries is derived from it, for
+the one forge whose layout is written down:
+
+```
+https://github.com/<owner>/<repo>/archive/refs/tags/v0.16.0.tar.gz
+  ->  https://github.com/<owner>/<repo>/releases/download/v0.16.0/mc-0.16.0-<target>.tar.gz
+                                                             ... .tar.gz.sha256
+```
+
+Any other url is `no binaries known for <url>` rather than a guess. A row whose
+url is a **local path** puts the assets in the same directory, which is the
+air-gapped upgrade: unpack a release into a directory, write an index file
+beside it, `mc upgrade --registry DIR --yes`. `<target>` is this host's os and
+arch in the release vocabulary and the flavour is this binary's own; neither is
+a flag. See [cli.md](cli.md) § 3f.
+
+**What the checksum proves, and what it does not.** The archive is verified
+against the `.sha256` published beside it, before it is unpacked, and the
+compiler that comes out is run once and must report the version that was asked
+for. That is integrity, and it is the release naming what it packaged. It is
+**not** provenance: the checksum is served from the same origin as the archive,
+so anyone who can serve one to your machine can serve the other. The priced
+follow-up is a signing key over the checksums, with the public key baked into
+the binary beside the version; until it ships, `mc upgrade` trusts the release
+host. A package's tree hash is a different matter — it is pinned in `mc.lock`
+by the developer who reviewed the tree (§ 4).
+
 ### What it cannot do yet
 
 **`mc` is reserved on every road a consumer would take.** `[deps] mc = "…"`,

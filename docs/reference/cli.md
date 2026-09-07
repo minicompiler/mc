@@ -1,18 +1,27 @@
 # Every command, flag and dump
 
-`mc` has one binary and four entry points: the single-file compiler, `mc build`, `mc limits` and
-`mc sysroot`. Everything below is read off `src/cli.mc` (the single-file CLI), `src/driver.mc`
-(the first two subcommands) and `src/sysroot.mc` (the third). Running `mc` with no argument
-prints exactly this and exits 1:
+`mc` has one binary and one entry point per registered subcommand: the single-file compiler, then
+`build`, `limits`, `sysroot`, `pkg`, `update`, `install`, `upgrade` and `sandbox`. Everything below
+is read off `src/cli.mc` (the single-file CLI) and the file that registers each subcommand —
+`src/driver.mc`, `src/sysroot.mc`, `src/pkg.mc`, `src/install.mc`, `src/upgrade.mc`,
+`src/sandbox.mc`. The list is the subcommand TABLE, so a taught compiler that registers one more
+prints one more line; `mc` with no argument prints it and exits 1:
 
 ```
 usage: mc [--dump-tokens|--dump-ast|--dump-asm|--dump-syms|--dump-rules|--dump-machine] [--backend=NAME|--exe] [--machine=NAME] [--include=DIR] [--opt=N|-O] [--libc=gnu|musl] [--interp=PATH] [--link=dynamic|static] source.mc [-o out]
        mc --host
        mc --version
-usage: mc build [DIR] [--config FILE] [--compiler-only] [--limits|--fix-limits] [--sysroot-dir DIR]
+usage: mc build [DIR] [--config FILE] [--compiler-only] [--limits|--fix-limits] [--sysroot-dir DIR] [--libs-dir DIR]
        mc limits [DIR|FILE.mc]
        mc sysroot list|path <target>|fetch <target> [--yes] [--sysroot-dir DIR]
        mc sysroot stub [DIR] [--config FILE]
+       mc pkg sync|add|list|vendor|verify [DIR] [--yes] [--registry URL|DIR] [--libs-dir DIR]
+       mc pkg hash DIR | check INDEX.toml [--yes]
+       mc update [NAME] [DIR] [--yes] [--registry URL|DIR] [--libs-dir DIR]
+       mc install [VERSION] [--from-tree DIR] [--yes] [--force] [--registry URL|DIR] [--libs-dir DIR]
+       mc upgrade [VERSION] [--yes] [--no-install] [--to PATH] [--registry URL|DIR] [--libs-dir DIR]
+       mc sandbox run|exec [OPTS] PATH [--] [ARGS]
+       mc sandbox check
 ```
 
 ---
@@ -411,6 +420,105 @@ mc: mc 0.0.0-dev is a development build: the registry publishes no such version
 ([packages.md](packages.md) § 1) — a project may not pin the compiler's own source. This road is
 the exception that proves it: it installs the package **for the binary itself**, at the binary's
 own version, into a directory no project resolves through.
+
+## 3f. `mc upgrade` — the compiler replaces itself
+
+```
+mc upgrade [VERSION] [--yes] [--no-install] [--to PATH] [--registry URL|DIR] [--libs-dir DIR]
+```
+
+Downloads a released `mc` for **this** host, checks it against the checksum the release published
+beside it, replaces the binary that is running, and then installs the library tree that matches the
+new version. `VERSION` is the newest non-yanked, non-pre-release row of the `mc` package's index
+when it is not given; a release candidate is never chosen for you and has to be named
+(`mc upgrade 1.0.0-rc1`), exactly as in `mc pkg add` ([packages.md](packages.md) § 5).
+
+```
+$ mc upgrade
+upgrade mc 0.15.18 -> 0.16.0
+url    https://github.com/minicompiler/mc/releases/download/v0.16.0/mc-0.16.0-macos-arm64.tar.gz
+sha256 https://github.com/minicompiler/mc/releases/download/v0.16.0/mc-0.16.0-macos-arm64.tar.gz.sha256
+into   /usr/local/bin/mc
+nothing was downloaded: re-run with --yes
+```
+
+Nothing happens without `--yes` — the M25 rule every verb here follows. With it:
+
+```
+$ mc upgrade --yes
+upgrade mc 0.15.18 -> 0.16.0
+...
+mc 0.15.18 -> 0.16.0 (/usr/local/bin/mc)
+package mc 0.16.0 -> /home/you/.mc/libs/mc/v0.16.0/
+```
+
+and a second run says `mc 0.16.0 is the newest` and exits 0.
+
+**Which archive.** The registry is a registry of *sources*: the index row carries the tag archive,
+not the binaries. The address of the binaries is derived from it, and only for the one forge whose
+layout is written down:
+
+```
+https://github.com/<owner>/<repo>/archive/refs/tags/v0.16.0.tar.gz
+  ->  https://github.com/<owner>/<repo>/releases/download/v0.16.0/mc-0.16.0-<target>.tar.gz
+```
+
+with the checksum at that name plus `.sha256` — what `scripts/release-assets.sh` writes. Any other
+url is refused rather than guessed at:
+
+```
+mc: upgrade: no binaries known for: https://git.example.com/mc/0.16.0.tar.gz
+```
+
+A row whose url is a **local path** is the second road: the release assets sit in the same
+directory. That is the air-gapped upgrade — unpack a release into a directory, write an index file
+beside it, and `mc upgrade --registry DIR`.
+
+`<target>` is `host_os()` and `host_arch()` in the release vocabulary (`macos-arm64`,
+`linux-arm64`, `linux-x86_64`, `windows-arm64`, `windows-x86_64` — `aarch64` is spelled `arm64`
+there), and a binary that carries no bundle fetches the `-slim` archive. Neither is a flag: asking
+for an archive that cannot run on this machine is not a choice worth offering.
+
+**What it checks, and what it does not.** The archive is verified against the `.sha256` *before it
+is unpacked*, and the compiler that came out of it is run once (`mc --version`) and must answer the
+version that was asked for. Both checks are about integrity and about the release naming what it
+packaged. Neither proves **who** published it: the checksum is served from the same origin as the
+archive. See [packages.md](packages.md) § 11.
+
+**The swap.** The new bytes are written to `<dest>.new`, mode 0755, and renamed over `<dest>` — an
+atomic replacement that also gives the destination a new inode, which is what macOS needs (a signed
+binary overwritten in place is killed on its next run by the cached signature). The running process
+keeps the old inode and is unaffected. On **Windows** a running `.exe` cannot be replaced at all, so
+the new compiler is left beside the old one and the command to finish is printed:
+
+```
+the new compiler is C:\tools\mc.exe.new
+windows holds a running .exe open; finish with:
+  move /y "C:\tools\mc.exe.new" "C:\tools\mc.exe"
+```
+
+**A downgrade is not an error.** There is no `--force`: an older version is one you named, and the
+plan says `downgrade mc 0.16.0 -> 0.15.18` instead of `upgrade`. A *development* build is the one
+refusal — `0.0.0-dev` names no release, so the road that would choose a version for you stops:
+
+```
+mc: mc 0.0.0-dev is a development build: build from the tree
+  run:   make mc1
+```
+
+`mc upgrade VERSION` still works there, and does what it says.
+
+| flag | meaning |
+|---|---|
+| `--yes` | actually download and replace; without it, only the plan |
+| `--no-install` | replace the binary and stop: do not install the matching library tree |
+| `--to PATH` | write the new compiler to `PATH` instead of over the running binary |
+| `--registry URL\|DIR` | as for `mc pkg` |
+| `--libs-dir DIR` | as for `mc pkg`; also where the download goes (`<libs>/mc/tmp/<version>/`) |
+
+The library tree is installed by **spawning the new binary** (`mc install --yes`), because the
+directory is named after the version the compiler reports and the process that must ask is the one
+that was just written. Its exit status is this command's.
 
 ## 3c. `mc sandbox` — compile and run something you do not trust
 
