@@ -80,6 +80,22 @@ uptr host_home() {
     return hw_home;
 }
 
+// M44 step 5: the path of the binary that is RUNNING -- see src/host_macos.mc
+// for why `argv[0]` is not it. `GetModuleFileNameA(0, ...)` answers for the
+// module of the current process; it returns a DWORD, so its result is read
+// through c_int() like every other narrow return (M45), and a length equal to
+// the buffer means the path was truncated. The name has to be in
+// scripts/sysroot-windows.sh's kernel32.def, like every other import here.
+extern i64 GetModuleFileNameA(uptr mod, uptr buf, i64 size);
+
+uptr host_self_path() {
+    uptr buf = xalloc(4097);
+    i64 n = c_int(GetModuleFileNameA(0, buf, 4096));
+    if (n <= 0 || n >= 4096) return 0;
+    st8(buf + n, 0);
+    return buf;
+}
+
 // M25: `curl.exe` ships in System32 since Windows 10 1803 and is on PATH under
 // Git Bash. There is no second one to try.
 uptr host_downloader()     { return "curl.exe"; }

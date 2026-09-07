@@ -69,7 +69,9 @@ GetEnvironmentVariableA
 GetExitCodeProcess
 GetFileAttributesA
 GetLastError
+GetModuleFileNameA
 GetStdHandle
+MoveFileExA
 ReadFile
 VirtualAlloc
 WaitForSingleObject

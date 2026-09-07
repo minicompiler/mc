@@ -7,10 +7,11 @@
 // Decision 2 gives: lib/sys_windows.mc is the SYSTEM LAYER a Windows program
 // includes for its I/O, and is compiled into `winrt.obj` next to every test.
 // What is here is not part of that interface -- `posix_spawnp`, `waitpid`,
-// `mmap`, `mkdir`, `unlink`, `chmod`, `_exit` -- it is the set of names
-// src/arena.mc, src/backend_exe.mc and src/host_windows.mc declare `extern` and
-// that a Windows host has to resolve at link time. Fifteen symbols in all,
-// counting the six this file inherits by including lib/sys_windows.mc.
+// `mmap`, `mkdir`, `unlink`, `rename`, `chmod`, `_exit` -- it is the set of
+// names src/arena.mc, src/backend_exe.mc, src/host_windows.mc and
+// src/upgrade.mc declare `extern` and that a Windows host has to resolve at
+// link time. Sixteen symbols in all, counting the six this file inherits by
+// including lib/sys_windows.mc.
 //
 // The compiler cannot define them itself: src/arena.mc declares `open`, `read`,
 // `write`, `close`, `_exit`, `creat` and `mmap` extern and `func_add` refuses a
@@ -48,12 +49,15 @@ extern i64  CreateDirectoryA(uptr path, uptr sa);
 extern i64  DeleteFileA(uptr path);
 extern uptr VirtualAlloc(uptr addr, i64 size, i64 type, i64 protect);
 extern i64  GetLastError();
+extern i64  MoveFileExA(uptr from, uptr to, i64 flags);
 
 #define INFINITE       0xffffffff
 #define WAIT_OBJECT_0  0
 #define MEM_COMMIT     0x1000
 #define MEM_RESERVE    0x2000
 #define PAGE_READWRITE 0x04
+#define MOVEFILE_REPLACE_EXISTING 0x1
+#define MOVEFILE_COPY_ALLOWED     0x2
 #define BSLASH         92                 // there is no \\ escape worth reading here
 
 // ---- what posix_spawnp answers with ----
@@ -281,6 +285,20 @@ i64 mkdir(uptr path, i64 mode) {
 
 i64 unlink(uptr path) {
     if ((DeleteFileA(path) & BOOL_MASK) == 0) return 0 - 1;
+    return 0;
+}
+
+// M44 step 5: `mc upgrade` writes the new compiler beside the old one and
+// renames it over the top, because a rename is the one way to replace a file
+// without ever leaving a partial one behind. POSIX `rename` replaces an
+// existing destination; MoveFileExA does too, but only when it is told to, and
+// COPY_ALLOWED lets it work across volumes the way a rename inside one
+// filesystem does not have to. It CANNOT replace a running .exe -- Windows
+// keeps the image file open -- which is why src/upgrade.mc does not try, and
+// leaves the new binary beside the old one with the command to finish by hand.
+i64 rename(uptr from, uptr to) {
+    if ((MoveFileExA(from, to, MOVEFILE_REPLACE_EXISTING | MOVEFILE_COPY_ALLOWED) & BOOL_MASK) == 0)
+        return 0 - 1;
     return 0;
 }
 
