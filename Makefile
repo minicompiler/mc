@@ -138,6 +138,7 @@ mc-slim: build/mc-slim
 # way that file is ever written; `make check` proves the checked-in copy is what
 # comes out (scripts/check-bundle.sh).
 bundle: build/mc1 $(TOOLSRC) tools/bundle.list
+	rm -f build/bundle
 	build/mc1 --exe tools/bundle.mc -o build/bundle
 	build/bundle tools/bundle.list src/bundle_data.mc
 
