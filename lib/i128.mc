@@ -318,6 +318,24 @@ void wi_global_store(i64 ty, i64 d, i64 sym) {
 
 // AAPCS64 passes a 16-byte integer in an EVEN-numbered register pair, which is
 // the one rule a positional ABI would get wrong
+// M49, contract version 5: MTASK_PARAM is overridden here, so MTASK_PARAM_REG
+// has to be too -- the bundled one reads argument `i` out of `x_i`, and this
+// machine's own NGRN counter skips a register for the even-pair rule below, so
+// `i` and the register number part company after the first i128. A 16-byte
+// value is never allocated (TK_WIDE is not an integer kind), so this is the
+// narrow arm of wi_param with a register as its destination.
+void wi_param_reg(i64 ty, i64 i, i64 r) {
+    if (iw_is(ty)) die("an i128 parameter in an allocatable register");
+    if (iw_ngrn < REG_ARGS) {
+        e2(I_MOV, REG_ALLOC + r, iw_ngrn);
+        iw_ngrn = iw_ngrn + 1;
+    } else {
+        em(I_LDR, REG_ALLOC + r, REG_FP, 16 + iw_pstk * 8);
+        iw_pstk = iw_pstk + 1;
+    }
+    gen_cast(REG_ALLOC + r, ty);
+}
+
 void wi_param(i64 ty, i64 i, i64 off) {
     if (!iw_is(ty)) {
         if (iw_ngrn < REG_ARGS) {
@@ -477,6 +495,7 @@ void i128_init() {
     }
     machine_slot(iw_tab, MTASK_PROLOGUE,     &wi_prologue);
     machine_slot(iw_tab, MTASK_PARAM,        &wi_param);
+    machine_slot(iw_tab, MTASK_PARAM_REG,    &wi_param_reg);
     machine_slot(iw_tab, MTASK_BIN,          &wi_bin);
     machine_slot(iw_tab, MTASK_CMP,          &wi_cmp);
     machine_slot(iw_tab, MTASK_CAST,         &wi_cast);

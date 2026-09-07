@@ -88,7 +88,12 @@
 #define RES_KIND 8
 #define RES_DECL 16
 #define RES_FLAG 24
-#define RES_SIZE 32
+// M49: the register the allocator gave the DECLARATION this node is -- 0 = none,
+// r + 1 otherwise. It is keyed by the declaring node for the same reason
+// RES_FLAG is: a local's INDEX is reused by two sibling blocks, and the register
+// belongs to the declaration, not to the slot number.
+#define RES_REG  32
+#define RES_SIZE 40
 
 #define RK_NONE   0
 #define RK_LOCAL  1
@@ -249,6 +254,15 @@ i64 res_addr_taken(i64 n) {
     if (!res_in(n)) return 0;
     return ld64(res_tab + n * RES_SIZE + RES_FLAG);
 }
+
+// M49: 0 = this declaration stays in memory, r + 1 = it lives in allocatable
+// register r for the whole function (docs/specs/M49.md § 4.2).
+i64 res_reg(i64 n) {
+    if (!res_in(n)) return 0;
+    return ld64(res_tab + n * RES_SIZE + RES_REG);
+}
+
+void set_res_reg(i64 n, i64 v) { if (res_in(n)) st64(res_tab + n * RES_SIZE + RES_REG, v); }
 
 void set_res_type(i64 n, i64 v) { if (res_in(n)) st64(res_tab + n * RES_SIZE + RES_TYPE, v); }
 void set_res_flag(i64 n, i64 v) { if (res_in(n)) st64(res_tab + n * RES_SIZE + RES_FLAG, v); }

@@ -14,11 +14,24 @@
 # nothing to do with the change), POST the one built from the edited tree.
 # A copy taken too late can also be rebuilt from the previous commit:
 # `git worktree add /tmp/pre <commit> && make -C /tmp/pre stage0 mc1`.
+#
+# M49: there are TWO roads. The whole corpus is compiled a second time with
+# `--opt=1` whenever BOTH compilers accept the flag -- so across a change to the
+# optimizer the plain road must still be identical everywhere, and the optimized
+# road is expected to differ exactly for the programs the change targets. The
+# script prints both lists; the commit message says which and why.
 pre="$1"
 post="$2"
 if [ ! -x "$pre" ] || [ ! -x "$post" ]; then
     echo "usage: check-inert.sh PRE POST   (both must be executable)"
     exit 1
+fi
+
+# the second road exists only if both compilers understand the flag: a PRE taken
+# from before M49 does not, and then this is the one-road script it always was.
+optroad=""
+if "$pre" --opt=0 --version > /dev/null 2>&1 && "$post" --opt=0 --version > /dev/null 2>&1; then
+    optroad="--opt=1"
 fi
 
 d="${TMPDIR:-/tmp}/check-inert.$$"
@@ -45,6 +58,26 @@ for f in tests/*.mc; do
 done
 one src/mc.mc src/mc.mc
 echo "ok   $n objects identical (tests/*.mc and src/mc.mc)"
+
+# the same corpus on the optimized road. A difference here is not automatically
+# a failure of THIS script -- it is what a commit that changes the optimizer is
+# for -- but it is counted separately and reported, never hidden.
+if [ -n "$optroad" ]; then
+    optn=0
+    optdiff=""
+    for f in tests/*.mc src/mc.mc; do
+        [ -f "$f" ] || continue
+        "$pre"  $optroad "$f" -o "$d/a.o" > /dev/null 2>&1 || continue
+        "$post" $optroad "$f" -o "$d/b.o" > /dev/null 2>&1 || continue
+        optn=$((optn + 1))
+        cmp -s "$d/a.o" "$d/b.o" || optdiff="$optdiff $f"
+    done
+    if [ -z "$optdiff" ]; then
+        echo "ok   $optn objects identical (--opt=1)"
+    else
+        echo "note --opt=1 differs for:$optdiff"
+    fi
+fi
 
 # Each taught compiler is BUILT by the compiler under test and then asked to
 # compile its own program, through `mc build --entry-only` so that the config's

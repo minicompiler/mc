@@ -981,6 +981,57 @@ else
     fails=$((fails + 1))
 fi
 
+# ---- M49: the tenth assertion, on the OPTIMIZED road --------------------------
+# Version 5 of the contract rewrote the sentence above. `x18` is never written
+# or read on either road -- it is Apple's platform register and the allocator
+# never hands it out. `x19..x28` are never written or read on the PLAIN road
+# (that is the check just above); with --opt=1 a function may write x19+r, but
+# only after saving it and only if it restores it before its epilogue, which is
+# the C promise a caller relies on. That is what this checks, per function:
+#
+#   * every x19..x28 the body mentions is in the set STORED right after the
+#     prologue's frame reserve, and in the set LOADED right before `add sp`;
+#   * x18 is mentioned nowhere at all.
+#
+# The awk is the same shape as badpro/okret above: it walks the dump, tracks the
+# function it is inside, and collects three sets per function.
+"$mc1" --dump-asm --opt=1 src/mc.mc > "$tmp/mc-opt.asm" 2>&1
+optbad=$(awk '
+    function flush(  r, k) {
+        if (fn == "") return
+        for (k in used) if (!(k in saved) || !(k in restored)) { bad++; report = report " " fn ":x" k }
+        delete used; delete saved; delete restored
+    }
+    /^_/ { flush(); fn = $0; pro = 1; next }
+    fn == "" { next }
+    # the prologue`s save area: `str xN, [sp, #k]` before anything else touches
+    # a high register, and the epilogue`s is `ldr xN, [sp, #k]` before `add sp`
+    /^  str x(19|2[0-8]),/ && pro { r = $2; sub(/,$/, "", r); sub(/^x/, "", r); saved[r] = 1; next }
+    /^  ldr x(19|2[0-8]),/       { r = $2; sub(/,$/, "", r); sub(/^x/, "", r); restored[r] = 1; next }
+    { pro = 0 }
+    {
+        line = $0
+        while (match(line, /x(19|2[0-8])\y/)) {
+            t = substr(line, RSTART + 1, RLENGTH - 1)
+            used[t] = 1
+            line = substr(line, RSTART + RLENGTH)
+        }
+    }
+    END { flush(); print bad + 0 "|" report }
+' "$tmp/mc-opt.asm")
+optcount=$(printf '%s' "$optbad" | cut -d'|' -f1)
+optwhere=$(printf '%s' "$optbad" | cut -d'|' -f2)
+nopt=$(grep -c '^_' "$tmp/mc-opt.asm")
+nsave=$(grep -cE '^  str x(19|2[0-8]),' "$tmp/mc-opt.asm")
+n18=$(grep -cE '\bx18\b' "$tmp/mc-opt.asm")
+if [ "$optcount" = "0" ] && [ "$n18" = "0" ]; then
+    echo "ok abi (--opt=1): $nopt functions, $nsave allocated registers, every one saved and restored, x18 never named"
+else
+    echo "FAIL abi (--opt=1): $optcount functions use a callee-saved register they do not save and restore:$optwhere"
+    echo "  x18 mentions: $n18"
+    fails=$((fails + 1))
+fi
+
 # determinism: the same source compiled twice by the same compiler is the same object
 "$demo" lib/syntax_demo_test.mc -o "$tmp/sdt1.o" 2>/dev/null
 "$demo" lib/syntax_demo_test.mc -o "$tmp/sdt2.o" 2>/dev/null
@@ -1645,6 +1696,24 @@ else
     else
         echo "FAIL the probe machine changed the object"
         fails=$((fails + 1))
+    fi
+    # M49: the same probe on the OPTIMIZED road. It asserts what the plain run
+    # cannot -- that every allocatable register index is inside 0..count-1 and
+    # that every MTASK_REG_SAVE has its MTASK_REG_RESTORE in the same function --
+    # and the plain run above has already asserted the other half, that not one
+    # version 5 slot is called with --opt=0 (pr_v5 dies if it is). The object
+    # still has to be the one the bundled machine writes with the same flag.
+    if ! msg=$("$probe" --backend=macho-probe --opt=1 src/mc.mc -o "$tmp/probe-o.o" 2>&1); then
+        echo "FAIL: the probe machine over src/mc.mc with --opt=1: $msg"
+        fails=$((fails + 1))
+    else
+        "$mc1" --opt=1 src/mc.mc -o "$tmp/probe-oref.o" 2>/dev/null
+        if cmp -s "$tmp/probe-o.o" "$tmp/probe-oref.o"; then
+            echo "ok machine_tab/machine_slot (--opt=1): $msg, object identical"
+        else
+            echo "FAIL the probe machine changed the object on the optimized road"
+            fails=$((fails + 1))
+        fi
     fi
 fi
 

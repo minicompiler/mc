@@ -104,6 +104,20 @@ Violation to watch for: a table whose *iteration bound* is its capacity instead 
 and make it depend on the tolerance. The correct form is what every loop here already does —
 iterate to the counter, never to the capacity.
 
+## Two roads, and which one is the reference (M49)
+
+`--opt=1` / `-O` / `[project].opt = 1` is a second lowering of the same AST. **The plain road —
+`--opt=0`, the default on every host and in every release — is the reference**, and everything on
+this page is stated about it: `check-obj`'s 32 objects against the frozen seed, `check-asm`'s
+`--dump-asm` diff, `check-inert`'s byte comparison, the five goldens and the fixed point. That is
+why the default does not move when the optimizer improves: a reference that changes is not one.
+
+The optimized road has its own fixed point and its own golden
+(`tests/golden/mc2-opt.sha256`, [bootstrap.md](bootstrap.md) § The optimized chain), and it is
+deterministic under exactly the same rules — the allocator hashes nothing, scores with integers,
+and breaks a tie by declaration order, so the same source compiled twice with `--opt=1` is the same
+object.
+
 ## Fixed-point diagnosis (M7)
 
 When `mc1 src/mc.mc` and `mc2 src/mc.mc` diverge:
@@ -118,3 +132,8 @@ When `mc1 src/mc.mc` and `mc2 src/mc.mc` diverge:
    Milestones): table ordering (rules 1/2), unzeroed padding (rule 5), a short file read (rule
    3).
 5. Fix, rebuild `mc1`/`mc2`/`mc3`, and repeat `cmp` until it matches byte for byte.
+
+A divergence on the OPTIMIZED road is bisected the same way, with `--dump-asm --opt=1` in place of
+`--dump-asm`. Which half is broken is answered first by the cross-road identity
+(`cmp build/mc2o-plain.o build/mc2.o`): if it holds, the optimized compiler is a correct compiler
+and what diverged is its own lowering; if it fails, the optimizer miscompiled the compiler itself.

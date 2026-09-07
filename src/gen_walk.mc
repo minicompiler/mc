@@ -92,7 +92,21 @@
 #define MTASK_DUMP         28            // (e)                   --dump-asm, one line
 #define MTASK_RELOC_KIND   29            // (e) -> R_* or -1      the implicit relocation
 #define MTASK_RELOC_OFF    30            // (e) -> bytes          where inside it the field sits
-#define MTASK_COUNT        31
+// M49, contract version 5: the six slots of the register allocator. They are
+// APPENDED and no signature above moved, and the rule that makes them free for
+// a machine that does not want them is the NULL-SLOT RULE: for slots 31 and up
+// the walker reads the table entry itself and treats 0 as "this machine does
+// not do this". A machine table is a zero-filled global of MTASK_COUNT entries
+// (examples/kernel/machine_riscv64.mc, examples/avr/machine_avr.mc), so a
+// machine that fills the first 31 answers 0 to MTASK_REG_COUNT and never sees
+// the other five -- byte for byte what it emitted before, with no edit.
+#define MTASK_REG_COUNT    31            // () -> n               allocatable callee-saved registers
+#define MTASK_REG_LOAD     32            // (d, r)                depth d = register r
+#define MTASK_REG_STORE    33            // (ty, d, r)            register r = depth d, extended by ty
+#define MTASK_REG_SAVE     34            // (r, off)              register r into the frame slot
+#define MTASK_REG_RESTORE  35            // (r, off)              and back out of it
+#define MTASK_PARAM_REG    36            // (ty, i, r)            argument i straight into r
+#define MTASK_COUNT        37
 
 // M24 (M9): the task names --dump-machine prints, in MTASK_* order. They live
 // here because the vocabulary is the walker's; the dump itself is in main.mc,
@@ -102,7 +116,9 @@ uptr mtask_names[] = {
     "bool", "cast", "load", "store", "local_addr", "local_load", "local_store",
     "sym_addr", "global_load", "global_store", "call", "callp", "ret", "jump",
     "jz", "jnz", "label", "word", "ins_size", "encode", "dump", "reloc_kind",
-    "reloc_off" };
+    "reloc_off",
+    "reg_count", "reg_load", "reg_store", "reg_save", "reg_restore",
+    "param_reg" };
 
 uptr mtask_name(i64 t) {
     if (t >= 0 && t < MTASK_COUNT) return ld64(mtask_names + t * 8);
@@ -153,13 +169,64 @@ uptr mtask_name(i64 t) {
 #define LOC_TYPE  8
 #define LOC_OFF  16
 #define LOC_NELEM 24
-#define LOC_SIZE 32
+// M49: the allocatable register this local lives in, -1 = none. A local with a
+// register has NO frame slot (LOC_OFF is 0 and nothing reads it), which is why
+// every reader tests this field FIRST.
+#define LOC_REG  32
+#define LOC_SIZE 40
 
 // ---- StrEnt: literal already emitted in __cstring, to deduplicate by content ----
 #define STR_BYTES 0
 #define STR_LEN   8
 #define STR_SYM  16
 #define STR_SIZE 24
+
+// ---- M49 step A: the walker's own state, in one arena record ---------------
+// Four file-level globals used to live here -- the three fields a pending
+// `reloc()` carries and the index of the current function in the prel_* arrays
+// -- and none of them is read by any other file (grep over src lib examples).
+// They are one record now, for the reason src/driver.mc gives for drv_state and
+// src/sandbox.mc for sb_state: the frozen seed's MAXGLOBALS is 512 and
+// `mc limits src/mc.mc` has to stay under 460 (scripts/check-limits.sh fails at
+// 90%). Net -3 globals, which is what pays for the optimizer's own record.
+//
+// WK_OPT is the optimization level -- 0 or 1 -- written by the CLI or by the
+// driver before gen_lower and read through walk_opt(). It is a field and not a
+// global for the same reason, and a FUNCTION and not a task slot for M24's
+// reason: no signature moves, and a machine that never reads it emits byte for
+// byte what it emitted before.
+#define WK_PEND_TYPE  0       // reloc(): the type, until the next raw word; -1 = none
+#define WK_PEND_SYM   8       // its symbol
+#define WK_PEND_NODE 16       // the node that wrote it, for the error's position
+#define WK_PREL_BASE 24       // start of the current function in prel_*
+#define WK_OPT       32       // --opt=N / [project].opt: 0 = the plain road
+#define WK_SIZE      40
+
+uptr wk_state = 0;                    // the one global this record costs
+
+uptr wk_rec() {
+    if (wk_state == 0) {
+        wk_state = xalloc(WK_SIZE);
+        mem_zero(wk_state, WK_SIZE);
+        st64(wk_state + WK_PEND_TYPE, 0 - 1);   // the one non-zero starting value
+    }
+    return wk_state;
+}
+
+i64  pend_type()  { return ld64(wk_rec() + WK_PEND_TYPE); }
+i64  pend_sym()   { return ld64(wk_rec() + WK_PEND_SYM); }
+i64  pend_node()  { return ld64(wk_rec() + WK_PEND_NODE); }
+i64  prel_base()  { return ld64(wk_rec() + WK_PREL_BASE); }
+void set_pend_type(i64 v) { st64(wk_rec() + WK_PEND_TYPE, v); }
+void set_pend_sym(i64 v)  { st64(wk_rec() + WK_PEND_SYM, v); }
+void set_pend_node(i64 v) { st64(wk_rec() + WK_PEND_NODE, v); }
+void set_prel_base(i64 v) { st64(wk_rec() + WK_PREL_BASE, v); }
+
+// M49: the optimization level in effect. 0 is the plain road -- the reference
+// every determinism gate compares against -- and it is what a compiler answers
+// when nobody said otherwise (docs/reference/cli.md, `--opt`).
+i64  walk_opt()           { return ld64(wk_rec() + WK_OPT); }
+void set_walk_opt(i64 n)  { st64(wk_rec() + WK_OPT, n); }
 
 uptr ibuf;
 i64  nins = 0;
@@ -181,9 +248,6 @@ uptr prel_sym;
 uptr prel_type;
 i64 prelcap = 0;
 i64 nprel = 0;
-i64 pend_type = -1;
-i64 pend_sym = 0;
-i64 pend_node = 0;
 
 // ---- functions already lowered: ibuf is append-only and each function is a slice of it ----
 uptr fn_start;
@@ -196,7 +260,6 @@ uptr fn_pcount;
 i64 fncap = 0;
 i64 nfn = 0;
 i64 ins_base = 0;                     // start of the current function in ibuf
-i64 prel_base = 0;                    // start of the current function in prel_*
 
 // ---- module state: strings and the sections in fixed order ----
 uptr strs;
@@ -235,6 +298,8 @@ void set_loc_name(uptr e, uptr v)  { st64(e + LOC_NAME, v); }
 void set_loc_type(uptr e, i64 v)   { st64(e + LOC_TYPE, v); }
 void set_loc_off(uptr e, i64 v)    { st64(e + LOC_OFF, v); }
 void set_loc_nelem(uptr e, i64 v)  { st64(e + LOC_NELEM, v); }
+i64  loc_reg(uptr e)   { return ld64(e + LOC_REG); }
+void set_loc_reg(uptr e, i64 v)    { st64(e + LOC_REG, v); }
 
 // ---- StrEnt accessors ----
 uptr ste_at(i64 i)     { return strs + i * STR_SIZE; }
@@ -307,6 +372,27 @@ uptr mach(i64 task) {
     return ld64(mach_tab + task * 8);
 }
 
+// M49, the null-slot rule (contract version 5). Slots 0..30 are mandatory and a
+// missing one is a bug in the machine, which is what mach() above dies for.
+// Slots 31 and up are OPTIONAL: the walker reads the entry itself, and 0 means
+// "this machine does not do this". Only MTASK_REG_COUNT is ever asked of a
+// machine that may not have it -- the other five are reached only after it
+// answered a non-zero count.
+uptr mach_opt(i64 task) {
+    if (mach_tab == 0) return 0;
+    return ld64(mach_tab + task * 8);
+}
+
+// How many callee-saved registers the machine in effect lets the walker
+// allocate. 0 on the plain road, whatever the flag is: an optimizer that is off
+// asks nothing of the machine.
+i64 walk_reg_count() {
+    if (walk_opt() == 0) return 0;
+    uptr f = mach_opt(MTASK_REG_COUNT);
+    if (f == 0) return 0;
+    return callp(f);
+}
+
 // M24 (M8): the write side, for a module DERIVING a machine. It is here and not
 // in src/hooks.mc because the bound it checks is the MTASK_* list above -- the
 // walker's own vocabulary. Its companion, machine_tab(name), is in the registry
@@ -326,7 +412,7 @@ void machine_slot(uptr tab, i64 task, uptr fn) {
 void ins_add(i64 op, i64 rd, i64 rn, i64 rm, i64 imm, i64 label, i64 sym) {
     // the pending relocation only sticks to the raw word that gen_word puts in the
     // buffer; a label does not become a word and is transparent, everything else is an error
-    if (pend_type >= 0 && op != I_LABEL) err_node(pend_node, "reloc without an immediately following emit");
+    if (pend_type() >= 0 && op != I_LABEL) err_node(pend_node(), "reloc without an immediately following emit");
     ibuf = grow(T_INS, ibuf, nins, &inscap, INS_SIZE);
     uptr e = ins_at(nins);
     set_ins_op(e, op);
@@ -447,6 +533,7 @@ void local_add(uptr name, i64 type, i64 off, i64 nelem) {
     set_loc_type(e, type);
     set_loc_off(e, off);
     set_loc_nelem(e, nelem);
+    set_loc_reg(e, 0 - 1);                       // M49: in memory unless gen_func says otherwise
     nlocals = nlocals + 1;
 }
 
@@ -605,6 +692,228 @@ i64 bin_op(i64 op, i64 sgn) {
     return -1;
 }
 
+// ---- M49: the register allocator's pre-pass ---------------------------------
+// One walk over a function's body, in node order, BEFORE a single instruction
+// is emitted. It answers one question per declaration: is this local or
+// parameter worth a callee-saved register for the length of the function? The
+// answer goes into the resolver's side table (RES_REG, keyed by the DECLARING
+// node) and gen_func reads it back.
+//
+// Everything here is deterministic by construction (docs/determinism.md rules 1
+// and 2): candidates are kept in DECLARATION order, the score is an integer,
+// and selection is "take the highest score not yet taken, first in declaration
+// order on a tie". No hashing, no sorting, no pointer ever compared.
+//
+// State is ONE arena record with a fixed inline width, and that width is a
+// CAPACITY, not a ceiling on correctness: a function with more than OPT_MAX
+// locals in scope is simply left alone (`bad`), and a candidate past OPT_MAX is
+// not considered. Either way the function still compiles, on the plain road's
+// rules.
+#define OPT_MAX   128
+#define OPT_N       0                 // candidates found
+#define OPT_NREG    8                 // registers allocated in this function
+#define OPT_BAD    16                 // 1 = this function is excluded entirely
+#define OPT_DEPTH  24                 // loop nesting, during the scan
+#define OPT_NLOC   32                 // locals in scope, during the scan
+#define OPT_STACK  40                 // OPT_MAX declaring nodes, by local index
+#define OPT_NODE 1064                 // OPT_STACK + OPT_MAX * 8
+#define OPT_SCORE 2088                // OPT_NODE  + OPT_MAX * 8
+#define OPT_SAVE  3112                // OPT_SCORE + OPT_MAX * 8; 16 frame slots
+#define OPT_SIZE  3240
+
+uptr opt_state = 0;                   // the one global the optimizer costs
+
+uptr opt_rec() {
+    if (opt_state == 0) {
+        opt_state = xalloc(OPT_SIZE);
+        mem_zero(opt_state, OPT_SIZE);
+    }
+    return opt_state;
+}
+
+i64 opt_nreg()          { return ld64(opt_rec() + OPT_NREG); }
+i64 opt_save_at(i64 r)  { return ld64(opt_rec() + OPT_SAVE + r * 8); }
+
+// 8^depth, capped at 8^3: a use inside three loops already outweighs anything
+// a straight-line function can accumulate, and the cap keeps the score small
+// enough that no sum can overflow.
+i64 opt_weight() {
+    i64 d = ld64(opt_rec() + OPT_DEPTH);
+    if (d <= 0) return 1;
+    if (d == 1) return 8;
+    if (d == 2) return 64;
+    return 512;
+}
+
+// a scalar of an integer kind, not an array, whose address is never taken
+i64 opt_eligible(i64 ty, i64 nelem, i64 nd) {
+    if (nelem) return 0;                         // an array IS its address
+    if (res_addr_taken(nd)) return 0;            // `&x` somewhere in this function
+    i64 k = type_kind(ty);
+    if (k != TK_INT && k != TK_SINT) return 0;   // a float, a wide or an opaque stays in memory
+    return type_width(ty) <= 8;
+}
+
+i64 opt_find(i64 nd) {
+    uptr r = opt_rec();
+    i64 i = 0;
+    loop {
+        if (i >= ld64(r + OPT_N)) break;
+        if (ld64(r + OPT_NODE + i * 8) == nd) return i;
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+// one use of the local at index `li`, weighted by the loop depth it sits in
+void opt_use(i64 li) {
+    uptr r = opt_rec();
+    if (li < 0 || li >= OPT_MAX) return;
+    i64 k = opt_find(ld64(r + OPT_STACK + li * 8));
+    if (k < 0) return;
+    st64(r + OPT_SCORE + k * 8, ld64(r + OPT_SCORE + k * 8) + opt_weight());
+}
+
+// declares `nd` at the next local index, replaying exactly the push/pop
+// res_func and gen_func do, and considers it as a candidate
+void opt_decl(i64 nd, i64 ty, i64 nelem, i64 init) {
+    uptr r = opt_rec();
+    i64 li = ld64(r + OPT_NLOC);
+    if (li >= OPT_MAX) { st64(r + OPT_BAD, 1); return; }
+    st64(r + OPT_STACK + li * 8, nd);
+    st64(r + OPT_NLOC, li + 1);
+    if (!opt_eligible(ty, nelem, nd)) return;
+    i64 k = ld64(r + OPT_N);
+    if (k >= OPT_MAX) return;
+    st64(r + OPT_NODE + k * 8, nd);
+    i64 sc = 0;
+    if (init) sc = opt_weight();                 // the initialiser is a use
+    st64(r + OPT_SCORE + k * 8, sc);
+    st64(r + OPT_N, k + 1);
+}
+
+void opt_expr(i64 n) {
+    if (n == 0) return;
+    i64 k = nd_kind(n);
+    if (k == N_IDENT) {
+        if (res_kind(n) == RK_LOCAL) opt_use(res_decl(n));
+        return;
+    }
+    if (k == N_BINARY) { opt_expr(nd_a(n)); opt_expr(nd_b(n)); return; }
+    if (k == N_UNARY)  { opt_expr(nd_a(n)); return; }
+    if (k == N_CAST)   { opt_expr(nd_a(n)); return; }
+    if (k == N_CALL) {
+        // `#opcode`, emit() and reloc() write words that NAME REGISTERS by hand
+        // (docs/reference/objects.md § 4), so a function containing one is left
+        // alone entirely -- the allocator must not put a local in a register
+        // such a word may be using.
+        i64 rk = res_kind(n);
+        if (rk == RK_OPCODE) { st64(opt_rec() + OPT_BAD, 1); return; }
+        if (rk == RK_INTRIN && (res_decl(n) == IN_EMIT || res_decl(n) == IN_RELOC)) {
+            st64(opt_rec() + OPT_BAD, 1);
+            return;
+        }
+        i64 a = nd_a(n);
+        loop {
+            if (a == 0) break;
+            opt_expr(a);
+            a = nd_next(a);
+        }
+        return;
+    }
+    // N_INT, N_STR and N_ADDR count nothing: a literal has no declaration and
+    // the operand of an `&` is excluded by res_addr_taken before it gets here
+}
+
+void opt_stmt(i64 n) {
+    if (n == 0) return;
+    uptr r = opt_rec();
+    i64 k = nd_kind(n);
+    if (k == N_BLOCK) {
+        i64 mark = ld64(r + OPT_NLOC);           // scope: the names disappear here
+        i64 s = nd_a(n);
+        loop {
+            if (s == 0) break;
+            opt_stmt(s);
+            s = nd_next(s);
+        }
+        st64(r + OPT_NLOC, mark);
+        return;
+    }
+    if (k == N_VAR) {
+        i64 init = 0;
+        if (nd_val(n) == 0 && nd_a(n)) { opt_expr(nd_a(n)); init = 1; }
+        opt_decl(n, nd_type(n), nd_val(n), init);
+        return;
+    }
+    if (k == N_ASSIGN) {
+        opt_expr(nd_a(n));
+        if (res_kind(n) == RK_LOCAL) opt_use(res_decl(n));
+        return;
+    }
+    if (k == N_IF) {
+        opt_expr(nd_a(n));
+        opt_stmt(nd_b(n));
+        opt_stmt(nd_c(n));
+        return;
+    }
+    if (k == N_LOOP) {
+        st64(r + OPT_DEPTH, ld64(r + OPT_DEPTH) + 1);
+        opt_stmt(nd_a(n));
+        st64(r + OPT_DEPTH, ld64(r + OPT_DEPTH) - 1);
+        return;
+    }
+    if (k == N_RETURN)   { opt_expr(nd_a(n)); return; }
+    if (k == N_EXPRSTMT) { opt_expr(nd_a(n)); return; }
+    // N_BREAK and N_CONTINUE name nothing
+}
+
+// the whole pre-pass for one function. With walk_opt() == 0, walk_reg_count()
+// answers 0 and this returns after clearing the record: no node is looked at,
+// no slot is called, and gen_func's three new loops all have zero iterations --
+// which is what makes the plain road byte-identical by construction.
+void opt_scan(i64 f) {
+    uptr r = opt_rec();
+    st64(r + OPT_N, 0);
+    st64(r + OPT_NREG, 0);
+    st64(r + OPT_BAD, 0);
+    st64(r + OPT_DEPTH, 0);
+    st64(r + OPT_NLOC, 0);
+    i64 nr = walk_reg_count();
+    if (nr <= 0) return;
+    if (nr > 16) nr = 16;                        // the width of the save table
+    if (mach_opt(MTASK_REG_LOAD) == 0 || mach_opt(MTASK_REG_STORE) == 0
+        || mach_opt(MTASK_REG_SAVE) == 0 || mach_opt(MTASK_REG_RESTORE) == 0
+        || mach_opt(MTASK_PARAM_REG) == 0)
+        die("machine answers MTASK_REG_COUNT but leaves a version 5 slot empty");
+    i64 p = nd_a(f);
+    loop {
+        if (p == 0) break;
+        opt_decl(p, nd_type(p), 0, 1);           // a parameter arrives initialized
+        p = nd_next(p);
+    }
+    opt_stmt(nd_b(f));
+    if (ld64(r + OPT_BAD)) return;
+    i64 taken = 0;
+    loop {
+        if (taken >= nr) break;
+        i64 best = 0 - 1;
+        i64 bs = 2;                              // the threshold: a score of 3 or more
+        i64 i = 0;
+        loop {
+            if (i >= ld64(r + OPT_N)) break;
+            i64 sc = ld64(r + OPT_SCORE + i * 8);
+            if (sc > bs) { bs = sc; best = i; }  // strictly: the FIRST wins a tie
+            i = i + 1;
+        }
+        if (best < 0) break;
+        st64(r + OPT_SCORE + best * 8, 0 - 1);   // taken
+        set_res_reg(ld64(r + OPT_NODE + best * 8), taken + 1);
+        taken = taken + 1;
+    }
+    st64(r + OPT_NREG, taken);
+}
+
 // ---- expressions ----
 void gen_value(i64 n, i64 depth) {    // where a value is mandatory
     gen_expr(n, depth);
@@ -658,6 +967,10 @@ void gen_binary(i64 n, i64 depth) {
 void gen_ident(i64 n, i64 depth) {
     if (res_kind(n) == RK_LOCAL) {
         uptr e = loc_at(res_decl(n));
+        // M49: a register-resident local, tested first. On the plain road
+        // loc_reg is -1 for every local and the two calls below are the text
+        // this function always had.
+        if (loc_reg(e) >= 0) { callp(mach(MTASK_REG_LOAD), depth, loc_reg(e)); return; }
         if (loc_nelem(e)) callp(mach(MTASK_LOCAL_ADDR), depth, loc_off(e));
         else              callp(mach(MTASK_LOCAL_LOAD), loc_type(e), depth, loc_off(e));
         return;
@@ -701,16 +1014,16 @@ void gen_intrin(i64 n, i64 depth, i64 in) {
 // so a negative value is caught by the first half of the test.
 void gen_word(i64 n, i64 w) {
     if (w < 0 || w > 0xffffffff) err_node(n, "emitted word does not fit in 32 bits");
-    if (pend_type >= 0) {                        // the pending relocation sticks to this word
+    if (pend_type() >= 0) {                      // the pending relocation sticks to this word
         // UNSIGNED is 8 bytes (length 3) and would run over the next word
-        if (pend_type == R_UNSIGNED)
-            err_node(pend_node, "reloc UNSIGNED requires 8 bytes: use a global array initializer");
+        if (pend_type() == R_UNSIGNED)
+            err_node(pend_node(), "reloc UNSIGNED requires 8 bytes: use a global array initializer");
         prel_grow();
         set_prel_ins_at(nprel, nins - ins_base);  // index relative to the function
-        set_prel_sym_at(nprel, pend_sym);
-        set_prel_type_at(nprel, pend_type);
+        set_prel_sym_at(nprel, pend_sym());
+        set_prel_type_at(nprel, pend_type());
         nprel = nprel + 1;
-        pend_type = -1;
+        set_pend_type(0 - 1);
     }
     callp(mach(MTASK_WORD), w);
 }
@@ -737,10 +1050,10 @@ void gen_reloc(i64 n) {
     i64 t = nd_val(a);
     if (t != R_UNSIGNED && t != R_BRANCH26 && t != R_PAGE21 && t != R_PAGEOFF12)
         err_node(n, "unknown relocation type");
-    if (pend_type >= 0) err_node(n, "two relocations for the same word");
-    pend_type = t;
-    pend_sym  = sym_ref(nd_name(b));
-    pend_node = n;
+    if (pend_type() >= 0) err_node(n, "two relocations for the same word");
+    set_pend_type(t);
+    set_pend_sym(sym_ref(nd_name(b)));
+    set_pend_node(n);
 }
 
 // M24: the arguments of a taught intrinsic, then its handler. The handler is
@@ -872,6 +1185,17 @@ void gen_var(i64 n) {
         return;
     }
     if (nd_a(n)) gen_value(nd_a(n), 0);          // initializer before the name exists
+    // M49: the allocator's answer for THIS declaration. A register-resident
+    // local takes no frame slot at all, so slot_new is not called for it and
+    // the frame of a function whose locals all fit in registers is only the
+    // save area.
+    i64 r = res_reg(n) - 1;
+    if (r >= 0) {
+        local_add(nd_name(n), ty, 0, 0);
+        set_loc_reg(loc_at(nlocals - 1), r);
+        if (nd_a(n)) callp(mach(MTASK_REG_STORE), ty, 0, r);
+        return;
+    }
     // M24: the slot is the TYPE's width, not 8. Provably byte-identical for all
     // seven core types -- slot_new rounds (size + 7) & ~7, so 1..8 give the same
     // offset -- and a 16-byte taught type gets 16.
@@ -884,6 +1208,10 @@ void gen_assign(i64 n) {
     gen_value(nd_a(n), 0);
     if (res_kind(n) == RK_LOCAL) {
         uptr e = loc_at(res_decl(n));
+        // M49: MTASK_REG_STORE carries the type, because a register holds the
+        // extended eight bytes and the truncation happens here, at the store,
+        // instead of at every load the way a narrow frame slot does it.
+        if (loc_reg(e) >= 0) { callp(mach(MTASK_REG_STORE), loc_type(e), 0, loc_reg(e)); return; }
         callp(mach(MTASK_LOCAL_STORE), loc_type(e), 0, loc_off(e));
         return;
     }
@@ -1072,18 +1400,46 @@ void gen_encode_one(i64 f) {
 // ---- functions ----
 void gen_func(i64 f, i64 text) {
     ins_base = nins; nlabels = 0; nlocals = 0; nloops = 0; frame_off = 0;
-    prel_base = nprel; pend_type = -1;
+    set_prel_base(nprel); set_pend_type(0 - 1);
     depth_types_reset();                          // M24: nothing announced yet
     walk_fn_ret = nd_type(f);                     // M45: what a `return` extends to
     if ((sec_flags(sec_at(text)) & 0xff) == S_ZEROFILL) err_node(f, "function in a zerofill section");
     nlabels = nlabels + 1;
     i64 lepi = nlabels;
 
+    opt_scan(f);                                  // M49: before a single instruction
+
     callp(mach(MTASK_PROLOGUE));
+    // M49: the saves come BEFORE the parameters, which is a DEVIATION from
+    // docs/specs/M49.md § 4.3's sketch and the one order that can be right --
+    // MTASK_PARAM_REG writes the allocatable register, so saving after it would
+    // save the parameter and hand the caller its register back changed. A save
+    // reads x19..x28 and writes the frame, so it cannot disturb the argument
+    // registers, and the ABI claim "the prologue never writes x0..x7"
+    // (docs/reference/objects.md § 4) holds on this road too. The save area is
+    // ordinary frame slots: the frame record stays unconditional and a stack
+    // walker still finds everything at a fixed [sp, #k].
+    i64 r = 0;
+    loop {
+        if (r >= opt_nreg()) break;
+        i64 soff = slot_new(walk_word());
+        st64(opt_rec() + OPT_SAVE + r * 8, soff);
+        callp(mach(MTASK_REG_SAVE), r, soff);
+        r = r + 1;
+    }
     i64 i = 0;
     i64 p = nd_a(f);
     loop {                                       // params: the ABI registers go to the frame
         if (p == 0) break;
+        i64 pr = res_reg(p) - 1;                 // M49: ...or straight to a register
+        if (pr >= 0) {
+            local_add(nd_name(p), nd_type(p), 0, 0);
+            set_loc_reg(loc_at(nlocals - 1), pr);
+            callp(mach(MTASK_PARAM_REG), nd_type(p), i, pr);
+            i = i + 1;
+            p = nd_next(p);
+            continue;
+        }
         i64 off = slot_new(type_width(nd_type(p)));   // M24, as in gen_var
 
         local_add(nd_name(p), nd_type(p), off, 0);
@@ -1092,8 +1448,18 @@ void gen_func(i64 f, i64 text) {
         p = nd_next(p);
     }
     gen_stmt(nd_b(f), lepi);
-    if (pend_type >= 0) err_node(pend_node, "reloc without an immediately following emit");
+    if (pend_type() >= 0) err_node(pend_node(), "reloc without an immediately following emit");
     callp(mach(MTASK_LABEL), lepi);
+    // M49: the restores, in reverse, between the epilogue label and the frame
+    // release. MTASK_RET has already put the result where the ABI wants it, and
+    // a restore must not touch that register -- which is why this is a task and
+    // not a rewrite of MTASK_EPILOGUE.
+    r = opt_nreg() - 1;
+    loop {
+        if (r < 0) break;
+        callp(mach(MTASK_REG_RESTORE), r, opt_save_at(r));
+        r = r - 1;
+    }
     callp(mach(MTASK_EPILOGUE));
 
     i64 frame = align_up(frame_off, walk_align());  // the stack aligned to the word pair
@@ -1103,8 +1469,8 @@ void gen_func(i64 f, i64 text) {
     fn_grow();                                   // the function becomes a slice of ibuf
     set_fn_start_at(nfn, ins_base);
     set_fn_count_at(nfn, nins - ins_base);
-    set_fn_pstart_at(nfn, prel_base);
-    set_fn_pcount_at(nfn, nprel - prel_base);
+    set_fn_pstart_at(nfn, prel_base());
+    set_fn_pcount_at(nfn, nprel - prel_base());
     set_fn_labels_at(nfn, nlabels);
     set_fn_sec_at(nfn, text);
     // the symbol is born here (the symtab order is the lowering order); the value only in gen_encode_one

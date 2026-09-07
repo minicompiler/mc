@@ -66,6 +66,7 @@ tolerance = 0.25
 | `project.entry` | string | **required** | the source handed to the compiler |
 | `project.out` | string | **required** | the artifact. Parent directories are created; the file is `unlink`ed before being written, because overwriting a signed executable on the same inode makes the kernel `SIGKILL` its next run |
 | `project.kind` | string | `"exe"` | `exe` or `obj`. `obj` stops at the object file |
+| `project.opt` | integer | `0` | the optimization level of the ENTRY, `0` or `1` — the same two values `--opt=N` takes ([cli.md](cli.md)). `1` turns on the register allocator (M49). It applies to `[project].entry` and to nothing else: a taught compiler is a TOOL this build runs, not the artefact it was asked for, and it is always built on the plain road, so the compiler `mc build` writes is reproducible whatever this key says. A `--opt=`/`-O` on the `mc build` command line wins over the key and is forwarded to the child process that compiles the entry. Anything but `0` or `1` is `<file>: must be 0 or 1: project.opt` |
 
 A missing `entry` or `out` is `<file>: missing key: project.entry`. A `kind` that is neither is
 `must be exe or obj`, reported at the offending value's line and column.

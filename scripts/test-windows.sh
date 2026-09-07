@@ -345,7 +345,8 @@ else
     # tests/mc/ because the frozen C seed refuses them (`at most 8 parameters`,
     # `type expected`, `expected ; after continue`), not because they need
     # anything Windows cannot give: they link like every other test here.
-    for f in tests/mc/0[89]*.mc; do
+    # `1*` joined the glob when M49's 097..100 crossed the hundred mark.
+    for f in tests/mc/0[89]*.mc tests/mc/1*.mc; do
         [ -f "$f" ] || continue
         name=$(basename "$f" .mc)
         why=$(skip_reason "$f")

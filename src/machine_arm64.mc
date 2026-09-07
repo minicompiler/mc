@@ -35,6 +35,12 @@
 #define REG_SP    31
 #define REG_FRAME 32                  // fictitious base swapped for sp in fix_frame
 #define REG_ARGS   8                  // x0..x7: arguments 1..8 (9..12 go on the stack)
+// M49: the callee-saved half, which the walker may hand out one register at a
+// time to a local or a parameter (docs/reference/machine.md § 5). x18 is NEVER
+// allocated -- it is Apple's platform register -- and x29/x30 are the frame
+// record, so the set is exactly x19..x28.
+#define REG_ALLOC 19
+#define REG_NALLOC 10
 
 // ---- full plan enum; the encoder only implements what it uses.
 // I_LABEL (0) belongs to gen_walk.mc: it is the one opcode the walker itself
@@ -104,7 +110,13 @@
 #define C_GT 12
 #define C_LE 13
 
-i64 dslot[MAXDEPTH];                  // slot for the depth: save (<=6) or spill (>=7)
+// TWO per-depth vectors in ONE array, because the frozen seed's MAXGLOBALS is
+// the tight row of scripts/check-limits.sh: [0, MAXDEPTH) is the frame slot of
+// a depth (save for 0..6, spill for 7 and up) and [MAXDEPTH, 2*MAXDEPTH) is its
+// ALIAS -- the allocatable register that already holds this depth's value, or
+// -1. An alias is set by MTASK_REG_LOAD, which then emits nothing at all, and
+// is cleared by every task that produces a new value at that depth.
+i64 dslot[MAXDEPTH * 2];
 uptr m_arm64[MTASK_COUNT];            // the task table the walker drives
 i64 a64_isub = 0;                     // the prologue's `sub sp, sp, #F`, patched last
 i64 a64_iadd = 0;                     // and the epilogue's `add sp, sp, #F`
@@ -112,6 +124,23 @@ i64 a64_out  = 0;                     // M38: bytes of OUTGOING arguments this f
 
 i64  dslot_at(i64 i)      { return ld64(dslot + i * 8); }
 void set_dslot_at(i64 i, i64 v) { st64(dslot + i * 8, v); }
+i64  dalias_at(i64 i)     { return ld64(dslot + (MAXDEPTH + i) * 8); }
+void set_dalias_at(i64 i, i64 v) { st64(dslot + (MAXDEPTH + i) * 8, v); }
+
+// M49: every alias forgotten. Called at a LABEL -- a control-flow merge, where
+// a value carried in an alias could have arrived by another path -- and after
+// every MTASK_REG_STORE, which is the one place an allocatable register's
+// contents change under a live alias. Guarded by walk_opt() so the plain road
+// does not even walk the array.
+void a64_alias_reset() {
+    if (walk_opt() == 0) return;
+    i64 d = 0;
+    loop {
+        if (d >= MAXDEPTH) break;
+        set_dalias_at(d, 0 - 1);
+        d = d + 1;
+    }
+}
 
 // ---- depth, register and spill ----
 i64 slot_depth(i64 d) {
@@ -122,10 +151,31 @@ i64 slot_depth(i64 d) {
 i64 in_reg(i64 depth) { return depth <= REG_MAX; }
 
 // register holding the depth's value; loads from the frame into scratch if spilled
+//
+// M49: the alias comes first. When MTASK_REG_LOAD has said "depth d IS the
+// value of allocatable register r", the value is in r and in no other place --
+// no instruction was emitted and no frame slot was written -- so this is the
+// one function that knows where to find it. Contract version 5 makes reading a
+// depth through val_reg an OBLIGATION for every machine, including a derived
+// one: computing REG_BASE + d by hand reads a stale x9.
 i64 val_reg(i64 depth, i64 scratch) {
+    if (dalias_at(depth) >= 0) return dalias_at(depth);
     if (in_reg(depth)) return REG_BASE + depth;
     em(I_LDR, scratch, REG_FRAME, 0 - slot_depth(depth));
     return scratch;
+}
+
+// a register the machine may WRITE for depth `d`, for a task that operates in
+// place. An aliased depth is materialised out of the local's register first:
+// the result of `-x` or of a cast must not land on top of `x` itself.
+i64 a64_own(i64 d) {
+    if (dalias_at(d) >= 0) {
+        i64 rd = dst_reg(d);
+        e2(I_MOV, rd, dalias_at(d));
+        set_dalias_at(d, 0 - 1);
+        return rd;
+    }
+    return val_reg(d, REG_S1);
 }
 
 i64 dst_reg(i64 depth) {
@@ -134,6 +184,10 @@ i64 dst_reg(i64 depth) {
 }
 
 void dst_done(i64 depth, i64 rd) {
+    // M49: a new value has landed at this depth, so whatever alias it carried
+    // is stale. Every value-producing task ends here, which is what makes one
+    // line enough.
+    set_dalias_at(depth, 0 - 1);
     if (!in_reg(depth)) em(I_STR, rd, REG_FRAME, 0 - slot_depth(depth));
 }
 
@@ -242,11 +296,16 @@ void gen_gaddr(i64 rd, i64 sym) {
 }
 
 // saves the live depths (the ones in a register) before a call
+//
+// M49: an ALIASED depth needs neither the save nor the reload. Its value lives
+// in x19..x28, which the callee is required to preserve -- that is the whole
+// point of allocating there -- so the frame round trip would be dead work and
+// the alias stays valid across the call.
 void save_live(i64 depth) {
     i64 d = 0;
     loop {
         if (d >= depth || !in_reg(d)) break;
-        em(I_STR, REG_BASE + d, REG_FRAME, 0 - slot_depth(d));
+        if (dalias_at(d) < 0) em(I_STR, REG_BASE + d, REG_FRAME, 0 - slot_depth(d));
         d = d + 1;
     }
 }
@@ -254,12 +313,13 @@ void restore_live(i64 depth) {
     i64 d = 0;
     loop {
         if (d >= depth || !in_reg(d)) break;
-        em(I_LDR, REG_BASE + d, REG_FRAME, 0 - slot_depth(d));
+        if (dalias_at(d) < 0) em(I_LDR, REG_BASE + d, REG_FRAME, 0 - slot_depth(d));
         d = d + 1;
     }
 }
 // moves depth d into register r (the ABI one, or callp's x16)
 void arg_to_reg(i64 r, i64 d) {
+    if (dalias_at(d) >= 0) { e2(I_MOV, r, dalias_at(d)); return; }
     if (in_reg(d)) e2(I_MOV, r, REG_BASE + d);
     else           em(I_LDR, r, REG_FRAME, 0 - slot_depth(d));
 }
@@ -288,9 +348,7 @@ void a64_stack_args(i64 dbase, i64 na) {
     loop {
         if (i >= na) break;
         i64 d = dbase + i;
-        i64 r = REG_S1;
-        if (in_reg(d)) r = REG_BASE + d;
-        else           em(I_LDR, REG_S1, REG_FRAME, 0 - slot_depth(d));
+        i64 r = val_reg(d, REG_S1);              // M49: the alias, when there is one
         em(I_STR, r, REG_SP, (i - REG_ARGS) * 8);
         i = i + 1;
     }
@@ -318,6 +376,7 @@ void a64_prologue() {
     loop {
         if (d >= MAXDEPTH) break;
         set_dslot_at(d, 0);
+        set_dalias_at(d, 0 - 1);                 // M49: nothing aliased yet
         d = d + 1;
     }
     a64_out = 0;
@@ -390,7 +449,7 @@ void a64_cmp(i64 cond, i64 d, i64 d2) {
 }
 
 void a64_un(i64 op, i64 d) {
-    i64 rd = val_reg(d, REG_S1);                 // operates in place
+    i64 rd = a64_own(d);                         // operates in place -- never on the local's own register
     if (op == MUN_NEG)      e2(I_NEG, rd, rd);
     else if (op == MUN_NOT) e2(I_MVN, rd, rd);
     else { ei(I_CMPI, 0, rd, 0); ins_add(I_CSET, rd, 0, 0, C_EQ, 0, 0); }
@@ -405,7 +464,7 @@ void a64_bool(i64 d) {
 }
 
 void a64_cast(i64 ty, i64 d) {
-    i64 rd = val_reg(d, REG_S1);
+    i64 rd = a64_own(d);                         // in place, so never the local's own register
     gen_cast(rd, ty);
     dst_done(d, rd);
 }
@@ -506,8 +565,84 @@ void a64_ret(i64 d)          { e2(I_MOV, 0, val_reg(d, REG_S1)); }
 void a64_jump(i64 l)         { el(I_B, l); }
 void a64_jz(i64 d, i64 l)    { elr(I_CBZ, val_reg(d, REG_S1), l); }
 void a64_jnz(i64 d, i64 l)   { elr(I_CBNZ, val_reg(d, REG_S1), l); }
-void a64_label(i64 l)        { el(I_LABEL, l); }
+void a64_label(i64 l)        { a64_alias_reset(); el(I_LABEL, l); }
 void a64_word(i64 w)         { ins_add(I_EMIT, 0, 0, 0, w, 0, 0); }
+
+// ---- M49: the six version 5 tasks ------------------------------------------
+// x19..x28, ten of them, and the walker gets to name them by index alone.
+i64 a64_reg_count() { return REG_NALLOC; }
+
+// The save area is ordinary frame slots (docs/specs/M49.md § 4.3), so these two
+// are the `str`/`ldr` forms every encoder already has: no instruction form is
+// added to the sweep by the allocator, and lib/backend_arm64.mc needs no change.
+void a64_reg_save(i64 r, i64 off)    { em(I_STR, REG_ALLOC + r, REG_FRAME, 0 - off); }
+void a64_reg_restore(i64 r, i64 off) { em(I_LDR, REG_ALLOC + r, REG_FRAME, 0 - off); }
+
+// argument i straight into its register, READING x0..x7 and never writing them.
+// M38's rule for parameter 9 and up applies unchanged: the caller left it above
+// the frame record, at [x29 + 16 + 8*(i-8)].
+void a64_param_reg(i64 ty, i64 i, i64 r) {
+    if (i < REG_ARGS) e2(I_MOV, REG_ALLOC + r, i);
+    else              em(I_LDR, REG_ALLOC + r, REG_FP, 16 + (i - REG_ARGS) * 8);
+    gen_cast(REG_ALLOC + r, ty);                 // the register holds the extended eight bytes
+}
+
+// THE LOAD EMITS NOTHING. It records that depth `d` is the value of register
+// `REG_ALLOC + r`, and val_reg hands that register to whoever reads the depth --
+// which is what turns "locals in registers" into "the ALU reads the local
+// directly" and is the difference between 0.38 s and 0.28 s on the benchmark's
+// mix loop (docs/specs/M49.md § 1.2, variants A and B).
+void a64_reg_load(i64 d, i64 r) { set_dalias_at(d, REG_ALLOC + r); }
+
+// 1 when instruction `op` WRITES ins_rd. A store's rd is its SOURCE, so the
+// whole store half of mem_ins is excluded -- retargeting one would write the
+// value somewhere else entirely. movz/movk are excluded too: gen_imm writes the
+// same rd in up to four instructions and retargeting only the last is wrong.
+i64 a64_retarget_ok(i64 op) {
+    i64 i = 0;
+    loop {                                       // the eleven rd, rn, rm forms
+        if (rrr_ins_at(i) == 0) break;
+        if (op == rrr_ins_at(i)) return 1;
+        i = i + 1;
+    }
+    if (op == I_MSUB || op == I_MVN || op == I_NEG || op == I_CSET) return 1;
+    if (op == I_ANDI || op == I_ADDI || op == I_SUBI) return 1;
+    if (op == I_MOV || op == I_MOVW) return 1;
+    if (op == I_SXTB || op == I_SXTH || op == I_SXTW) return 1;
+    i64 mi = mem_slot(op);                       // even = load (writes rd), odd = store
+    if (mi >= 0) return (mi & 1) == 0;
+    return 0;
+}
+
+// register r = depth d, truncated and extended by the type.
+//
+// The rewrite: if the instruction just emitted is the one that PRODUCED this
+// depth's value and wrote it into the depth's own register, its destination is
+// retargeted at the local's register and no `mov` is emitted at all. That is
+// what makes `x = x * C + K` end in `add x19, x9, x10` and `i = i + 1` in
+// `add x21, x21, x10`. It is safe because the value at depth 0 is consumed by
+// this store and by nothing else, and because an I_LABEL between would BE the
+// last instruction and is not in the whitelist.
+void a64_reg_store(i64 ty, i64 d, i64 r) {
+    i64 rd = REG_ALLOC + r;
+    i64 done = 0;
+    if (dalias_at(d) < 0 && in_reg(d) && nins > ins_base) {
+        uptr e = ins_at(nins - 1);
+        if (a64_retarget_ok(ins_op(e)) && ins_rd(e) == REG_BASE + d) {
+            set_ins_rd(e, rd);
+            // `mov x19, x19` is what a depth that already read this same local
+            // collapses to; I_NOP generates no word
+            if (ins_op(e) == I_MOV && ins_rn(e) == rd) set_ins_op(e, I_NOP);
+            done = 1;
+        }
+    }
+    if (done == 0) {
+        i64 rv = val_reg(d, REG_S1);
+        if (rv != rd) e2(I_MOV, rd, rv);
+    }
+    gen_cast(rd, ty);                            // truncate by width, extend by kind
+    a64_alias_reset();                           // an allocatable register just changed
+}
 
 // AArch64 is fixed width: everything is one word, except what generates none
 i64 a64_ins_size(uptr e) {
@@ -786,5 +921,11 @@ void machine_arm64_init() {
     machine_task(MTASK_DUMP,         &dump_ins);
     machine_task(MTASK_RELOC_KIND,   &a64_reloc_kind);
     machine_task(MTASK_RELOC_OFF,    &a64_reloc_off);
+    machine_task(MTASK_REG_COUNT,    &a64_reg_count);
+    machine_task(MTASK_REG_LOAD,     &a64_reg_load);
+    machine_task(MTASK_REG_STORE,    &a64_reg_store);
+    machine_task(MTASK_REG_SAVE,     &a64_reg_save);
+    machine_task(MTASK_REG_RESTORE,  &a64_reg_restore);
+    machine_task(MTASK_PARAM_REG,    &a64_param_reg);
     machine("arm64", m_arm64);
 }

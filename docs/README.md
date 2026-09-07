@@ -22,6 +22,7 @@ against a run time still at `clang -O0` level — with the honest caveats and th
 |---|---|
 | [Getting started](guide/00-getting-started.md) | install, first program, `--exe`, the five dumps |
 | [One file, one program](guide/10-single-file.md) | the working tour of the language: types, memory, control flow, `extern`, function pointers |
+| [`-O`: what it does and what it does not](guide/15-optimizing.md) | the optimizer, off by default: what qualifies for a register, what disqualifies a function, what it costs and what it never changes |
 | [A project](guide/20-project-toml.md) | `mc build` and every `mc.toml` section by example |
 | [Using a package](guide/25-packages.md) | `[deps]`, `mc.lock`, `#include <pack/file.mc>`, vendoring, and publishing a package of your own |
 | [Publishing a package](guide/27-publishing.md) | registering on minicompiler.dev, what a GitHub Release publishes, the validator's box, the CI action, `yank` |

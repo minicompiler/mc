@@ -1,7 +1,7 @@
 # The machine task contract
 
-> **Contract version 4 -- the integer tasks, the depth type, deriving a machine, and the KIND
-> obligation (M17, M24, M39, M45).**
+> **Contract version 5 -- the integer tasks, the depth type, deriving a machine, the KIND
+> obligation and the register allocator (M17, M24, M39, M45, M49).**
 > `src/gen_walk.mc` is the target-independent walker; `src/machine_arm64.mc` (M17 step A) and
 > `src/machine_x86_64.mc` (step B, and M20's Win64 half) are the three machines behind it in the
 > compiler -- `arm64`, `x86_64`, `x86_64-win` -- and `machine(name, tab)` in `src/hooks.mc` is
@@ -42,6 +42,18 @@
 > dispatch on `type_width(ty)` and `type_kind(ty)`, never on the id. A machine that will not
 > implement the kind must remove the word from its surface — `type_disable(ty_i32)` from its
 > `user_init`, which is what `examples/avr` does.
+>
+> **Version 4 → 5 (M49) APPENDS SIX SLOTS and changes no signature** — `MTASK_REG_COUNT`,
+> `REG_LOAD`, `REG_STORE`, `REG_SAVE`, `REG_RESTORE` and `PARAM_REG`, `MTASK_COUNT` 31 → 37 (§ 5).
+> They are how the walker asks a machine to keep a local in a callee-saved register instead of in a
+> frame slot, and they are reached only when the developer said `--opt=1` ([cli.md](cli.md)). The
+> version's second half is the **null-slot rule**: for slots 31 and up the walker reads the table
+> entry itself and treats **0 as "this machine does not do this"**. A machine table is a zero-filled
+> global of `MTASK_COUNT` entries, so a machine that fills the first 31 answers 0 to
+> `MTASK_REG_COUNT`, is never asked the other five, and emits byte for byte what it emitted under
+> version 4 — with no edit. `examples/kernel/machine_riscv64.mc` and `examples/avr/machine_avr.mc`
+> are exactly that case, and `scripts/check-opt.sh` proves it by comparing their artefacts on both
+> roads.
 
 ## Why the split exists
 
@@ -169,6 +181,81 @@ cast, for the **kind** that says how the bytes above that width are filled (cont
 | `MTASK_RELOC_KIND` | `i64 f(uptr e)` | the relocation this instruction always carries (`R_*`), or `-1` |
 | `MTASK_RELOC_OFF` | `i64 f(uptr e)` | how many bytes into the instruction that relocation's field starts |
 | `MTASK_DUMP` | `void f(uptr e)` | one `--dump-asm` line |
+
+### The six register-allocation slots (version 5)
+
+They are appended after `MTASK_DUMP` in the `MTASK_*` order `--dump-machine` prints, and none of
+them is mandatory: **a 0 entry in any of the six reads as "the machine does not do this"**, which
+is the null-slot rule. `r` is an allocatable register index, `0 .. count - 1`; what register that
+IS, is the machine's business and appears nowhere above this file.
+
+| slot | signature | meaning |
+|---|---|---|
+| `MTASK_REG_COUNT` | `i64 f()` | how many callee-saved registers this machine lets the walker allocate. **0 = none, and a null slot reads as 0.** Asked once per function, before `MTASK_PROLOGUE`'s parameters |
+| `MTASK_REG_LOAD` | `void f(i64 d, i64 r)` | depth `d` now holds the value of allocatable register `r` |
+| `MTASK_REG_STORE` | `void f(i64 ty, i64 d, i64 r)` | register `r` = depth `d`, **truncated to `type_width(ty)` and extended by `type_kind(ty)`** — the same obligation version 4 put on `MTASK_CAST`, at the store instead of at the load |
+| `MTASK_REG_SAVE` | `void f(i64 r, i64 off)` | write register `r` into the frame slot at `off`, in the prologue, after the parameters |
+| `MTASK_REG_RESTORE` | `void f(i64 r, i64 off)` | read it back, before `MTASK_EPILOGUE`. **It must not touch the result register**: a `return` has already put the value there |
+| `MTASK_PARAM_REG` | `void f(i64 ty, i64 i, i64 r)` | argument `i` straight into register `r`, extended by the type's kind. Argument registers are READ and never written, exactly as in `MTASK_PARAM` |
+
+`MTASK_REG_LOAD` carries no type on purpose: a register holds the fully extended eight bytes,
+exactly as a spill slot does, so the extension is performed once at the store and never at a load.
+The save area is **ordinary frame slots**, asked of `slot_new` like any other, which is what keeps
+every claim of [objects.md](objects.md) § 4 true on the optimized road too — the frame record is
+still unconditional, the epilogue is still `add sp` / `ldp` / `ret`, and a stack walker or a
+debugger finds a saved register at a fixed `[sp, #k]`.
+
+The walker asks for the count through `i64 walk_reg_count()`, which answers **0 whenever
+`walk_opt()` is 0**: an optimizer that is off asks nothing of the machine at all. A machine that
+answers a non-zero count and leaves one of the other five null is a bug in that machine, and it is
+said so: `mc: machine answers MTASK_REG_COUNT but leaves a version 5 slot empty`.
+
+**Two obligations come with the version, and both were found by running the code.**
+
+1. **Read a depth through `val_reg(d, scratch)`, never as `REG_BASE + d`.** Since version 5 the
+   value of a depth may live in an allocatable register rather than in the depth's own — that is
+   what `MTASK_REG_LOAD` records, and it emits no instruction at all — so `val_reg` is the only
+   function that knows where it is. A derived machine that computes the register itself reads a
+   stale `x9`. `lib/machine_arm64_float.mc` did exactly that in its own `fa_save_live` and in its
+   stack-argument path and was corrected with this version; `lib/machine_x86_64_float.mc` has the
+   same three lines and will need the same correction when the x86-64 allocator lands (D2).
+2. **A machine that overrides `MTASK_PARAM` MUST override `MTASK_PARAM_REG`.** The bundled
+   `a64_param_reg` reads argument `i` out of `x_i`, because on an integer-only ABI the source index
+   *is* the register number. On a float ABI it is not — `fa_param` walks its own NGRN/NSRN/stack
+   counters, so a float in position 0 and an integer in position 1 make `i` and the register
+   disagree from the second parameter on. Inheriting the bundled slot put the wrong register in the
+   local, measured: `tests/float/019-putf64.mc` printed `0. -1.3 0.4` where it prints
+   `3.500 -1.25 0`. `lib/machine_arm64_float.mc` and `lib/i128.mc` (whose own counter skips a
+   register for the even-pair rule) each carry a `*_param_reg` of their own for this reason.
+
+### What the arm64 allocator does
+
+`a64_reg_count()` answers **10**: `x19..x28`, with `r` meaning `x(19 + r)`. `x18` is never
+allocated. The saves and restores are plain `str`/`ldr` into frame slots, so the allocator adds **no
+instruction form at all** — measured, the set of distinct mnemonics in `src/mc.mc`'s object is the
+same on both roads, and the 2284 distinct instructions of the optimized object re-assemble byte for
+byte under `llvm-mc -triple=aarch64-apple-macos`.
+
+Two things make an allocated local usable as an operand directly, and both are private to the
+machine:
+
+* **the alias table.** `MTASK_REG_LOAD(d, r)` emits nothing and records `dalias[d] = 19 + r`;
+  `val_reg(d, …)` answers that register, and every task that produces a NEW value at `d` clears the
+  entry (one line in `dst_done`, which every value-producing task already ends with). `save_live`
+  and `restore_live` skip an aliased depth entirely: its value is in a register the callee is
+  required to preserve, so the frame round trip around a call is dead work. Aliases are cleared at
+  every `MTASK_LABEL` — a control-flow merge, where a value carried in an alias could have arrived
+  by another path — and after every `MTASK_REG_STORE`.
+* **the store rewrite.** `MTASK_REG_STORE(ty, 0, r)` looks at the instruction just emitted; if it
+  WROTE the depth's own register (a whitelist: the eleven three-operand forms, `msub`, `mvn`, `neg`,
+  `cset`, the three immediate forms, `mov`/`mov w`, the three sign extensions and the load half of
+  the memory table — never a store, whose `rd` is its SOURCE, and never `movz`/`movk`, which come in
+  chains of up to four writing the same register), its destination is retargeted at the local's
+  register and no `mov` is emitted. That is what makes `x = x * C + K` end in `add x19, x9, x10` and
+  `i = i + 1` in `add x21, x21, x10`.
+
+Measured on `bench/mc/bench.mc`: the `mix` loop body goes from 50 instructions per iteration to 24,
+with no memory traffic at all, and the whole workload from 1.157 s to 0.749 s.
 
 The operator vocabulary the tasks speak:
 
@@ -501,6 +588,8 @@ asymmetry is exactly what these two functions close.
 |---|---|
 | `i64 walk_depth_type(i64 d)` | the type of the value **currently** at depth `d`; `TY_I64` outside `0..MAXDEPTH-1` |
 | `i64 walk_ret_type()` | the type the value **about to land** at this depth will have — the type of the node whose task is running |
+| `i64 walk_opt()` | the optimization level in effect, 0 or 1 (M49). A machine reads it to gate anything it only does when the developer asked — the peephole, for instance. `void set_walk_opt(i64 n)` is the writer, and only the CLI and the driver call it, before `gen_lower` |
+| `i64 walk_reg_count()` | how many registers the machine in effect offers the allocator: `MTASK_REG_COUNT`'s answer, or 0 when the slot is null **or when `walk_opt()` is 0** |
 
 Neither is a task slot. No signature moves, the contract stays additive, and a machine that never
 reads them emits byte for byte what it emitted under version 2.

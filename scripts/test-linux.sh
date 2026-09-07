@@ -649,8 +649,9 @@ else
     # Twelve parameters four of which are on the stack, a signed 32-bit integer
     # and a jump to an outer loop's top are all claims about the generated
     # code, and every target has to answer them.
-    # The glob is `0[89]*` so that a new one is picked up by existing.
-    for f in tests/mc/0[89]*.mc; do
+    # The glob is `0[89]*` plus `1*` so that a new one is picked up by
+    # existing -- M49's 097..100 crossed the hundred mark.
+    for f in tests/mc/0[89]*.mc tests/mc/1*.mc; do
         [ -f "$f" ] || continue
         name=$(basename "$f" .mc)
         why=$(skip_reason "$f")
