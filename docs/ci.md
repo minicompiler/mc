@@ -670,7 +670,12 @@ This repository is the mc package registry's first registered repository, and th
 package it publishes is `mc` itself — the whole bundle at the compiler's version
 ([reference/packages.md](reference/packages.md) § 11,
 [specs/M47-S5.md](specs/M47-S5.md)). The action carries **no secret**: the whole
-request is this repository's public URL. The registry queues one validation job,
+request is this repository's public URL. It takes an optional `token` input, an
+account token made on `/me` > Tokens and passed from a repository secret
+(`token: ${{ secrets.MC_REGISTRY_TOKEN }}`), with which the poll runs as that
+account instead of anonymously ([guide/27-publishing.md § 7](guide/27-publishing.md));
+this job does not pass one, the anonymous poll being enough for a registered
+repository. The registry queues one validation job,
 clones the tag, hashes the checkout and compiles it inside `mc sandbox`; the
 action waits, prints the registry's report into the job log behind a two-space
 gutter, and fails when the release was refused or did not reach the index.
