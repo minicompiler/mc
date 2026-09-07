@@ -1485,5 +1485,236 @@ else
     fail "mc install 9.9.9" "exit $rc: $(cat "$tmp/o")"
 fi
 
+# ---- 33. M44 step 5: `mc upgrade` ----
+# The compiler replaces itself from a RELEASE, and the release is not in the
+# registry: the index row carries the tag archive, the binaries live beside it
+# (src/upgrade.mc's asset rule). Offline like everything above, on the second
+# road that rule provides -- a row whose url is a local path has its assets in
+# the same directory, which is exactly what a staged or air-gapped release is.
+#
+# The fixture is a real one: a compiler built from THIS tree with one line of
+# src/version.mc changed, packaged by scripts/release-assets.sh. That is the
+# only way to have a binary that answers `mc 9.9.9`, and it is what makes the
+# version check, the `cmp` against the packaged bytes and the self-replacement
+# mean something.
+cd "$here" || exit 1
+upgrade_run() {   # BINARY ARGS...
+    bin="$1"; shift
+    PATH="$tmp/bin2:$realpath_env" "$bin" upgrade "$@" > "$tmp/o" 2>&1; rc=$?
+}
+
+uos=$("$mc" --host | awk '$1 == "os" { print $2 }')
+uarch=$("$mc" --host | awk '$1 == "arch" { print $2 }')
+utarget="$uos-$uarch"
+[ "$uarch" = aarch64 ] && utarget="$uos-arm64"
+case "$utarget" in
+macos-arm64)   uentry=src/mc.mc ;;
+linux-arm64)   uentry=src/mc_linux.mc ;;
+linux-x86_64)  uentry=src/mc_linux_x86_64.mc ;;
+*)             uentry="" ;;
+esac
+
+if [ -z "$uentry" ]; then
+    echo "skip mc upgrade: no compiler entry for $utarget"
+else
+mkdir -p "$tmp/u/tree" "$tmp/u/rel" "$tmp/u/reg/index" "$tmp/u/bin"
+cp -R src "$tmp/u/tree/" && cp -R lib "$tmp/u/tree/"
+# the one line that makes this binary a release: scripts/set-version.sh's edit,
+# applied to a COPY so the checkout keeps its 0.0.0-dev sentinel
+sed 's|return "0.0.0-dev";|return "9.9.9";|' src/version.mc > "$tmp/u/tree/src/version.mc"
+if ! msg=$("$mc" --exe "$tmp/u/tree/$uentry" -o "$tmp/u/bin/mc999" 2>&1); then
+    fail "building a 9.9.9 compiler for the upgrade fixture" "$msg"
+else
+    if [ "$("$tmp/u/bin/mc999" --version)" = "mc 9.9.9" ]; then
+        ok "the upgrade fixture: a compiler from this tree that reports mc 9.9.9"
+    else
+        fail "the upgrade fixture's version" "$("$tmp/u/bin/mc999" --version)"
+    fi
+    PATH="$realpath_env" sh scripts/release-assets.sh 9.9.9 "$utarget" "$tmp/u/bin/mc999" "$tmp/u/rel" > /dev/null
+    # a SECOND archive, holding the same binary under the name of another
+    # version: the case the `--version` check after the extraction is for
+    PATH="$realpath_env" sh scripts/release-assets.sh 1.0.0 "$utarget" "$tmp/u/bin/mc999" "$tmp/u/rel" > /dev/null
+    asset="$tmp/u/rel/mc-9.9.9-$utarget.tar.gz"
+
+    # the index: four rows, so that "the newest" has something to skip -- a
+    # yanked 11.0.0 and a pre-release 10.0.0-rc1 -- plus the 1.0.0 that is
+    # older than the fixture binary and therefore a downgrade.
+    mkdir -p "$tmp/u/srcstage/mc-9.9.9"
+    cp mc.toml "$tmp/u/srcstage/mc-9.9.9/"
+    while IFS= read -r f; do
+        mkdir -p "$tmp/u/srcstage/mc-9.9.9/$(dirname "$f")"
+        cp "$f" "$tmp/u/srcstage/mc-9.9.9/$f"
+    done < "$tmp/out/got-files"
+    (cd "$tmp/u/srcstage" && rtar czf "$tmp/u/rel/mc-9.9.9-src.tar.gz" mc-9.9.9)
+    uh=$(sh scripts/pkg-hash.sh "$tmp/u/srcstage/mc-9.9.9")
+    urow() {   # VERSION [yanked]
+        echo; echo '[[versions]]'; echo "version = \"$1\""
+        [ -n "$2" ] && echo 'yanked = true'
+        echo "url = \"$tmp/u/rel/mc-9.9.9-src.tar.gz\""
+        echo 'strip = 1'; echo "sha256 = \"$uh\""; echo 'deps = []'
+    }
+    { echo '[package]'; echo 'name = "mc"'
+      urow 1.0.0; urow 9.9.9; urow 10.0.0-rc1; urow 11.0.0 yanked
+    } > "$tmp/u/reg/index/mc.toml"
+
+    # 33a. the dev sentinel refuses the road that CHOOSES a version, and only
+    # that one: `mc upgrade VERSION` on a tree build is allowed, which is what
+    # every case below rests on (src/install.mc's precedent for the same string)
+    if [ "$mcver" = 0.0.0-dev ]; then
+        upgrade_run "$mc" --registry "$tmp/u/reg" --libs-dir "$tmp/u/l0" --to "$tmp/u/bin/x"
+        if [ "$rc" = 2 ] && grep -q "^mc: mc 0.0.0-dev is a development build: build from the tree$" "$tmp/o" \
+           && grep -q "run:   make mc1" "$tmp/o"; then
+            ok "mc upgrade on a dev build: $(head -1 "$tmp/o")"
+        else
+            fail "mc upgrade on a dev build" "exit $rc: $(cat "$tmp/o")"
+        fi
+    else
+        ok "mc upgrade: not a dev build ($mcver), the sentinel case does not apply"
+    fi
+
+    # 33b. the plan, exactly -- and nothing downloaded without --yes
+    upgrade_run "$mc" 9.9.9 --registry "$tmp/u/reg" --libs-dir "$tmp/u/l1" --to "$tmp/u/bin/mc-new"
+    { echo "upgrade mc $mcver -> 9.9.9"
+      echo "url    $asset"
+      echo "sha256 $asset.sha256"
+      echo "into   $tmp/u/bin/mc-new"
+      echo "nothing was downloaded: re-run with --yes"
+    } > "$tmp/u/want"
+    if [ "$rc" = 0 ] && cmp -s "$tmp/o" "$tmp/u/want" && [ ! -f "$tmp/u/bin/mc-new" ]; then
+        ok "mc upgrade prints the plan and fetches nothing without --yes"
+    else
+        fail "the upgrade plan" "exit $rc: $(diff "$tmp/u/want" "$tmp/o" | head -6)"
+    fi
+
+    # 33c. the asset rule: a GitHub tag archive names the release download, any
+    # other forge is refused rather than guessed at. Plan only -- no --yes, so
+    # the https url is printed and never fetched.
+    mkdir -p "$tmp/u/reg2/index"
+    { echo '[package]'; echo 'name = "mc"'; echo
+      echo '[[versions]]'; echo 'version = "0.16.0"'
+      echo 'url = "https://github.com/minicompiler/mc/archive/refs/tags/v0.16.0.tar.gz"'
+      echo 'strip = 1'
+      echo 'sha256 = "0000000000000000000000000000000000000000000000000000000000000000"'
+      echo 'deps = []'
+    } > "$tmp/u/reg2/index/mc.toml"
+    upgrade_run "$mc" 0.16.0 --registry "$tmp/u/reg2" --libs-dir "$tmp/u/l2" --to "$tmp/u/bin/x"
+    want="https://github.com/minicompiler/mc/releases/download/v0.16.0/mc-0.16.0-$utarget.tar.gz"
+    if [ "$rc" = 0 ] && grep -q "^url    $want\$" "$tmp/o" && grep -q "^sha256 $want.sha256\$" "$tmp/o"; then
+        ok "the asset rule: the tag archive names $(grep '^url' "$tmp/o" | sed 's|.*/releases/|releases/|')"
+    else
+        fail "the asset rule (github)" "exit $rc: $(cat "$tmp/o")"
+    fi
+    mkdir -p "$tmp/u/reg3/index"
+    sed 's|https://github.com/minicompiler/mc/archive/refs/tags/v0.16.0.tar.gz|https://example.invalid/mc/0.16.0.tar.gz|' \
+        "$tmp/u/reg2/index/mc.toml" > "$tmp/u/reg3/index/mc.toml"
+    upgrade_run "$mc" 0.16.0 --registry "$tmp/u/reg3" --libs-dir "$tmp/u/l2" --to "$tmp/u/bin/x"
+    if [ "$rc" = 2 ] && grep -q "^mc: upgrade: no binaries known for: https://example.invalid/mc/0.16.0.tar.gz$" "$tmp/o"; then
+        ok "another forge is refused: $(head -1 "$tmp/o")"
+    else
+        fail "the asset rule (other forge)" "exit $rc: $(cat "$tmp/o")"
+    fi
+
+    # 33d. a tampered archive: refused against the release's own .sha256, with
+    # nothing written and no download left behind
+    mkdir -p "$tmp/u/rel4" "$tmp/u/reg4/index"
+    cp "$tmp/u/rel/mc-9.9.9-src.tar.gz" "$tmp/u/rel4/"
+    cp "$asset" "$asset.sha256" "$tmp/u/rel4/"
+    printf 'x' | dd of="$tmp/u/rel4/mc-9.9.9-$utarget.tar.gz" bs=1 seek=500 conv=notrunc 2> /dev/null
+    sed "s|$tmp/u/rel/|$tmp/u/rel4/|" "$tmp/u/reg/index/mc.toml" > "$tmp/u/reg4/index/mc.toml"
+    upgrade_run "$mc" 9.9.9 --yes --no-install --registry "$tmp/u/reg4" --libs-dir "$tmp/u/l4" --to "$tmp/u/bin/mc-bad"
+    if [ "$rc" = 2 ] && grep -q "^mc: checksum mismatch for mc 9.9.9$" "$tmp/o" \
+       && [ ! -f "$tmp/u/bin/mc-bad" ] && [ ! -f "$tmp/u/bin/mc-bad.new" ] \
+       && [ -z "$(find "$tmp/u/l4" -type f 2> /dev/null)" ]; then
+        ok "a tampered release is refused before it is unpacked: $(grep '^mc: checksum mismatch' "$tmp/o")"
+    else
+        fail "the checksum refusal" "exit $rc: $(cat "$tmp/o") [$(find "$tmp/u/l4" -type f 2> /dev/null | tr '\n' ' ')]"
+    fi
+
+    # 33e. the archive that carries the wrong compiler: verified, unpacked, and
+    # then refused because it does not answer the version that was asked for
+    upgrade_run "$mc" 1.0.0 --yes --no-install --registry "$tmp/u/reg" --libs-dir "$tmp/u/l5" --to "$tmp/u/bin/mc-wrong"
+    if [ "$rc" = 2 ] && grep -q "^mc: the downloaded mc reports another version: mc 9.9.9, expected mc 1.0.0$" "$tmp/o" \
+       && [ ! -f "$tmp/u/bin/mc-wrong" ]; then
+        ok "an asset built from another tag: $(grep '^mc: the downloaded mc' "$tmp/o")"
+    else
+        fail "the version check after extraction" "exit $rc: $(cat "$tmp/o")"
+    fi
+
+    # 33f. the happy path, --no-install: the file that lands is the file that
+    # was packaged, byte for byte, and it runs
+    upgrade_run "$mc" 9.9.9 --yes --no-install --registry "$tmp/u/reg" --libs-dir "$tmp/u/l6" --to "$tmp/u/bin/mc-new"
+    if [ "$rc" = 0 ] && cmp -s "$tmp/u/bin/mc-new" "$tmp/u/bin/mc999" \
+       && [ "$("$tmp/u/bin/mc-new" --version)" = "mc 9.9.9" ] \
+       && grep -q "^mc $mcver -> 9.9.9 ($tmp/u/bin/mc-new)$" "$tmp/o" \
+       && [ ! -f "$tmp/u/bin/mc-new.new" ]; then
+        ok "mc upgrade --yes: $(grep '^mc .* -> 9.9.9' "$tmp/o" | sed "s|($tmp/u/bin/|(<tmp>/|")"
+    else
+        fail "mc upgrade --yes --no-install" "exit $rc: $(cat "$tmp/o")"
+    fi
+    if [ "$uos" = macos ]; then
+        if codesign --verify --verbose=4 "$tmp/u/bin/mc-new" > /dev/null 2>&1; then
+            ok "the replaced binary still verifies (codesign --verify)"
+        else
+            fail "codesign --verify on the replaced binary" "$(codesign --verify --verbose=4 "$tmp/u/bin/mc-new" 2>&1 | tail -1)"
+        fi
+    else
+        ok "codesign: not a macOS host ($uos), the signature case does not apply"
+    fi
+    if [ -z "$(find "$tmp/u/l6/mc/tmp" -type f 2> /dev/null)" ]; then
+        ok "the download directory is left empty"
+    else
+        fail "the download directory" "$(find "$tmp/u/l6/mc/tmp" -type f | tr '\n' ' ')"
+    fi
+
+    # 33g. without --no-install, the NEW binary installs the tree that matches
+    # its own version -- which is the whole reason the install is a spawn
+    upgrade_run "$mc" 9.9.9 --yes --registry "$tmp/u/reg" --libs-dir "$tmp/u/l7" --to "$tmp/u/bin/mc-new2"
+    if [ "$rc" = 0 ] && [ -f "$tmp/u/l7/mc/v9.9.9.toml" ] \
+       && cmp -s tools/bundle.list "$tmp/u/l7/mc/v9.9.9/bundle.list" \
+       && grep -q "^package mc 9.9.9 -> " "$tmp/o"; then
+        ok "mc upgrade installs the matching library tree: $(grep '^package mc' "$tmp/o" | sed "s|$tmp/u/l7|<libs>|")"
+    else
+        fail "the install after the upgrade" "exit $rc: $(cat "$tmp/o")"
+    fi
+
+    # 33h. resolution, from the fixture binary itself: 9.9.9 is the newest with
+    # 11.0.0 yanked and 10.0.0-rc1 a candidate, 1.0.0 is a downgrade and says
+    # so, and a yanked version named by hand is refused
+    upgrade_run "$tmp/u/bin/mc-new" --registry "$tmp/u/reg" --libs-dir "$tmp/u/l8" --to "$tmp/u/bin/x"
+    if [ "$rc" = 0 ] && [ "$(cat "$tmp/o")" = "mc 9.9.9 is the newest" ]; then
+        ok "a second mc upgrade with nothing newer: $(cat "$tmp/o") (11.0.0 yanked, 10.0.0-rc1 a candidate)"
+    else
+        fail "mc upgrade with nothing newer" "exit $rc: $(cat "$tmp/o")"
+    fi
+    upgrade_run "$tmp/u/bin/mc-new" 1.0.0 --registry "$tmp/u/reg" --libs-dir "$tmp/u/l8" --to "$tmp/u/bin/x"
+    if [ "$rc" = 0 ] && [ "$(head -1 "$tmp/o")" = "downgrade mc 9.9.9 -> 1.0.0" ] && [ ! -f "$tmp/u/bin/x" ]; then
+        ok "a version named explicitly may be older, and the plan says so: $(head -1 "$tmp/o")"
+    else
+        fail "the downgrade plan" "exit $rc: $(cat "$tmp/o")"
+    fi
+    upgrade_run "$tmp/u/bin/mc-new" 11.0.0 --registry "$tmp/u/reg" --libs-dir "$tmp/u/l8" --to "$tmp/u/bin/x"
+    if [ "$rc" = 1 ] && grep -q "is yanked: pick another version" "$tmp/o"; then
+        ok "a yanked version named by hand: $(grep '^mc: ' "$tmp/o")"
+    else
+        fail "a yanked version" "exit $rc: $(cat "$tmp/o")"
+    fi
+
+    # 33i. and the real thing: no --to at all. The binary replaces the file it
+    # was itself loaded from -- host_self_path() -- and the new one runs.
+    mkdir -p "$tmp/u/self"
+    cp "$mc" "$tmp/u/self/mc"
+    before=$(ls -i "$tmp/u/self/mc" | awk '{print $1}')
+    upgrade_run "$tmp/u/self/mc" 9.9.9 --yes --no-install --registry "$tmp/u/reg" --libs-dir "$tmp/u/l9"
+    after=$(ls -i "$tmp/u/self/mc" | awk '{print $1}')
+    if [ "$rc" = 0 ] && grep -q "^into   $tmp/u/self/mc$" "$tmp/o" \
+       && [ "$("$tmp/u/self/mc" --version)" = "mc 9.9.9" ] \
+       && [ "$before" != "$after" ] && [ ! -f "$tmp/u/self/mc.new" ]; then
+        ok "mc upgrade replaces the running binary: inode $before -> $after, and it reports mc 9.9.9"
+    else
+        fail "the self-replacement" "exit $rc: $(cat "$tmp/o")"
+    fi
+fi
+fi
+
 echo "check-pkg: $((total - fails))/$total"
 [ "$fails" -eq 0 ]

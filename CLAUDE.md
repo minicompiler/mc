@@ -5092,7 +5092,144 @@ agents (`.claude/agents/`): `stage0-dev` (C23), `mc-dev` (`.mc` code), `reviewer
   `mc2-windows-x86_64.sha256`
   `13ff1133fe67905fa8494d4c1619c5e96318a005e624ea1714e44288ffdaaed6` (1457076 B), both also
   written byte for byte by `build/mc2`.
-- Next: **M44 step 5** (`mc upgrade`, `LATEST`); the **site + registry server, M47 S4-S6**, in
+- M44 step 5 ✔ (`docs/specs/M44.md` § D2 + § Implementation notes -- step 5): **`mc upgrade` -- the
+  compiler replaces itself from a release, verified by the release's own sha256.** `stage0/`
+  untouched (2848/3000, `git diff origin/main -- stage0/` empty); **zero new globals**
+  (`check-limits` reports `globals 446/512` before and after).
+  `src/upgrade.mc` (407 lines, 253 code, in `<mc/core_pkg>` beside `install.mc`):
+  `mc upgrade [VERSION] [--yes] [--no-install] [--to PATH] [--registry URL|DIR] [--libs-dir DIR]`,
+  in the M25 order -- resolve, refuse, PLAN, `--yes`, download, verify BEFORE unpacking, act,
+  claim last.
+  * **The version comes out of the REGISTRY, not out of a `LATEST` file** (deviation from § D2
+    point 1, and the reason `release.yml` is untouched): `pkg_pick("mc", VERSION, -1, 0)` is the
+    whole resolution -- step 3 already built the index reader -- so the newest non-yanked,
+    non-pre-release row wins, a candidate is never chosen for you, and a private or staged
+    registry works for `upgrade` for free.
+  * **The asset url is DERIVED from the row's own url**, because a registry of SOURCES carries the
+    tag archive and nothing else: `https://github.com/<o>/<r>/archive/refs/tags/<tag>.tar.gz` ->
+    `https://github.com/<o>/<r>/releases/download/<tag>/mc-<ver>-<target>[-slim].tar.gz`, with the
+    checksum at that name plus `.sha256` -- exactly what `scripts/release-assets.sh` writes. Any
+    other url is `mc: upgrade: no binaries known for: <url>`, exit 2, refused rather than guessed
+    at. **A row whose url is a LOCAL PATH puts the assets beside it**, which is § Risks 18's
+    air-gapped upgrade at one line and what makes the gate offline. `<target>` is `host_os()` +
+    `host_arch()` in the release vocabulary (`aarch64` -> `arm64`) and the flavour is `-slim` when
+    `bopen_fn == 0`; neither is a flag.
+  * **Two checks after the download, answering different questions**: the `.sha256` is verified
+    before `tar` is spawned (the one thing this road can do that `mc pkg`'s cannot -- a release
+    asset has stable bytes, a tag archive does not), and then the extracted compiler is RUN once
+    (`mc --version`, through `fetch_spawn_to`) and must answer the version that was asked for,
+    which catches an asset built from the wrong tag. Neither is provenance: the checksum comes
+    from the same origin as the archive, and `docs/reference/packages.md` § 11 now says so.
+  * **The swap is write-`.new` + mode 0755 + `rename`** (the task's ruling over § D2 point 5's
+    unlink-and-write): atomic, so the compiler on a PATH is never half a file, and still a NEW
+    INODE, which is what the macOS cached-signature `Killed: 9` needs. On **Windows** a running
+    `.exe` cannot be replaced, so the new compiler is left as `<dest>.new` and the `move /y` line
+    is printed -- proved by reading; the Windows CI legs cross-compile and link, they do not run
+    `mc upgrade`. `rename` itself IS implemented there (`lib/sys_windows_host.mc` +22/-4, over
+    `MoveFileExA` with `MOVEFILE_REPLACE_EXISTING | MOVEFILE_COPY_ALLOWED`), so `--to PATH` works.
+  * **`host_self_path()`** is the one new host answer (`_NSGetExecutablePath` / `readlink
+    /proc/self/exe` / `GetModuleFileNameA`, never `argv[0]`), +18/8, +16/8, +16/8 in the three host
+    files, with the buffer `xalloc`ed so it costs no global. `scripts/sysroot-windows.sh`'s
+    `kernel32.def` gained `GetModuleFileNameA` and `MoveFileExA` (18 names).
+  * **No `--force`**: a downgrade is a `VERSION` named explicitly and the plan says
+    `downgrade mc 9.9.9 -> 1.0.0`. The one refusal is the road that CHOOSES on a tree build --
+    `mc: mc 0.0.0-dev is a development build: build from the tree` + `run: make mc1`, exit 2 --
+    while `mc upgrade VERSION` is allowed there (§ D2 point 2's own rule, `src/install.mc`'s
+    precedent), which is what lets the gate cost one extra compile instead of two.
+  * The libraries are installed by **spawning the new binary** (`<dest> install --yes`) unless
+    `--no-install`; its exit status is the command's.
+  -- cost: **466 added lines in `src/`, 280 of them neither comment nor blank**
+  (`upgrade.mc` 407/253, the three host files 50/24, `core_pkg.mc` 9/3); outside `src/`,
+  `lib/sys_windows_host.mc` +22/-4, `scripts/sysroot-windows.sh` +2, `tools/bundle.list` +1
+  (`mc/upgrade`, 97 entries), `mc.toml` +1 (`src/upgrade.mc` in `[package].files`, byte order),
+  `scripts/check-pkg.sh` +231.
+  Gate: `scripts/check-pkg.sh` § 33, **offline like everything above it** -- the fixture is a
+  compiler built from THIS tree with one line of `src/version.mc` changed to `9.9.9`, packaged by
+  `scripts/release-assets.sh` into a directory that also holds the source tarball the index rows
+  point at; four rows (`1.0.0`, `9.9.9`, `10.0.0-rc1`, `11.0.0 yanked`) so "the newest" has
+  something to skip. Twelve assertions: the dev refusal, the plan compared byte for byte, the
+  GitHub derivation and the other-forge refusal, a tampered archive (nothing written, no download
+  left behind), an asset built from the wrong tag, the happy path (`cmp` against the packaged
+  binary, `codesign --verify`, an empty download directory), the install road, `is the newest`,
+  the downgrade plan, a yanked version named by hand, and the **self-replacement with no `--to`**
+  -- inode before and after, and the replaced file reporting `mc 9.9.9`. `check-pkg` 145/145.
+  `make bundle` re-run BEFORE bootstrapping: 97 files, raw 1291986 -> LZ 602252, blob 603462 B.
+  `make check` green end to end (**RC 0, zero FAIL**): `budget` 2848/3000, `test` 32/32,
+  `check-lex` 172/172 (3 skipped), `check-ast`/`check-asm` 173/173, `check-obj` **32/32 identical
+  to the frozen seed**, `check-bundle`, `bootstrap` at a fixed point (`mc2.o == mc3.o`,
+  1381120 bytes; the `--dump-asm` diff between `mc1` and `mc2` is **empty**), `check-surface`
+  32/32, `test-exe` 32/32, `check-mc` 17/17, `check-standalone`, `check-parts`, `check-toml`
+  10/10, `check-build` 53/53, **`check-pkg` 145/145**, `check-stubs` 9/9, `check-sysroots`,
+  `check-limits` **17/17 under 90%** (globals 446/512, funcs 1785/2048), `check-minimal`,
+  `test-linux` 42/42 and `test-linux-x86_64` 40/40, the four `--exe` cells 45/45 + 45/45 + 43/43 +
+  43/43, `test-windows` 43/43 and `test-windows-x86_64` 41/41 objects cross-compiled,
+  `check-examples`, `check-lang`, `check-conc`, `check-desktop`, `check-float`, `check-wide`,
+  `check-kernel`, `check-avr`, `test-sandbox` 73 ok / 0 failed / 1 skipped, `check-docs`
+  (**201 symbols**, 46 flags, 31 TOML keys, 10 directives, 52 samples, 437 links), `site` +
+  `check-site`. `make check-linux-host` RC 0 over all four cells (aarch64 musl 45/45 and gnu
+  43/43, x86_64 musl 43/43 and gnu 41/41), each after its own `mc2l.o == mc3l.o` and with the
+  cross proof against the macOS `build/mc2.o` green.
+  `scripts/check-inert.sh build/mc1.pre build/mc1` (pre = a `mc1` built from `origin/main`
+  3d8eef4): **33 objects identical** (`tests/*.mc` and `src/mc.mc`) plus byte-identical artefacts
+  for `examples/api`, `lang`, `conc`, `desktop` and `kernel`.
+  The five goldens rewritten **once**, each only after its own criterion: `mc2.sha256`
+  `63eaf37b...7c610e` -> `63af66e9c281dc3a65fb5b2540ef33ae240e225024da2b474adb5e1904d1b5f5`
+  (after the empty `--dump-asm` diff and `cmp build/mc2.o build/mc3.o`); the Linux pair deleted
+  and re-recorded by `make check-linux-host` -- `mc2-linux-arm64.sha256`
+  `895b9569232cdfd47fbe09616cd76e0ea810b3313f0536a1fad96419ff13dc7b`,
+  `mc2-linux-x86_64.sha256`
+  `9500e870fdebf90018c806ba05aa0be6d17265c7aa5f49436d3699a4efe6085b`, each recorded in its musl
+  cell and re-verified by the gnu cell of the same architecture; the Windows pair cross-computed
+  per `tests/golden/README.md` -- `mc2-windows-arm64.sha256`
+  `6a0156735a2a298a002a145cb4e28688602c6ff43e23167398c0f8ea161245ce` (1410951 B),
+  `mc2-windows-x86_64.sha256`
+  `b55d093c97d56ec6c60f8c7a61570697fcf7d8ea957d89baa151732c371b2bed` (1452531 B).
+  Docs: `docs/reference/cli.md` § 3f (new, plus the usage block at the top refreshed -- it claimed
+  "four entry points" and printed a stale list), `docs/reference/packages.md` § 11
+  (`mc upgrade` -- the binary, not the source; the asset rule; what the checksum proves and what
+  it does not), `docs/reference/diagnostics.md` (a `mc upgrade` table, ten rows),
+  `docs/reference/hooks.md` § 6 (`host_self_path()`), `docs/reference/bundle.md`
+  (`<mc/install>`, `<mc/upgrade>`, the catalogue count 83 -> 97), `docs/bootstrap.md`
+  § Keeping an installed `mc` up to date, `docs/guide/00-getting-started.md`
+  § Keeping it up to date, `docs/specs/M44.md` § Implementation notes -- step 5 (eleven notes,
+  every deviation on record).
+  Rebased onto `origin/main` 86df6e38 (M49 steps A+D1 -- the `--opt`/`-O` flag, the arm64
+  register allocator and the sixth golden `mc2-opt.sha256` -- in the tree). No source file
+  conflicted (M49 is `src/gen_walk.mc`/`src/machine_arm64.mc`/`src/gen_resolve.mc`/`src/cli.mc`'s
+  flag/`src/driver.mc`; M44 step 5 is `src/upgrade.mc` + the host files + `src/core_pkg.mc`): the
+  conflicts were `CLAUDE.md` § State (both kept -- M49's two entries in order, then this one),
+  `docs/reference/cli.md` (the usage line -- HEAD's, which adds `[--opt=N|-O]` to the line step 5
+  refreshed -- plus § 3f `mc upgrade`, both survive), and the six generated/aggregated files
+  regenerated below. `docs/reference/diagnostics.md`, `docs/bootstrap.md` and the `Makefile`
+  auto-merged and were read to confirm both sides survived (M49's `check-opt`/`mc2-opt` and M44's
+  `mc upgrade`/`## 3f`). `make bundle` re-run FIRST: 97 files, raw 1324727 -> LZ 615658, blob
+  616868 B (bigger than step 5's own 603462 because M49 grew the bundled sources). `make check`
+  green end to end (**RC 0, zero FAIL**): `check-obj` **32/32 identical to the frozen seed**,
+  `check-opt` **70/70** (both roads, taught examples and the null-slot `kernel`/`avr` identical on
+  each), **`check-pkg` 145/145**, `check-surface` 32/32, `check-limits` 17/17 under 90%,
+  `test-sandbox` 73 ok / 0 failed / 1 skipped, `check-docs` (203 symbols, 47 flags, 32 TOML keys,
+  10 directives, 52 samples, 453 links); the plain fixed point `mc2.o == mc3.o` (1408432 B) with an
+  **empty** `--dump-asm` diff, the optimized fixed point `mc2o.o == mc3o.o` (1374400 B) with an
+  **empty** `--dump-asm --opt=1` diff, and the cross-road identity `mc2o-plain.o == mc2.o`.
+  `scripts/check-inert.sh <mc1 from origin/main 86df6e38> build/mc1`: **33 objects identical on
+  both roads** (`tests/*.mc` and `src/mc.mc`) plus byte-identical `examples/api`, `lang`, `conc`,
+  `desktop` and `kernel`. `make check-linux-host` RC 0 over all four cells (aarch64 musl suite
+  46/46 + `test-exe` 31/31, aarch64 gnu 47/47 native, x86_64 musl 43/43 + 29/29, x86_64 gnu 44/44
+  native), each after its own `mc2l.o == mc3l.o` (1767048 B on aarch64, 1659648 B on x86_64) and
+  with the cross proof (`mc2l --backend=macho src/mc.mc` byte for byte the macOS `build/mc2.o`)
+  green on both libcs. **All six goldens re-recorded once** after the rebase, each only after its
+  own criterion: `mc2.sha256`
+  `634ddcdb6cf65489972d62a904442f801f2db08974f005fe6a1f76261c2d5790`, `mc2-opt.sha256`
+  `ed6897d4f850379f78f4118df0c3e6470622f3fe47e0b3e0498f5b9bf49b70a5` (after the two empty
+  `--dump-asm` diffs and `cmp build/mc2.o build/mc3.o` / `cmp build/mc2o.o build/mc3o.o`); the
+  Linux pair deleted and re-recorded by `make check-linux-host` -- `mc2-linux-arm64.sha256`
+  `afee3e3e5e3804ce3bcf76537aeb38c4ea7d31234e48f18610360410044521ce`, `mc2-linux-x86_64.sha256`
+  `a9773aacffcf416e71e52964e344578f6dde5a704722ece21a8238e3d2742eab`; the Windows pair
+  cross-computed per `tests/golden/README.md` -- `mc2-windows-arm64.sha256`
+  `a32337b358a4ff99cc3d04aaea3b3430f816a635a8bad29ec342df3b04a70e6d` (1438768 B),
+  `mc2-windows-x86_64.sha256`
+  `a46610ae39a65010de24f2e3e01fe742fdc0f72f9b935d1c2a4625a817897f5f` (1482524 B).
+- Next: the **site + registry server, M47 S4-S6**, in
   `minicompiler/mc-registry`; then **M42 step 2** (PE `--exe`, CI-gated on the Windows runners).
   **M46** only on the owner's request; **M43 Layer 2** after 1.0.0. M13 and M18 stay in the backlog
   (`docs/specs/M13.md`: sizing a program's memory at compile time -- the fixed 4 MiB arena in

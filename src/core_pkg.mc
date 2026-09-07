@@ -10,6 +10,9 @@
 //                  own version, under <libs>/mc/v<version>/ -- which is what a
 //                  binary with no blob (mc-slim) reads its `<name>` includes
 //                  from (M44 § B4, M48 § 2.6)
+//   upgrade.mc     `mc upgrade`: the compiler replaces itself from a release,
+//                  verified against the release's own sha256, and then installs
+//                  the matching library tree (M44 § D2, step 5)
 //
 // The split is the M41 debloat argument applied to packages. The READ side --
 // `[deps]`, `mc.lock`, the tree hash, `#include <pack/file.mc>`, the refusals --
@@ -22,6 +25,7 @@
 #include "core_build.mc"
 #include "pkg.mc"
 #include "install.mc"
+#include "upgrade.mc"
 
 // `update` is top-level and not `mc pkg update` (D21): the user-facing verbs
 // read like `mc build`, and the package-author and maintenance ones stay under
@@ -36,4 +40,9 @@ void mc_pkg_init() {
     // it is top-level beside `update` and not a verb under `mc pkg` (§ D1).
     subcommand("install", &install_cmd,
         "       mc install [VERSION] [--from-tree DIR] [--yes] [--force] [--registry URL|DIR] [--libs-dir DIR]\n");
+    // `upgrade` is `install` for the BINARY: same registry, same version rule,
+    // and the tree the new binary reads comes from the `install` it spawns
+    // afterwards (§ D2, step 5).
+    subcommand("upgrade", &upgrade_cmd,
+        "       mc upgrade [VERSION] [--yes] [--no-install] [--to PATH] [--registry URL|DIR] [--libs-dir DIR]\n");
 }

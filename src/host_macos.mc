@@ -101,6 +101,24 @@ uptr host_home() {
     }
 }
 
+// M44 step 5: the path of the binary that is RUNNING. `mc upgrade` replaces
+// that file, so it has to know which one it is, and `argv[0]` is not an answer:
+// it is whatever the caller passed, and after a PATH lookup it is a bare name.
+// Each host asks the system instead. `_NSGetExecutablePath` fills the buffer
+// and takes its size as a `uint32_t` in and out; a non-zero result means the
+// buffer was too small. The answer is what dyld used -- symlinks and `..` and
+// all -- and is deliberately not resolved further: replacing the file the
+// kernel loaded is exactly what an upgrade means. 0 when there is no answer.
+extern i64 _NSGetExecutablePath(uptr buf, uptr size);
+
+uptr host_self_path() {
+    uptr buf = xalloc(4097);
+    u8 sz[8];
+    st32(sz, 4096);
+    if (_NSGetExecutablePath(buf, sz) != 0) return 0;
+    return buf;
+}
+
 // M25: the program `mc sysroot fetch` spawns to download a pinned archive, and
 // the one it falls back to. `mc` speaks no HTTP and no TLS (docs/specs/M25.md
 // § 2); /usr/bin/curl ships with macOS, so there is nothing to fall back to.

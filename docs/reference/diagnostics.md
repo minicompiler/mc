@@ -549,6 +549,29 @@ Everything else `mc install` can print comes from the fetch it shares with `mc p
 refusals. `mc 0.16.0 is installed (<libs>/mc/v0.16.0/)` on stdout with exit 0 is not a diagnostic:
 it is what a second `mc install` says.
 
+### `mc upgrade`
+
+The compiler replacing itself ([cli.md](cli.md) § 3f). Same two codes, same meanings; the version
+refusals it shares with `mc pkg add` (`is yanked`, `no such version in the registry`) are in the
+`mc pkg` table above.
+
+| message | exit | cause | fix |
+|---|---|---|---|
+| `mc: mc 0.0.0-dev is a development build: build from the tree` + `run: make mc1` | 2 | a bare `mc upgrade` on a compiler built from a checkout: the sentinel names no release, so there is no "newest" to resolve to | build from the tree, or name a published `VERSION` -- `mc upgrade 0.16.0` works on a dev build |
+| `mc: upgrade: no binaries known for: URL` | 2 | the `mc` package's index row points somewhere this compiler has no asset rule for. Only GitHub's `archive/refs/tags/<tag>.tar.gz` (and a local path, whose assets sit beside it) are understood | publish the release on GitHub, or stage it in a directory and use `--registry DIR` |
+| `mc: checksum mismatch for mc 0.16.0` + `expected`/`got` | 2 | the archive does not match the `.sha256` served beside it. Nothing is unpacked and nothing is written | re-run; a second mismatch means the download or the release is wrong |
+| `mc: not a checksum file: URL` | 2 | what came back where a `.sha256` should be does not begin with 64 hex characters -- typically an HTML error page saved under that name | the release is incomplete |
+| `mc: the downloaded mc reports another version: mc 9.9.9, expected mc 0.16.0` | 2 | the archive unpacked and ran, and answered a version other than the one asked for: an asset built from the wrong tag | the release |
+| `mc: the downloaded mc does not run: exit N` | 2 | the extracted file could not be executed at all -- the wrong architecture, or a quarantined download | check the `<target>` the plan named |
+| `mc: the archive carries no compiler: mc-0.16.0-macos-arm64/mc` | 2 | `tar` extracted and the one member the release promises was not there | the release |
+| `mc: cannot replace: PATH` | 2 | the rename over the destination failed: a directory that is not writable, or a path on a filesystem that refuses it | write elsewhere with `--to PATH` and move it by hand |
+| `mc: cannot find the path of this binary: name one with --to PATH` | 2 | the host could not say which file this process was loaded from | `--to PATH` |
+| `mc: nowhere to put the download: no --libs-dir and no HOME` | 2 | there is no `<libs>` to download into | `--libs-dir DIR` |
+
+`upgrade mc 0.15.18 -> 0.16.0` (or `downgrade`), `nothing was downloaded: re-run with --yes`,
+`mc 0.15.18 -> 0.16.0 (/usr/local/bin/mc)` and `mc 0.16.0 is the newest` are on stdout with exit 0
+and are not diagnostics.
+
 ---
 
 ## Reproducing them

@@ -71,6 +71,22 @@ uptr host_home() {
     }
 }
 
+// M44 step 5: the path of the binary that is RUNNING -- see src/host_macos.mc
+// for why `argv[0]` is not it. On Linux the kernel keeps the answer in
+// /proc/self/exe, a symbolic link `readlink` reads without following it, so a
+// process started through a symlink still learns the file it was loaded from.
+// `readlink` does not NUL-terminate and returns a C `int`. 0 when /proc is not
+// mounted.
+extern i64 readlink(uptr path, uptr buf, i64 n);
+
+uptr host_self_path() {
+    uptr buf = xalloc(4097);
+    i64 r = c_int(readlink("/proc/self/exe", buf, 4096));
+    if (r <= 0) return 0;
+    st8(buf + r, 0);
+    return buf;
+}
+
 // M25: the downloader `mc sysroot fetch` spawns, and its fallback. A
 // distribution ships one of the two; the CI runners have both.
 uptr host_downloader()     { return "curl"; }

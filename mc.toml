@@ -144,6 +144,7 @@ files = [
     "src/sysroot.mc",
     "src/sysroots.mc",
     "src/toml.mc",
+    "src/upgrade.mc",
     "src/user.mc",
     "src/version.mc",
     "tests/mc/bundle/embed_demo.mc",
