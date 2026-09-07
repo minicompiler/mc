@@ -1,10 +1,16 @@
 #!/bin/sh
-# release-assets.sh VERSION TARGET BINARY [OUTDIR]
+# release-assets.sh [--slim] VERSION TARGET BINARY [OUTDIR]
 #
 # Packages one release artifact:
 #
 #   OUTDIR/mc-VERSION-TARGET.tar.gz          the tarball
 #   OUTDIR/mc-VERSION-TARGET.tar.gz.sha256   its checksum, `shasum -c`-ready
+#
+# With --slim the names gain a `-slim` suffix (mc-VERSION-TARGET-slim.tar.gz)
+# and INSTALL.txt gains the one paragraph that flavour needs: the binary inside
+# is still called `mc` (`mc.exe` on Windows), it is the same compiler, and the
+# libraries it does not carry come from `mc install` (M44 § B5, step 4). The
+# publish globs are `dist/mc-*.tar.gz`, which already match.
 #
 # The tarball holds a single directory, mc-VERSION-TARGET/, containing:
 #
@@ -37,6 +43,14 @@
 # touch above for the timestamps. Both are pinned to `--format ustar`.
 set -e
 
+# --slim first, if at all: it changes the archive's name and one paragraph of
+# INSTALL.txt, and nothing else about how the archive is built.
+slim=0
+if [ "$1" = "--slim" ]; then
+    slim=1
+    shift
+fi
+
 # the tag name and the bare version are both accepted; `v` never reaches a
 # file name
 version="${1#v}"
@@ -45,7 +59,7 @@ binary="$3"
 outdir="${4:-dist}"
 
 if [ -z "$version" ] || [ -z "$target" ] || [ -z "$binary" ]; then
-    echo "usage: release-assets.sh VERSION TARGET BINARY [OUTDIR]" >&2
+    echo "usage: release-assets.sh [--slim] VERSION TARGET BINARY [OUTDIR]" >&2
     exit 1
 fi
 if [ ! -f "$binary" ]; then
@@ -54,6 +68,7 @@ if [ ! -f "$binary" ]; then
 fi
 
 name="mc-$version-$target"
+[ "$slim" = 1 ] && name="$name-slim"
 stage="$outdir/.stage/$name"
 
 rm -rf "$outdir/.stage"
@@ -73,7 +88,11 @@ chmod 755 "$stage/$binname"
 # INSTALL.txt is generated, never dated: a date would make the tarball differ
 # between two builds of the same tag.
 {
-    echo "mc $version — $target"
+    if [ "$slim" = 1 ]; then
+        echo "mc $version — $target (slim)"
+    else
+        echo "mc $version — $target"
+    fi
     echo
     echo "mc is a self-hosting mini compiler that is teachable through its own surface."
     echo "This archive holds one file that matters: the compiler itself."
@@ -145,8 +164,20 @@ chmod 755 "$stage/$binname"
     echo "  mc build .                                               # a project, from mc.toml"
     echo "  mc --host                                                # what this binary is"
     echo
-    echo "The standard library travels inside the binary: #include <sys>, <prelude>, <io>"
-    echo "and <mc/core> need no checkout. Documentation: docs/ in the repository."
+    if [ "$slim" = 1 ]; then
+        echo "This is the SLIM flavour: the same compiler without the bundled library"
+        echo "source. #include <sys>, <prelude>, <io> and <mc/core> are not in the binary;"
+        echo "they come from the mc package, which the compiler installs for itself:"
+        echo
+        echo "  mc install --yes                                         # ~/.mc/libs/mc/v$version/"
+        echo
+        echo "Everything that needs no <...> works before that: compiling a program of your"
+        echo "own tree, every --dump-*, mc --host, mc build, mc limits, mc sysroot, mc pkg."
+        echo "The full flavour, mc-$version-$target.tar.gz, needs no install at all."
+    else
+        echo "The standard library travels inside the binary: #include <sys>, <prelude>, <io>"
+        echo "and <mc/core> need no checkout. Documentation: docs/ in the repository."
+    fi
 } > "$stage/INSTALL.txt"
 
 # the README excerpt: everything before the marker, or the first 120 lines

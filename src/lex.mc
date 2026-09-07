@@ -731,7 +731,21 @@ void lex_set_bundle(uptr openfn) { bopen_fn = openfn; }
 //     is its normalised path, the same key lex_include would record for it.
 uptr lopen_fn = 0;
 
-void lex_set_libs(uptr openfn) { lopen_fn = openfn; }
+// M44 step 4: and the sentence to print when NOTHING answered a `<name>` in a
+// compiler that carries no blob. `mc-slim` is that compiler, and
+// `unknown bundled include: prelude` is exactly the wrong thing to tell its
+// user: nothing is bundled there, and what is missing is the install. The text
+// has to name the version and the road, which are src/deps.mc's and
+// src/version.mc's -- so it arrives the way every other part boundary does, as
+// a function pointer.
+//
+//   uptr libs_hint(uptr name) -> a message, or 0 for "say the usual thing"
+uptr lhint_fn = 0;
+
+void lex_set_libs(uptr openfn, uptr hintfn) {
+    lopen_fn = openfn;
+    lhint_fn = hintfn;
+}
 
 // ---- package roots and the closure rule (A6) ----
 // A file under a package root may include or #embed: its own tree (quotes),
@@ -1038,6 +1052,15 @@ i64 lex_include_name(uptr name, i64 line) {
     // The name IS a locked package and nothing answered: say why, instead of
     // reporting a bundled name that was never going to be there.
     if (t >= 0 && !lex_may_reach(from, t)) lex_pkg_refuse(from, name, line);
+    // A compiler with no bundle at all (bopen_fn == 0) is `mc-slim`, and there
+    // the interesting fact is not that this name is unknown but that no name is
+    // known: the libraries live in the installed `mc` package. The hint says so
+    // and names the road; a compiler that HAS a blob never gets here for a name
+    // it ships, so its message does not move.
+    if (bopen_fn == 0 && lhint_fn != 0) {
+        uptr why = callp(lhint_fn, name);
+        if (why != 0) err_at(from, line, why);
+    }
     err_at2(from, line, "unknown bundled include", name);
     return -1;
 }

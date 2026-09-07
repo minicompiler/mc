@@ -1,0 +1,23 @@
+# mc.linux-x86_64-slim-obj.toml -- the SLIM flavour of src/mc.linux-x86_64-obj.toml
+# (M44 § B, step 4): the same cross-build, one line apart -- `entry` names
+# src/mc_linux_x86_64_slim.mc, which is src/mc.*.mc with src/core_slim.mc in place of
+# src/core.mc, so the object carries no bundle blob.
+#
+# Everything else -- the target, the object road, the tolerance, the reason CI
+# uses it -- is the sibling's, and the comment there explains it.
+#
+[project]
+name  = "mc-linux-x86_64-slim"
+entry = "mc_linux_x86_64_slim.mc"
+out   = "../build/mc-linux-x86_64-slim.o"
+kind  = "obj"
+
+[target]
+os   = "linux"
+arch = "x86_64"
+
+# The compiler compiling itself is the biggest source in the repository; at the
+# default 0.25 several tables double mid-build. 1.0 keeps the whole build inside
+# the first reserve (`mc limits src --config src/mc.linux-x86_64-obj.toml`).
+[limits]
+tolerance = 1.0

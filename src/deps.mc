@@ -974,6 +974,20 @@ uptr dp_mc_open(uptr name, uptr pcanon, uptr plen) {
     return 0;
 }
 
+// ---- why nothing answered (M44 step 4) ----
+// src/lex.mc calls this when a `#include <name>` found nothing AND this binary
+// carries no bundle -- which is `mc-slim` and nothing else. 0 means "the usual
+// message is right": the tree IS installed and the name is simply not one of
+// its entries, which is an ordinary unknown-include. Otherwise the answer is
+// the sentence the reader needs, and the only one: the libraries of a slim
+// compiler are the installed `mc` package, and there is none.
+uptr dep_include_hint(uptr name) {
+    dp_mc_load();
+    if (ld64(dp_state() + DP_MCDIR) != 0) return 0;
+    return tm_cat(tm_cat(tm_cat("#include <", name), ">: not bundled in this compiler and mc "),
+                  tm_cat(mc_version(), " is not installed: run mc install"));
+}
+
 // ---- the opener src/lex.mc calls ----
 // stage 0 = the lock road, stage 1 = the installed `mc` package. The once-only
 // key handed back for either is the file's NORMALISED PATH -- the same key

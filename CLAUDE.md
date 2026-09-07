@@ -4703,8 +4703,113 @@ agents (`.claude/agents/`): `stage0-dev` (C23), `mc-dev` (`.mc` code), `reviewer
   `mc2-windows-x86_64.sha256`
   `8b42d0ca3879fa5e2164ddffe44f439b7a10dfd8368680fa530745073566d571` (1411990 B), the second of
   which the Wine-hosted `mc2w.exe` also wrote byte for byte.
-- Next: the **site + registry server, M47 S4-S6**, in `minicompiler/mc-registry`; then **M44 steps 4-5**
-  (slim / install / upgrade), then **M42 step 2** (PE `--exe`, CI-gated on the Windows runners).
+- M44 step 4 ✔ (`docs/specs/M44.md` § Implementation notes -- step 4; the amendment's § B4/B5 as
+  **M48 § 2.6 rewrote them**): **`mc install` -- the compiler installs its own package tree, and
+  the slim binary.** `stage0/` untouched (2848/3000).
+  * **`src/install.mc`** (174 lines, 111 of them neither comment nor blank), in `<mc/core_pkg>`
+    and not `<mc/core_build>` as § B4 wrote: since M48 § 2.6 the tree comes from the `mc` package's
+    OWN index row, so it needs the index reader, the fetch and the hash, all of which are
+    `src/pkg.mc`'s. **Zero new globals for it** -- everything is a local or already lives in
+    `pk_state()`.
+    `mc install [VERSION] [--from-tree DIR] [--yes] [--force] [--registry URL|DIR] [--libs-dir DIR]`.
+    The registry road is `pkg_index_load("mc")` -> `pkg_row` -> `pkg_plan` -> `pkg_fetch_one`,
+    unchanged, so the plan, the member check, the hash-and-compare and the unbless-on-mismatch are
+    the ones every package gets; `--from-tree` hashes the source, copies `mc.toml` +
+    `[package].files` through the ONE reader that checks containment, hashes the copy and requires
+    the two to agree. Then, on both roads, `tools/bundle.list` is copied to the ROOT of the tree --
+    what `dp_mc_load` reads, deliberately not a `files` entry so it cannot move the published hash.
+    **`VERSION` is a positional and a real feature**, not a test-only override: an
+    `MC_INSTALL_VERSION` env var and a `--version` flag were both considered and dropped (a second
+    way to configure the compiler; a collision with the global `--version`). `0.0.0-dev` refuses
+    the registry road and names the other one (`run: mc install --from-tree .`, exit 2).
+    **The reserved-name rule is untouched**: `mc` is still refused in `[deps]`, `[replace]` and
+    `mc pkg add` -- `check-pkg` § 11 asserts all three in the same run that installs from a row in
+    § 32 -- because this road installs the compiler's own package FOR THE BINARY ITSELF, at its own
+    version, into a directory no project resolves through.
+  * **The slim flavour.** `src/core_slim.mc` (`<mc/core_slim>`) is `core_min` + `core_machines` +
+    `core_writers` + `core_build` + `core_pkg` + `main_slim.mc`; `src/main_slim.mc`
+    (`<mc/main_slim>`) is `src/main.mc` without `mc_bundle_init()` and `mc_sandbox_init()`. Five
+    entries (`src/mc_slim.mc` and one per cross target) and four `src/mc.<target>-slim-obj.toml`
+    configs, each its full sibling with `entry` changed; `make mc-slim` builds `build/mc-slim`.
+    `tests/pkg/nobundle.mc` was DELETED -- it existed only until this file did -- and
+    `scripts/check-pkg.sh` § 15 now probes with `src/mc_slim.mc`.
+    **Deviation, on record:** `<mc/core_sandbox>` is left out as well as `<mc/core_bundle>` (the
+    part list the task named). It is defensible -- a Linux supervisor is not part of compiling
+    anything -- but it makes the flavour two differences rather than one; going back to "slim is
+    `mc` minus the blob" is one `#include` and one call in `src/main_slim.mc`.
+  * **The refusal a slim binary owes its user** cost one global and one function pointer:
+    `lex_set_libs(openfn, hintfn)`, asked ONLY when `bopen_fn == 0` (a binary with no bundle at
+    all), answered by `src/deps.mc`'s `dep_include_hint`, which returns 0 when the `mc` package IS
+    installed -- so `unknown bundled include` is byte for byte what it was everywhere else, and
+    `check-pkg` asserts that for the full binary in the same section.
+    `prog.mc:1: #include <prelude>: not bundled in this compiler and mc 0.0.0-dev is not installed:
+    run mc install`. The alternative (a third `stage` on `libs_open` returning a message instead of
+    a source) was dropped: it would make one pointer mean two things to save one global.
+  * **The pre-scan had to learn the second road, and that is where M48 § 2.6's open question got
+    its number.** `ps_bundled` (`src/limits.mc`) reached the bundle through `bopen_fn` and nothing
+    else, so a slim compiler estimated **32 nodes** for a project whose sources are all `<...>`:
+    ten growths on `nodes`, nine on `ins`, and 95 MB of heap for a build the full compiler does in
+    44. It now falls back to `lopen_fn` stage 1 with `virt = 0` (that source came off the
+    filesystem, so its relative includes are paths) -- inert for a full binary, whose bundle
+    answers first. With it, `mc-slim build tests/pkg/std --limits` is **`ok`, grow 0 everywhere**.
+    The same numbers answer M48 § 2.6: compiling `<mc/core>` costs **175 244 nodes / 104 MB** out
+    of an installed tree against **101 194 / 44 MB** out of the blob, because the installed
+    `src/bundle_data.mc` is the checked-in mode-0 array and the copy a binary regenerates from its
+    own blob is mode 1 (`#embed`). It costs memory and nothing else, the estimate covers it, and
+    step 4 does NOT rewrite the file: the rewrite needs a blob to emit from, and the binary that
+    would need it most is exactly the one with none.
+  * **Release.** `scripts/release-assets.sh --slim` names the archive
+    `mc-<ver>-<target>-slim.tar.gz` (§ B5's spelling) and writes one extra `INSTALL.txt`
+    paragraph; the binary inside is still `mc`/`mc.exe`, so `publish`'s `dist/mc-*.tar.gz` glob
+    needed no change. `release.yml`: the macOS job builds `dist/mc-slim` and cross-compiles four
+    slim objects into the two artifacts the full ones already travel in; each Linux and Windows leg
+    links its slim object beside the full one and packages it. **Ten archives per release**, five
+    full and five slim. The slim binaries are packaged and NOT bootstrapped (the fixed point is a
+    property of the compiler; the slim one is the full one minus a data section), and
+    `bootstrap-linux.sh`/`bootstrap-windows.sh` keep taking the FULL tarball as their seed.
+    `mc-libs-<ver>.tar.gz` is not produced: that name is `mclib`'s now (M48 § 2.6).
+  -- cost in `src/`: **167 added code lines** (install.mc 111, core_slim 6, main_slim 8, the five
+  entries 3 each, `lex.mc` +9, `limits.mc` +8, `deps.mc` +6, `core_pkg.mc` +3, `core_build.mc` +1);
+  `globals` **445 -> 446 / 512 (87%)**, the one being `lhint_fn`. `tools/bundle.list` gained
+  `mc/core_slim`, `mc/install` and `mc/main_slim` (96 entries) and `mc.toml`'s `[package].files`
+  went to 100 -- the repository's tree hash is now
+  `18e1ecdf923803a86f9709f3d18bdb505b5ebc55863f6dd2df677c8f6b07a7ce`.
+  Measured (macOS arm64): the slim compiler is **534 179 bytes against 1 225 843** for the full
+  one, 44%, with `__DATA,__data` **8 608 against 605 104**; `<mc/host>` + `<mc/core_slim>` +
+  `<user_default>` and `src/mc_slim.mc` produce the same 659 400-byte object.
+  `make bundle` re-run before bootstrapping (96 files, raw 1 271 758 -> LZ 591 407, blob 592 606 B).
+  `make check` green end to end (**RC 0, zero FAIL**): `budget` 2848/3000, `test` 32/32,
+  `check-lex` 171/171 (3 skipped), `check-ast`/`check-asm` 172/172, `check-obj` **32/32 identical
+  to the frozen seed**, `check-bundle`, `bootstrap` at a fixed point (`mc2.o == mc3.o`; the
+  `--dump-asm` diff between `mc1` and `mc2` is **empty**), `check-surface` 32/32 + inert,
+  `test-exe` 32/32, `check-mc`, `check-standalone`, **`check-parts`** (with the new § 4a, the slim
+  assembly), `check-toml`, `check-build`, **`check-pkg` 130/130** (§ 32 is `mc install` and
+  `mc-slim`, end to end and offline), `check-stubs`, `check-sysroots`, `check-limits`
+  **17/17 under 90%**, `test-linux` 42/42 and `test-linux-x86_64` 40/40, the four `--exe` cells
+  45/45 + 45/45 + 43/43 + 43/43, `test-windows` 43/43 and `test-windows-x86_64` 41/41 objects,
+  `check-examples`, `check-lang`, `check-conc`, `check-desktop`, `check-float`, `check-wide`,
+  `check-kernel`, `check-avr`, `test-sandbox` 73 ok / 1 skipped, `check-docs` (200 symbols, 44
+  flags, 31 TOML keys, 10 directives, 52 samples, 422 links), `site` 93 pages + `check-site` +
+  `check-site-linux` 11/11. `make check-linux-host` RC 0 over all four cells (aarch64 and x86_64 x
+  musl and gnu), each after its own `mc2l.o == mc3l.o` and with the cross proof green.
+  The five goldens rewritten **once**, each only after its own criterion: `mc2.sha256`
+  `3f0cec7a...cefd6` -> `63eaf37bab7bbc9046750475fe7e21f1cf3037e6674b98c94629fcb0797c610e`
+  (after the empty `--dump-asm` diff and `cmp build/mc2.o build/mc3.o`); the Linux pair deleted and
+  re-recorded by `make check-linux-host` -- `mc2-linux-arm64.sha256`
+  `fee8986333779e67878d736a1774c7316cda6c672f0f43244c8c042f93397376`,
+  `mc2-linux-x86_64.sha256`
+  `6e3370bcfc626ca2d4b007f2bf39aa7b18bc73d84529f73f6cd0acdd3ff483cf`; the Windows pair
+  cross-computed per `tests/golden/README.md` -- `mc2-windows-arm64.sha256`
+  `5dca72555d855de35dbf48967b4008c47f554ab448c9fb57de0b14fa30c4ba7a` (1 386 391 B),
+  `mc2-windows-x86_64.sha256`
+  `40fd6a58a30ff331caceedbc7961b164e23e9c2712cb8744b261b922d9a87f31` (1 427 083 B).
+  Docs: `docs/reference/cli.md` § 3e, `docs/reference/packages.md` § 2 (the installed layout) and
+  § 11 (the install road), `docs/reference/bundle.md` (§ The slim flavour, and `install` in the
+  `<mc/core_pkg>` row), `docs/reference/diagnostics.md` (a `mc install` table),
+  `docs/build.md` § M44 (the two flavours), `docs/bootstrap.md` (why a seed is the full flavour),
+  `docs/ci.md` (ten tarballs), `docs/specs/M44.md` § Implementation notes -- step 4.
+- Next: **M44 step 5** (`mc upgrade`, `LATEST`); the **site + registry server, M47 S4-S6**, in
+  `minicompiler/mc-registry`; then **M42 step 2** (PE `--exe`, CI-gated on the Windows runners).
   **M46** only on the owner's request; **M43 Layer 2** after 1.0.0. M13 and M18 stay in the backlog
   (`docs/specs/M13.md`: sizing a program's memory at compile time -- the fixed 4 MiB arena in
   `examples/api/lib/rt.mc` is one more motivating case; M18 is Linux x86 32-bit). From the

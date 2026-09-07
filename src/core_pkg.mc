@@ -6,6 +6,10 @@
 //                  driver with it
 //   pkg.mc         the index, MVS, the lock writer, the archive fetch, vendor,
 //                  add, list, verify, hash and the registry gate check
+//   install.mc     `mc install`: the compiler's OWN package, at the compiler's
+//                  own version, under <libs>/mc/v<version>/ -- which is what a
+//                  binary with no blob (mc-slim) reads its `<name>` includes
+//                  from (M44 § B4, M48 § 2.6)
 //
 // The split is the M41 debloat argument applied to packages. The READ side --
 // `[deps]`, `mc.lock`, the tree hash, `#include <pack/file.mc>`, the refusals --
@@ -17,6 +21,7 @@
 
 #include "core_build.mc"
 #include "pkg.mc"
+#include "install.mc"
 
 // `update` is top-level and not `mc pkg update` (D21): the user-facing verbs
 // read like `mc build`, and the package-author and maintenance ones stay under
@@ -27,4 +32,8 @@ void mc_pkg_init() {
         "       mc pkg sync|add|list|vendor|verify [DIR] [--yes] [--registry URL|DIR] [--libs-dir DIR]\n       mc pkg hash DIR | check INDEX.toml [--yes]\n");
     subcommand("update", &update_cmd,
         "       mc update [NAME] [DIR] [--yes] [--registry URL|DIR] [--libs-dir DIR]\n");
+    // `install` is about the COMPILER's package and not about a project's, so
+    // it is top-level beside `update` and not a verb under `mc pkg` (§ D1).
+    subcommand("install", &install_cmd,
+        "       mc install [VERSION] [--from-tree DIR] [--yes] [--force] [--registry URL|DIR] [--libs-dir DIR]\n");
 }

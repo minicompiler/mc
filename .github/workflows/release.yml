@@ -113,6 +113,23 @@ jobs:
           TARGET: ${{ matrix.target }}
         run: scripts/release-assets.sh "$VERSION" "$TARGET" dist/mc dist
 
+      # M44 step 4: the SLIM flavour, the same compiler without the bundle blob
+      # (src/mc_slim.mc). Its libraries come from `mc install`, so the only
+      # thing to assert here is that it is the same compiler and knows its
+      # version; what it can and cannot do with nothing installed is
+      # scripts/check-pkg.sh's, on every push.
+      - name: Build and package the slim compiler
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -eu
+          rm -f dist/mc-slim
+          build/mc1 --exe src/mc_slim.mc -o dist/mc-slim
+          ls -l dist/mc-slim
+          test "$(dist/mc-slim --version)" = "mc $VERSION"
+          codesign --verify --verbose=4 dist/mc-slim
+          scripts/release-assets.sh --slim "$VERSION" "$TARGET" dist/mc-slim dist
+
       # M37: the two Linux hosts. `mc` is one program with a host layer
       # (src/host_linux.mc), not a port, so the compiler that has just
       # bootstrapped is what cross-compiles them -- but only as far as the
@@ -127,8 +144,12 @@ jobs:
           set -eu
           make mc-linux-obj
           make mc-linux-x86_64-obj
-          ls -l build/mc-linux-arm64.o build/mc-linux-x86_64.o
-          for obj in build/mc-linux-arm64.o build/mc-linux-x86_64.o; do
+          make mc-linux-slim-obj
+          make mc-linux-x86_64-slim-obj
+          ls -l build/mc-linux-arm64.o build/mc-linux-x86_64.o \
+                build/mc-linux-arm64-slim.o build/mc-linux-x86_64-slim.o
+          for obj in build/mc-linux-arm64.o build/mc-linux-x86_64.o \
+                     build/mc-linux-arm64-slim.o build/mc-linux-x86_64-slim.o; do
             [ -s "$obj" ] || { echo "::error::$obj was not produced"; exit 1; }
           done
           if command -v file >/dev/null 2>&1; then
@@ -148,11 +169,14 @@ jobs:
           set -eu
           make mc-windows-obj
           make mc-windows-x86_64-obj
+          make mc-windows-slim-obj
+          make mc-windows-x86_64-slim-obj
           make mcrt-windows
           make mcrt-windows-x86_64
           ls -l build/mc-windows-arm64.obj build/mc-windows-x86_64.obj
           ls -l build/sysroot/windows-aarch64 build/sysroot/windows-x86_64
           for f in build/mc-windows-arm64.obj build/mc-windows-x86_64.obj \
+                   build/mc-windows-arm64-slim.obj build/mc-windows-x86_64-slim.obj \
                    build/sysroot/windows-aarch64/winstart.obj \
                    build/sysroot/windows-aarch64/mcrt.obj \
                    build/sysroot/windows-x86_64/winstart.obj \
@@ -192,6 +216,8 @@ jobs:
           path: |
             build/mc-linux-arm64.o
             build/mc-linux-x86_64.o
+            build/mc-linux-arm64-slim.o
+            build/mc-linux-x86_64-slim.o
           if-no-files-found: error
 
       - name: Upload the cross-compiled Windows objects
@@ -201,6 +227,8 @@ jobs:
           path: |
             build/mc-windows-arm64.obj
             build/mc-windows-x86_64.obj
+            build/mc-windows-arm64-slim.obj
+            build/mc-windows-x86_64-slim.obj
             build/sysroot/windows-aarch64
             build/sysroot/windows-x86_64
             build/windows-objs
@@ -319,6 +347,26 @@ jobs:
         run: |
           set -eu
           scripts/release-assets.sh "$VERSION" "$TARGET" "$BIN" dist
+          ls -l dist
+
+      # M44 step 4: the slim flavour of this target, linked from the object the
+      # macOS job cross-compiled beside the full one. It is not bootstrapped:
+      # the fixed point is a property of the COMPILER, and this binary is the
+      # one above minus a data section (src/core_slim.mc).
+      - name: Link and package the slim compiler
+        env:
+          MC_SYSROOT: /usr/lib/${{ matrix.larch }}-linux-musl
+          TARGET: ${{ matrix.target }}
+          BIN: ${{ matrix.bin }}
+          OBJ: ${{ matrix.obj }}
+        run: |
+          set -eu
+          # shellcheck disable=SC2086
+          scripts/link-linux.sh ${{ matrix.linkarch }} "$BIN-slim" "${OBJ%.o}-slim.o"
+          chmod 755 "$BIN-slim"
+          ls -l "$BIN-slim"
+          test "$("$BIN-slim" --version)" = "mc $VERSION"
+          scripts/release-assets.sh --slim "$VERSION" "$TARGET" "$BIN-slim" dist
           ls -l dist
 
       - name: Upload the packaged artifact
@@ -489,6 +537,22 @@ jobs:
           scripts/release-assets.sh "$VERSION" "$TARGET" "build/mc-$TARGET.exe" dist
           ls -l dist
 
+      # M44 step 4: the slim flavour, linked from the object the macOS job
+      # cross-compiled beside the full one (see the Linux job for why it is not
+      # bootstrapped).
+      - name: Link and package the slim compiler
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -eu
+          scripts/link-windows.sh --arch ${{ matrix.larch }} \
+              "build/mc-$TARGET-slim.exe" "build/mc-$TARGET-slim.obj"
+          ls -l "build/mc-$TARGET-slim.exe"
+          test "$(build/mc-$TARGET-slim.exe --version)" = "mc $VERSION"
+          scripts/release-assets.sh --slim "$VERSION" "$TARGET" "build/mc-$TARGET-slim.exe" dist
+          ls -l dist
+
       - name: Upload the packaged artifact
         uses: actions/upload-artifact@v4
         with:
@@ -500,8 +564,9 @@ jobs:
 
   publish:
     name: Publish the release
-    # Five tarballs: the macOS one from `build`, the two Linux ones from
-    # `build-linux`, the two Windows ones from `build-windows`.
+    # Ten tarballs since M44 step 4: five full and five slim -- the macOS pair
+    # from `build`, the two Linux pairs from `build-linux`, the two Windows
+    # pairs from `build-windows`.
     # `download-artifact` below globs `release-*`, so all three producers have
     # to be finished.
     needs: [build, build-linux, build-windows]

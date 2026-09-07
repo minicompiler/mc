@@ -110,6 +110,17 @@ build/mc-exe: build/mc1 $(MCSRC)
 	rm -f $@
 	build/mc1 --exe src/mc.mc -o $@
 
+# M44 step 4: the SLIM flavour -- `mc` without the bundle blob. Its libraries
+# come from the installed `mc` package instead (`mc install`), which is why the
+# same binary carries `mc pkg` and `mc install` and drops only <mc/core_bundle>
+# and <mc/core_sandbox> (src/core_slim.mc, src/main_slim.mc).
+build/mc-slim: build/mc1 $(MCSRC)
+	@mkdir -p build
+	rm -f $@
+	build/mc1 --exe src/mc_slim.mc -o $@
+
+mc-slim: build/mc-slim
+
 # M15: regenerates src/bundle_data.mc from tools/bundle.list. This is the only
 # way that file is ever written; `make check` proves the checked-in copy is what
 # comes out (scripts/check-bundle.sh).
@@ -491,6 +502,13 @@ mc-windows-obj: build/mc1
 mc-windows-x86_64-obj: build/mc1
 	build/mc1 build src --config src/mc.windows-x86_64-obj.toml
 
+# M44 step 4: the same two, slim (see mc-linux-slim-obj).
+mc-windows-slim-obj: build/mc1
+	build/mc1 build src --config src/mc.windows-aarch64-slim-obj.toml
+
+mc-windows-x86_64-slim-obj: build/mc1
+	build/mc1 build src --config src/mc.windows-x86_64-slim-obj.toml
+
 # M38: the two objects every Windows link line carries besides the program --
 # the entry point (lib/sys_windows_start.mc) and the POSIX shims over kernel32
 # (lib/sys_windows_host.mc). They go into the SYSROOT, beside kernel32.lib,
@@ -538,6 +556,14 @@ mc-linux-obj: build/mc1
 
 mc-linux-x86_64-obj: build/mc1
 	build/mc1 build src --config src/mc.linux-x86_64-obj.toml
+
+# M44 step 4: the same two, slim. The release links these next to the full
+# objects on the Linux runners (docs/ci.md, scripts/release-assets.sh --slim).
+mc-linux-slim-obj: build/mc1
+	build/mc1 build src --config src/mc.linux-aarch64-slim-obj.toml
+
+mc-linux-x86_64-slim-obj: build/mc1
+	build/mc1 build src --config src/mc.linux-x86_64-slim-obj.toml
 
 # M37: the Linux HOST proof, run from macOS. Cross-builds both compilers and,
 # for each architecture, runs the whole Linux chain inside a container of that
@@ -613,7 +639,7 @@ clean:
 bench: build/mc1
 	sh bench/run.sh
 
-.PHONY: bootstrap-linux mc-linux mc-linux-x86_64 mc-linux-obj mc-linux-x86_64-obj
+.PHONY: bootstrap-linux mc-linux mc-linux-x86_64 mc-linux-obj mc-linux-x86_64-obj mc-slim mc-linux-slim-obj mc-linux-x86_64-slim-obj mc-windows-slim-obj mc-windows-x86_64-slim-obj
 .PHONY: check-site-linux
 .PHONY: check-linux-host check-skipped check-shim test-sandbox sandbox-trace sandbox-trace-check mc-linux-gnu mc-linux-x86_64-gnu
 .PHONY: bootstrap-windows mc-windows mc-windows-x86_64 mc-windows-obj mc-windows-x86_64-obj
