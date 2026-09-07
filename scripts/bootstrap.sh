@@ -1,7 +1,8 @@
 #!/bin/sh
 # bootstrap.sh — M7: fixed point of the self-hosted compiler.
 #
-#   build/mc0 src/mc.mc -> build/mc1.o  (+ link -> build/mc1)
+#   build/mc0 src/mc_seed.mc -> build/mc_seed.o  (+ link -> build/mc_seed)
+#   build/mc_seed src/mc.mc  -> build/mc1.o      (+ link -> build/mc1)
 #   build/mc1 src/mc.mc -> build/mc2.o  (+ link -> build/mc2)
 #   build/mc2 src/mc.mc -> build/mc3.o
 #   cmp build/mc2.o build/mc3.o         <- the criterion (not mc1.o vs mc2.o:
@@ -9,6 +10,15 @@
 #                                          compilers — clang vs mc1)
 #   SHA-256 of build/mc2.o compared against the golden checked into
 #   tests/golden/mc2.sha256 (recorded the first time the script runs).
+#
+# Bootstrap decoupling: mc0 (the frozen C seed, fixed 64 MiB arena) no longer
+# compiles the whole src/mc.mc — compiling it already touches ~57 MiB, so the
+# compiler cannot keep growing through mc0. mc0 now compiles only the minimal
+# seed core (src/mc_seed.mc: <mc/core_min> + arm64 + macho, ~15 MiB), and the
+# seed compiler — which carries the same growable, mmap-backed arena every mc1+
+# has — compiles the full src/mc.mc on its own. The seed and the full compiler
+# share the same codegen source, so build/mc1.o is byte for byte what mc0 used
+# to produce directly, and the fixed point and golden below are unchanged.
 #
 # M49 adds a SECOND chain, the optimized road (docs/specs/M49.md § 3.3):
 #
@@ -38,6 +48,10 @@ if [ ! -x "$mc0" ]; then
 fi
 if [ ! -f "src/mc.mc" ]; then
     echo "FAIL: src/mc.mc not found" >&2
+    exit 1
+fi
+if [ ! -f "src/mc_seed.mc" ]; then
+    echo "FAIL: src/mc_seed.mc not found" >&2
     exit 1
 fi
 
@@ -83,10 +97,15 @@ size_of() {
     wc -c < "$1" | tr -d ' '
 }
 
-echo "=== M7 -- fixed point: mc0 -> mc1 -> mc2 -> mc3 ==="
+echo "=== M7 -- fixed point: mc0 -> mc_seed -> mc1 -> mc2 -> mc3 ==="
 
-echo "-- stage 1: build/mc0 src/mc.mc -> build/mc1.o --"
-step "mc0 compiles mc.mc"      "$mc0" src/mc.mc -o build/mc1.o
+echo "-- stage 0: build/mc0 src/mc_seed.mc -> build/mc_seed.o --"
+step "mc0 compiles mc_seed.mc" "$mc0" src/mc_seed.mc -o build/mc_seed.o
+echo "  size build/mc_seed.o: $(size_of build/mc_seed.o) bytes"
+step "link build/mc_seed"     scripts/link.sh build/mc_seed build/mc_seed.o
+
+echo "-- stage 1: build/mc_seed src/mc.mc -> build/mc1.o --"
+step "mc_seed compiles mc.mc"  build/mc_seed src/mc.mc -o build/mc1.o
 echo "  size build/mc1.o: $(size_of build/mc1.o) bytes"
 step "link build/mc1"         scripts/link.sh build/mc1 build/mc1.o
 

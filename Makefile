@@ -92,9 +92,22 @@ check-ast: $(REF)
 
 mc1: build/mc1
 
-build/mc1: build/mc0 $(MCSRC)
+# Bootstrap decoupling: mc0 (the frozen C seed, fixed 64 MiB arena) no longer
+# compiles the whole src/mc.mc — it compiles only the minimal seed core
+# (src/mc_seed.mc, <mc/core_min> + arm64 + macho), which fits with room to
+# spare. The seed compiler then compiles the full src/mc.mc on its own growable
+# arena. The seed and the full compiler share the same codegen source, so
+# build/mc1.o is byte for byte what mc0 used to produce directly.
+mc-seed: build/mc_seed
+
+build/mc_seed: build/mc0 $(MCSRC)
 	@mkdir -p build
-	build/mc0 src/mc.mc -o build/mc1.o
+	build/mc0 src/mc_seed.mc -o build/mc_seed.o
+	scripts/link.sh build/mc_seed build/mc_seed.o
+
+build/mc1: build/mc_seed $(MCSRC)
+	@mkdir -p build
+	build/mc_seed src/mc.mc -o build/mc1.o
 	scripts/link.sh build/mc1 build/mc1.o
 
 check-asm: $(REF) $(MC)
@@ -653,7 +666,7 @@ bench: build/mc1
 .PHONY: check-site-linux
 .PHONY: check-linux-host check-skipped check-shim test-sandbox sandbox-trace sandbox-trace-check mc-linux-gnu mc-linux-x86_64-gnu
 .PHONY: bootstrap-windows mc-windows mc-windows-x86_64 mc-windows-obj mc-windows-x86_64-obj
-.PHONY: all stage0 stage0-san test check-lex check-ast check-asm check-obj mc1 bootstrap check-surface test-exe bundle check-bundle check-mc check-standalone check-parts check-toml check-build check-pkg check-sysroots check-stubs check-limits sysroot-linux sysroot-linux-x86_64 sysroot-windows sysroot-windows-x86_64 test-linux test-linux-x86_64 test-windows test-windows-x86_64 check-examples check-lang check-conc check-docs site check-site check budget clean check-desktop check-minimal mcrt-windows mcrt-windows-x86_64 check-float check-wide check-kernel check-avr check-opt test-linux-exe test-linux-x86_64-exe bench
+.PHONY: all stage0 stage0-san test check-lex check-ast check-asm check-obj mc1 mc-seed bootstrap check-surface test-exe bundle check-bundle check-mc check-standalone check-parts check-toml check-build check-pkg check-sysroots check-stubs check-limits sysroot-linux sysroot-linux-x86_64 sysroot-windows sysroot-windows-x86_64 test-linux test-linux-x86_64 test-windows test-windows-x86_64 check-examples check-lang check-conc check-docs site check-site check budget clean check-desktop check-minimal mcrt-windows mcrt-windows-x86_64 check-float check-wide check-kernel check-avr check-opt test-linux-exe test-linux-x86_64-exe bench
 
 # M32: examples/desktop -- a GTK4 application written in mc, and the same
 # application with its widget tree written in a UI language taught by ui.mc.

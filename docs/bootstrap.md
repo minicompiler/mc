@@ -8,16 +8,41 @@ before this text — this only documents what is already done.
 ## The chain
 
 ```
-build/mc0 src/mc.mc -o build/mc1.o   # mc0 = clang compiling stage0/*.c
+build/mc0 src/mc_seed.mc -o build/mc_seed.o   # mc0 = clang compiling stage0/*.c
+scripts/link.sh build/mc_seed build/mc_seed.o
+
+build/mc_seed src/mc.mc -o build/mc1.o   # mc_seed = the minimal seed core, compiled by mc0
 scripts/link.sh build/mc1 build/mc1.o
 
-build/mc1 src/mc.mc -o build/mc2.o   # mc1 = the .mc compiled by mc0
+build/mc1 src/mc.mc -o build/mc2.o   # mc1 = the whole .mc, compiled by mc_seed
 scripts/link.sh build/mc2 build/mc2.o
 
 build/mc2 src/mc.mc -o build/mc3.o   # mc2 = the .mc compiled by mc1
 
 cmp build/mc2.o build/mc3.o          # the fixed-point criterion
 ```
+
+## The seed stage: mc0 compiles the minimal core, not the whole compiler
+
+`build/mc0` is the C seed (`stage0/*.c`), and its arena is a **fixed 64 MiB** it cannot grow
+without editing `stage0/`, which is frozen. Compiling the whole `src/mc.mc` already touches ~57 MiB
+of it — so the compiler could not keep growing through `mc0`. `src/mc_seed.mc` breaks that
+coupling. `mc0` compiles only the **minimal seed core** — `<mc/core_min>` (the front end, resolver,
+walker and CLI) plus exactly one machine (arm64) and exactly one object writer (macho), ~15 MiB of
+arena — and the seed compiler it produces, which carries the same growable, `mmap`-backed arena
+every `mc1`+ has (`src/arena.mc`), compiles the full `src/mc.mc` on its own.
+
+This is **byte-neutral by construction**. The seed and the full compiler share the same codegen
+source (`gen_resolve.mc`, `gen_walk.mc`, `machine_arm64.mc`, `objmodel.mc`, `macho.mc`), so the seed
+compiling `src/mc.mc` produces exactly the object `mc0` used to produce directly, `build/mc1.o` is
+unchanged, and the fixed point (`mc2.o == mc3.o`) and both goldens hold as before. On a branch where
+`mc0` can still compile the whole `src/mc.mc`, the identity is provable directly:
+`cmp <(build/mc0 src/mc.mc -o -) <(build/mc_seed src/mc.mc -o -)`.
+
+The Linux and Windows chains are **not** decoupled and do not use `src/mc_seed.mc`: they have no
+`mc0` at all (the C seed emits Mach-O only) and bootstrap from a full `mc` binary that already has
+the growable arena, so there is no fixed-arena bottleneck to break (`scripts/bootstrap-linux.sh`,
+`scripts/bootstrap-windows.sh`).
 
 `scripts/bootstrap.sh` runs this whole chain, prints the time and size of each `.o`, checks the
 SHA-256 of `build/mc2.o` against `tests/golden/mc2.sha256`, and finally runs
