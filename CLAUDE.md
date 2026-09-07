@@ -5229,6 +5229,63 @@ agents (`.claude/agents/`): `stage0-dev` (C23), `mc-dev` (`.mc` code), `reviewer
   `a32337b358a4ff99cc3d04aaea3b3430f816a635a8bad29ec342df3b04a70e6d` (1438768 B),
   `mc2-windows-x86_64.sha256`
   `a46610ae39a65010de24f2e3e01fe742fdc0f72f9b935d1c2a4625a817897f5f` (1482524 B).
+- Bootstrap decoupling + M48 C3 done (2026-09-07): **the seed compiles the minimal core; the full compiler
+  self-hosts on the dynamic arena** (PR #54, `release:skip`, byte-neutral) and **`mc tool`** (PR #55, patch 0.15.21).
+  `stage0/` UNTOUCHED throughout (2848/3000) -- the owner's rule: never touch stage0, not even for capacity; the seed
+  is decoupled instead. WHY: `build/mc0 src/mc.mc` already used **58-59 MiB of the fixed 64 MiB seed arena (~92%)**
+  before C3, and C3 pushed it to ~67 -- the fixed seed was a ceiling about to bind with or without C3. The owner
+  directed dynamic capacity (pre-scan + growth), which `src/` has since M23 (mmap arena); only `mc0` (frozen C) had a
+  fixed arena and cannot gain one without editing stage0.
+  * **Decoupling** (#54): `src/mc_seed.mc` (a new bootstrap entry = `host_macos` + `<mc/core_min>` + `machine_arm64`
+    + `macho`/`backend_macho` + a `main`, relative includes only -- mc0 has no bundle). `scripts/bootstrap.sh` now
+    runs `mc0 src/mc_seed.mc -> mc_seed; mc_seed src/mc.mc -> mc1; mc1 -> mc2 -> mc3`. `mc0`'s peak dropped from
+    56.9 MiB to **15.1 MiB (76% free)**; `mc_seed` compiling the full `src/mc.mc` peaks at **96.4 MiB via the M23
+    mmap arena**, past the old 64 MiB ceiling. BYTE-NEUTRAL and proven so: `mc0(src/mc.mc) == mc_seed(src/mc.mc)`
+    byte for byte (same codegen), the fixed point holds, and the five goldens were **UNCHANGED** by #54. Only
+    macos/aarch64 converted (the four foreign targets bootstrap from a full `mc`, no fixed-arena seed).
+    `scripts/check-limits.sh` re-pointed: the seed guard now measures `src/mc_seed.mc` (what mc0 compiles -- 17/17,
+    tightest `globals` 268/512 = 52%, heap 15Mi/64Mi = 23%), and the full `src/mc.mc` gets an informational,
+    un-gated `mc limits` dynamic-arena report. `check-surface.sh`'s five taught-compiler build sites moved
+    `mc0 -> mc_seed` (same codegen; the decoupling completion C3's size forced).
+  * **C3 `mc tool`** (#55): `src/tool.mc` in `<mc/core_pkg>`, one `subcommand("tool", ...)` -- `install NAME[@VER]` /
+    `install [DIR]` / `list` / `remove` / `upgrade [NAME]` / `run NAME [-- ARGS]` + a hidden `box-args <mc.toml>`.
+    `tool_box_argv`/`tool_flags` is the ONE permission->sandbox mapping (`fs.read`->`--ro --at-path`,
+    `fs.write`->`--rw`, `tmp`->`--tmp`, `net`->`--allow=net`, `exec`->`--bin`, `env`->`--env`; `workspace` = cwd,
+    refusing `$HOME`/`/`), reused by `run` and `box-args`. The M48 AMENDMENT (owner): **no `--unconfined`** -- the
+    install manifest records `sandbox = true|false` and `mc tool run` boxes on Linux (`host_sandbox_supported()`,
+    via `mc sandbox exec` + the C2 primitives) and runs the binary direct on macOS/Windows, same install everywhere.
+    `~/.mc/tools/<name>/v<ver>/` staged + `mc build`-built, the `v<ver>.toml` manifest last, the launcher
+    `~/.mc/bin/<bin>`; `--bin-dir`/`--libs-dir` override the roots (no HOME for CI). Fits the frozen seed via the
+    decoupling (mc_seed's dynamic arena compiles the full src/mc.mc+C3), NO stage0 change, NO diet.
+  * **Two fixes C3 exposed**: `posix_spawn_file_actions_t` is 8 bytes on macOS but ~80 on glibc/musl and its `_init`
+    memsets the whole struct, so `u8 fa[8]` was a latent stack-corrupting bug on Linux (SIGSEGV) -- `fa[128]` in
+    `src/fetch.mc` and `src/driver.mc` (the latter affects `mc build`'s spawn). And `check-surface.sh` prints/warns
+    which seed compiler it used instead of a silent `mc_seed -> mc1` fallback.
+  * **Security review (reviewer) found a privilege-escalation BLOCKER, fixed and re-proven**: a malicious tool
+    package's `[project].out`, written UNESCAPED into the install manifest, could splice a second `[tool]
+    permissions = [...]` (TOML basic strings decode `\"`/`\n`; `toml.mc` has no duplicate-table detection), and
+    `tool_run` handed stored permissions to `tool_flags` UNVALIDATED -- granting sandbox access the user never saw or
+    accepted. Two independent fixes: `toml_esc()` (`src/deps.mc`, escapes `\ " \n \t \r`, refuses other control
+    bytes) applied at EVERY TOML-from-untrusted-input writer (`tool_write_manifest`, `pkg_write_manifest`,
+    `pkg_write_lock`, `pkg_dep_line` -- swept, no others); and `tool_run` re-validates every stored permission through
+    `dep_perm_line_ok` BEFORE the host branch (refuses on every host), the `tool_resolve_path` fallback now a hard
+    error. Plus: `[[versions]].version` validated (`dep_ver_ok`) before it builds a path (`version = "../.."` staged
+    outside `~/.mc/tools` -- predates C3, reachable via `mc pkg sync`); a capacity pre-flight at install
+    (`DEP_MAXPERM` 32 > the box's `SB_MAXRO/RW` 16 / `SB_MAXBIN/ENV` 8 -- refuse before `--yes`); and the spec's
+    "(none)" row implemented (a zero-permission tool boxes `--ro <tree> --at-path`, with the documented residual that
+    `mc sandbox exec`'s copy-on-write `/src` stays writable-but-ephemeral).
+  -- `stage0/` untouched, 2848/3000. `make check` RC 0 (`check-obj` 32/32 identical to the frozen seed; bootstrap at
+  a fixed point on `mc0 -> mc_seed -> mc1 -> mc2 -> mc3`, plain and `-O`, empty `--dump-asm` diff; `check-inert`
+  identical -- C3 is a new subcommand, inert; `check-limits` 17/17 on `src/mc_seed.mc`; `check-tool` 27/27;
+  `check-pkg` 145/145; `check-parts`/`check-standalone`/`check-docs` green; `test-sandbox` 73 ok). `make
+  check-linux-host` RC 0 (both arches, both libcs; the boxed `mc tool run` refuses a read outside `fs.read
+  workspace`, exit 125). Six goldens re-recorded once by #55 (C3 + bundle move them; #54 left them unchanged);
+  the reviewer's blocker fix re-recorded them again -- final: `mc2` `8af48539...c5247f`, `mc2-opt` `03a98303...85b121`,
+  `mc2-linux-arm64` `7783fc35...da1ae2`, `mc2-linux-x86_64` `a5aff526...cdab1b`, `mc2-windows-arm64` `85784c86...6d2b56`,
+  `mc2-windows-x86_64` `f9d2e86f...253bc9`. Docs: `docs/reference/tools.md` (new), `cli.md` § 3g, `toml.md` § `[tool]`,
+  `hooks.md` (`host_getcwd`), `packages.md`, `diagnostics.md`. The M48 spec's `mclib`/LSP references are superseded
+  (stdlib is M52; the LSP is M28).
+
 - Next: the **site + registry server, M47 S4-S6**, in
   `minicompiler/mc-registry`; then **M42 step 2** (PE `--exe`, CI-gated on the Windows runners).
   **M46** only on the owner's request; **M43 Layer 2** after 1.0.0. M13 and M18 stay in the backlog
