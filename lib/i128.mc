@@ -811,9 +811,9 @@ void xw_param(i64 ty, i64 i, i64 off) {
         if (iw_is(ty)) {                           // a pointer to a copy: copy it in
             if (slot < nreg) {
                 xw_copy(0 - off, XR_RBP, 0, x86_argreg_at(slot));
-            } else {
-                em(X_LD64, XR_RAX, XR_RBP, 16 + x86_shadow + (slot - nreg) * 8);
-                xw_copy(0 - off, XR_RBP, 0, XR_RAX);
+            } else {                           // the pointer arrived on the stack;
+                em(X_LD64, XR_RCX, XR_RBP, 16 + x86_shadow + (slot - nreg) * 8);
+                xw_copy(0 - off, XR_RBP, 0, XR_RCX);   // rcx, not rax: xw_copy's transfer reg
             }
             return;
         }
@@ -940,7 +940,10 @@ void xw_call(i64 d, i64 na, i64 sym) {
     ins_add(X_CALL, 0, 0, 0, 0, 0, sym);
     if (back) ei(X_SPADD, 0, 0, back);
     if (retw) {
-        if (xw_win) xw_copy(0 - iw_depth(d), XR_RBP, 0, XR_RAX);   // rax = &return buffer
+        if (xw_win) {                                             // rax = &return buffer;
+            x86_mov(XR_RCX, XR_RAX);                               // xw_copy clobbers rax, so
+            xw_copy(0 - iw_depth(d), XR_RBP, 0, XR_RCX);           // read the buffer through rcx
+        }
         else { xw_st(XR_RAX, d, IW_LO); xw_st(XR_RDX, d, IW_HI); }
     } else {
         i64 rd = x86_dst_reg(d);
