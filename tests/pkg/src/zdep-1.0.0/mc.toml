@@ -1,0 +1,10 @@
+# zdep 1.0.0 -- a fixture whose registry dep on `zero` carries a caret
+# constraint (^0.0.3, ceiling 0.0.4), so the resolver's intersection and the
+# 0.0.x caret narrowing can be observed against a second constraint on `zero`.
+[package]
+name  = "zdep"
+files = ["zdep.mc"]
+lib   = "zdep.mc"
+
+[deps]
+zero = "^0.0.3"

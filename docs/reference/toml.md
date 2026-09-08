@@ -44,7 +44,8 @@ sqlite3 = "/usr/lib/libsqlite3.dylib"
 paths = ["lib"]
 
 [deps]                     # optional: packages, resolved through mc.lock
-geo = "1.2.0"              # a MINIMUM version; the lock pins the exact one
+geo = "1.2.0"              # a version constraint (bare = minimum); the lock pins the exact one
+plot = "^1.4.0"            # ^/~/=/* narrow the range; see § [deps]
 
 [replace]                  # optional: point a name at a local tree
 geo = "../geo"
@@ -285,8 +286,8 @@ existed — not even an extra `open` happens.
 
 | key | type | meaning |
 |---|---|---|
-| `deps.<name>` | string | the MINIMUM version of a LIBRARY this project needs |
-| `tools.<name>` | string | the MINIMUM version of a TOOL this project needs |
+| `deps.<name>` | string | a version constraint for a LIBRARY this project needs (a bare version is a minimum) |
+| `tools.<name>` | string | a version constraint for a TOOL this project needs (a bare version is a minimum) |
 | `replace.<name>` | string | a directory to use for `<name>` instead of a locked tree, relative to the config |
 | `registry.url` | string | where `mc pkg` looks a package up; a URL or a directory |
 
@@ -294,11 +295,34 @@ existed — not even an extra `open` happens.
 `build` are reserved. A name that breaks either rule is refused at the key's own position
 (`reserved package name: deps.mc`, `invalid package name: deps.Geo`), exit 1.
 
-The value is a `X.Y.Z` version, optionally with the `-pre.release` and `+build` parts of SemVer
-2.0 (`mathx = "2.1.0-rc1"`). It is a **minimum**, in Go's sense, not a pin. What is actually
-compiled is the row `mc.lock` carries — beside `mc.toml`, machine-written, one `[[package]]` per package with an exact
-version and a content hash — which `mc build` re-checks on every build. A `[deps]` minimum the
-lock cannot meet is `mc.lock is stale`, exit 2.
+The value is a **version constraint** built on a `X.Y.Z` version, optionally with the
+`-pre.release` and `+build` parts of SemVer 2.0 (`mathx = "2.1.0-rc1"`). A bare version is a
+**minimum**, in Go's sense, not a pin, and that is the form every existing manifest uses; the
+other operators add an upper bound:
+
+| form | meaning | range |
+|---|---|---|
+| `1.2.3` | bare = **minimum**, unchanged | `>= 1.2.3` |
+| `>=1.2.3` | minimum, spelled explicitly (a space after `>=` is allowed) | `>= 1.2.3` |
+| `=1.2.3` | exact: the version must equal 1.2.3 | `= 1.2.3` |
+| `~1.2.3` | patch may rise | `>= 1.2.3 < 1.3.0` |
+| `^1.2.3` | minor and patch may rise | `>= 1.2.3 < 2.0.0` |
+| `*` | any version | — |
+
+**The caret narrows on a 0.x version** (the SemVer/npm convention): for a `0.x` a minor bump is
+breaking, so `^0.2.3` is `>= 0.2.3 < 0.3.0` and `^0.0.3` is `>= 0.0.3 < 0.0.4`.
+
+There is **no `>`, `<` or `<=`**: the resolver is Minimal Version Selection, whose model is a
+lower bound and a caller-chosen upper bound, so a ceiling is always derived from `~`/`^`/`=` and
+never spelled with a bare `<`. `>1.2.3`, `<1.2.3`, `<=1.2.3`, `^1.2.x` and `~banana` are malformed
+and refused at the key's own position (`a version constraint must be X.Y.Z, =X.Y.Z, ~X.Y.Z,
+^X.Y.Z, >=X.Y.Z, or *`), exit 2.
+
+What is actually compiled is the row `mc.lock` carries — beside `mc.toml`, machine-written, one
+`[[package]]` per package with an **exact, concrete** version and a content hash — which
+`mc build` re-checks on every build: the constraint syntax lives in `mc.toml`, the lock stays
+concrete. A `[deps]` constraint the lock cannot satisfy is `mc.lock is stale`, exit 2 (re-run
+`mc pkg sync --yes`).
 
 `[deps]` is what turns on `#include <pack/file.mc>`; with no `[deps]` section `mc build` reads no
 lock at all and every `<name>` resolves exactly as it did before packages existed.
@@ -334,7 +358,7 @@ rule — is in [packages.md](packages.md).
 | key | type | meaning |
 |---|---|---|
 | `package.name` | string | the package's registry name |
-| `package.mc` | string | optional: the MINIMUM mc version the package needs, a minimum only |
+| `package.mc` | string | optional: a version constraint on the mc that builds it, normally a minimum |
 | `package.files` | array of strings | every file the package ships, in the order that fixes the hash |
 | `package.lib` | string | optional: the file a bare `#include <name>` means |
 | `package.module` | string | optional: the file a COMPILER includes; it exports `<name>_init()` |
@@ -352,11 +376,14 @@ it is a FILE name, not an identifier. `mc build` ignores it.
 
 `mc` is a MINIMUM mc version, checked when the compiler builds or resolves a package — the entry's
 own `mc.toml` and each dependency's, whether it comes from `[deps]`, `[replace]` or a vendored
-tree. A bare `1.2.3` (an optional `-suffix` allowed) or a leading `>= 1.2.3` both mean "at least
-this"; it is a minimum only, because the API is frozen at 1.0.0 and a newer mc keeps working, so
-there is no upper bound and no range. A malformed value (`banana`, `1.0 - 2.0`) is a
-`file:line:col` error, exit 2. When the running compiler is older than the minimum the build is
-refused with `<pkg> <ver> needs mc >= <min> (this is mc <cur>): upgrade the compiler`, exit 2, at
+tree. It takes the same version-constraint grammar as `[deps]` (`§ [deps]` above). A bare `1.2.3`
+(an optional `-suffix` allowed) or a leading `>= 1.2.3` both mean "at least this", which is the
+normal form: the API is frozen at 1.0.0 and a newer mc keeps working. A `^`/`~`/`=` is **allowed
+but unusual** — it CAPS the compiler version, refusing a newer mc as well as an older one. A
+malformed value (`banana`, `1.0 - 2.0`) is a `file:line:col` error, exit 2. When the running
+compiler does not satisfy the constraint the build is
+refused with `<pkg> <ver> needs mc >= <min> (this is mc <cur>): upgrade the compiler` (or, for a
+capped constraint, `>= <min> and < <max>` / `= <exact>`), exit 2, at
 the key's own position. **A working-tree build reports the `0.0.0-dev` sentinel, which is treated
 as newest and skips the check entirely** — otherwise every local build of a pinned tree would
 fail. See [packages.md](packages.md) § The minimum mc version.

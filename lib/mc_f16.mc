@@ -7,8 +7,8 @@
 // src/mc.mc (mc0 compiles only src/mc_seed.mc; the growable-arena seed compiler
 // compiles the rest). It is gated instead by check-wide (built with mc_seed and
 // RUN), check-inert (pre/post mc1 byte-identical) and check-standalone. mc_float
-// and mc_i128/mc_u128 stay in the corpus: with the writer's state in one arena
-// record they still fit the seed.
+// is now seed-skipped too (the M44 version-constraint solver tipped it from 2044
+// to 2056 functions); mc_i128/mc_u128 stay in the corpus, they still fit the seed.
 //
 // The order is the point: f16 DERIVES from the machine <float> registered under
 // `arm64`, so float_init and machine_arm64_float_init have to come first. A
