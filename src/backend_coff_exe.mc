@@ -742,6 +742,14 @@ void pe_write(uptr path) {
         if (!ivec_at(pe_g(PES_ZF), i)) {
             while (buf_len(o) < ivec_at(pe_g(PES_FOFF), i)) { buf_u8(o, 0); }
             pe_put_section(o, i);
+            // pad the raw data up to the full SizeOfRawData the section header
+            // promises: the Windows loader maps SizeOfRawData bytes from
+            // PointerToRawData, so a section whose content is short of it -- the
+            // last one especially, since no later FOFF fills the gap -- leaves
+            // the file short of what the section table claims and the image is
+            // refused. lld-link pads every section fully; so does this.
+            i64 end = ivec_at(pe_g(PES_FOFF), i) + ivec_at(pe_g(PES_RAWSZ), i);
+            while (buf_len(o) < end) { buf_u8(o, 0); }
         }
         i = i + 1;
     }
