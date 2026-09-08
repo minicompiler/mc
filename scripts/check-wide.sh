@@ -64,6 +64,7 @@ run_case() {                            # compiler-source, test-source, name
 }
 
 run_case lib/mc_i128.mc tests/wide/030-i128.mc i128
+run_case lib/mc_u128.mc tests/wide/032-u128.mc u128
 run_case lib/mc_f16.mc  tests/wide/031-f16.mc  f16
 
 # i128: the 16-byte global initializer is an N_BLOB, one per literal, and the
@@ -96,6 +97,150 @@ if build/mc-i128 --dump-asm tests/wide/030-i128.mc | sed -n '/^_add2:/,/ret/p' \
 else
     echo "FAIL i128: the two-register callee does not read x0..x3"
     fails=$((fails + 1))
+fi
+
+# u128: the same machine, but the ordering compare is UNSIGNED -- cset hs/lo,
+# never ge/lt, which is the one difference from i128 (arm64 --dump-asm)
+if build/mc-i128 --dump-asm tests/wide/032-u128.mc | grep -qE '^  cset x[0-9]+, (hs|lo)$'; then
+    echo "ok   u128: the unsigned compare uses cset hs/lo"
+else
+    echo "FAIL u128: no unsigned cset (hs/lo) in --dump-asm"
+    fails=$((fails + 1))
+fi
+# ...and the SIGNED i128 compare in the same program still reads ge/lt
+if build/mc-i128 --dump-asm tests/wide/032-u128.mc | grep -qE '^  cset x[0-9]+, (ge|lt)$'; then
+    echo "ok   u128: the i128 compare beside it still uses cset ge/lt"
+else
+    echo "FAIL u128: no signed cset (ge/lt) for the i128 half"
+    fails=$((fails + 1))
+fi
+# the u128 literals are N_BLOB globals too, with the $u128_ prefix
+nub=$(build/mc-i128 --dump-syms tests/wide/032-u128.mc | grep -c 'value=16 _\$u128_')
+if [ "$nub" -ge 1 ]; then
+    echo "ok   u128: literal globals ($nub) are 16 bytes apart, prefix \$u128_"
+else
+    echo "FAIL u128: no 16-byte-apart \$u128_ literal globals"
+    fails=$((fails + 1))
+fi
+
+# ---- x86-64: the SysV and Win64 machines, cross-compiled and re-assembled ----
+# The wide machine emits add/adc, sub/sbb, mul, setb/setae (unsigned) and
+# setl/setge (signed) that no bundled x86 machine has; llvm-mc must re-assemble
+# every one of them byte for byte, on BOTH ABIs (M24's sweep obligation).
+x86_sweep() {                           # test-source, name
+    tsrc="$1"; xname="$2"
+    if ! have llvm-objdump || ! have llvm-mc; then
+        echo "skip $xname x86 sweep: llvm-objdump/llvm-mc not found"; return 0
+    fi
+    for pair in "elf-obj-x86_64 x86_64-linux-musl SysV" "coff-obj-x86_64 x86_64-windows-msvc Win64"; do
+        set -- $pair; backend="$1"; triple="$2"; abi="$3"
+        obj="$tmp/$xname-$abi.o"
+        if ! msg=$("build/mc-$xname" --backend=$backend "$tsrc" -o "$obj" 2>&1); then
+            echo "FAIL $xname $abi (compile: $msg)"; fails=$((fails + 1)); continue
+        fi
+        $(tool llvm-objdump) -d --triple="$triple" "$obj" 2>/dev/null \
+            | sed -n 's|^ *[0-9a-f]*: *\([0-9a-f ]*[0-9a-f]\)  *\(.*\)$|\1\t\2|p' \
+            | sort -u > "$tmp/$xname-$abi.ins"
+        n=0; bad=0
+        while IFS='	' read -r bytes text; do
+            [ -n "$text" ] || continue
+            case "$text" in *"<"*|jmp*|j[a-z]*|call*|*rip*|.byte*) continue ;; esac
+            text=$(echo "$text" | sed 's|#.*||; s|[[:space:]]*$||')
+            enc=$(printf '%s\n' "$text" | $(tool llvm-mc) -triple="$triple" --show-encoding 2>/dev/null \
+                  | sed -n 's|.*encoding: \[\(.*\)\].*|\1|p' | tr -d ' ' | tr ',' '\n' \
+                  | sed 's|^0x||' | tr '\n' ' ' | sed 's| *$||')
+            [ -n "$enc" ] || continue
+            if [ "$enc" != "$(echo "$bytes" | tr -s ' ')" ]; then
+                echo "FAIL $xname $abi sweep: '$text' -> $enc, mc emitted $bytes"; bad=$((bad + 1)); continue
+            fi
+            n=$((n + 1))
+        done < "$tmp/$xname-$abi.ins"
+        if [ "$bad" != 0 ]; then fails=$((fails + bad))
+        else echo "ok   $xname $abi sweep: $n distinct instructions re-assemble byte for byte"; fi
+    done
+}
+# the wide-ABI overflow test: four 16-byte arguments, which fit AArch64's eight
+# argument registers but overflow x86-64's (SysV stack, Win64 by-reference stack)
+rm -f "$tmp/abi"
+if ! msg=$(build/mc-i128 --exe tests/wide/033-wide-abi.mc -o "$tmp/abi" 2>&1); then
+    echo "FAIL abi (compile: $msg)"; fails=$((fails + 1))
+else
+    got=$("$tmp/abi" 2>/dev/null); rc=$?
+    if [ "$rc" = 0 ] && [ "$got" = "10 1 3000000000000000000" ]; then
+        echo "ok   abi: tests/wide/033-wide-abi.mc (macos/aarch64, exit 0)"
+    else
+        echo "FAIL abi (exit $rc '$got', expected 0 '10 1 3000000000000000000')"; fails=$((fails + 1))
+    fi
+fi
+
+x86_sweep tests/wide/030-i128.mc i128
+x86_sweep tests/wide/032-u128.mc u128
+x86_sweep tests/wide/033-wide-abi.mc i128
+
+# ---- x86-64 and aarch64 EXECUTION in Docker (SysV) ----
+# The strongest check the sweep cannot make: does the code RUN? mc build with a
+# Linux target selects the right <sys> layer and links statically with musl; one
+# container per architecture. Self-skips without docker/ld.lld/the sysroot.
+root=$(pwd)
+wide_linux() {                          # arch, docker platform, compiler, test, name, want-exit, want-out
+    warch="$1"; plat="$2"; comp="$3"; wsrc="$4"; wnm="$5"; wex="$6"; wout="$7"
+    sysroot="$root/build/sysroot/linux-$warch"
+    if ! have ld.lld; then echo "skip linux/$warch $wnm: ld.lld not in PATH"; return 0; fi
+    if ! docker info > /dev/null 2>&1; then echo "skip linux/$warch $wnm: docker is not running"; return 0; fi
+    if [ ! -f "$sysroot/libc.a" ]; then
+        if ! msg=$(sh scripts/sysroot-linux.sh --arch "$warch" 2>&1); then
+            echo "skip linux/$warch $wnm: no musl sysroot ($msg)"; return 0
+        fi
+    fi
+    mkdir -p "$root/build/wide-lin"
+    out="$root/build/wide-lin/$wnm-$warch"
+    cfg="$root/build/wide-lin/$wnm-$warch.toml"
+    {
+        echo '[project]'; echo "entry = \"$root/$wsrc\""; echo "out   = \"$out\""; echo
+        echo '[target]'; echo 'os   = "linux"'; echo "arch = \"$warch\""; echo
+        echo '[sysroot]'; echo "path = \"$sysroot\""; echo
+        echo '[linker]'; echo 'cmd  = "ld.lld"'
+        echo 'args = ["-o", "{out}", "{sysroot}/crt1.o", "{sysroot}/crti.o", "{obj}", "{sysroot}/libc.a", "{sysroot}/crtn.o", "-static"]'
+    } > "$cfg"
+    if ! msg=$("build/mc-$comp" build "$root/build/wide-lin" --config "$cfg" 2>&1); then
+        echo "FAIL linux/$warch $wnm (build: $msg)"; fails=$((fails + 1)); return 0
+    fi
+    got=$(docker run --rm --platform "$plat" -v "$root":/w -w /w alpine:3 "./build/wide-lin/$wnm-$warch" 2>/dev/null)
+    rc=$?
+    if [ "$rc" != "$wex" ] || [ "$got" != "$wout" ]; then
+        echo "FAIL linux/$warch $wnm (exit $rc '$got', expected $wex '$wout')"; fails=$((fails + 1)); return 0
+    fi
+    echo "ok   linux/$warch $wnm: runs, exit $rc"
+}
+if docker info > /dev/null 2>&1 && have ld.lld; then
+    wide_linux aarch64 linux/arm64 i128 tests/wide/030-i128.mc i128 0 "0 1 1 0 1 0 42 1 1 0"
+    wide_linux x86_64  linux/amd64 i128 tests/wide/030-i128.mc i128 0 "0 1 1 0 1 0 42 1 1 0"
+    wide_linux aarch64 linux/arm64 u128 tests/wide/032-u128.mc u128 0 "1 1 1 0 0 1 0 1 1 42 1 1"
+    wide_linux x86_64  linux/amd64 u128 tests/wide/032-u128.mc u128 0 "1 1 1 0 0 1 0 1 1 42 1 1"
+    wide_linux aarch64 linux/arm64 i128 tests/wide/033-wide-abi.mc abi 0 "10 1 3000000000000000000"
+    wide_linux x86_64  linux/amd64 i128 tests/wide/033-wide-abi.mc abi 0 "10 1 3000000000000000000"
+else
+    echo "skip linux exec: need docker and ld.lld"
+fi
+
+# ---- windows/x86_64: the COFF object, machine AMD64 (execution is CI's job) ----
+# The Win64 by-reference ABI is proved by the sweep above (byte-exact against
+# llvm-mc for x86_64-windows-msvc); here we only assert a valid AMD64 COFF.
+if have llvm-objdump; then
+    for wsrc in tests/wide/030-i128.mc tests/wide/032-u128.mc; do
+        wnm=$(basename "$wsrc" .mc)
+        wcomp=i128; case "$wnm" in *u128*) wcomp=u128 ;; esac
+        if ! msg=$("build/mc-$wcomp" --backend=coff-obj-x86_64 "$wsrc" -o "$tmp/$wnm-win.obj" 2>&1); then
+            echo "FAIL windows/x86_64 $wnm (compile: $msg)"; fails=$((fails + 1)); continue
+        fi
+        if $(tool llvm-objdump) -h "$tmp/$wnm-win.obj" 2>/dev/null | grep -q '\.text'; then
+            echo "ok   windows/x86_64 $wnm: COFF object built (Win64 ABI swept above)"
+        else
+            echo "FAIL windows/x86_64 $wnm: no .text in the COFF object"; fails=$((fails + 1))
+        fi
+    done
+else
+    echo "skip windows/x86_64: llvm-objdump not found"
 fi
 
 # f16: `f16 tbl[8]` is SIXTEEN bytes of __bss, from the width alone
