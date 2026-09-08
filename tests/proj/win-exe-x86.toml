@@ -1,0 +1,8 @@
+[project]
+entry = "win-exe.mc"
+out   = "build/win-exe-x86.exe"
+kind  = "exe"
+
+[target]
+os   = "windows"
+arch = "x86_64"

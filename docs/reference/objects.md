@@ -848,6 +848,48 @@ HashTable { Num Buckets: 2  Num Chains: 2  Buckets: [0, 1]  Chains: [0, 0] }
 what `ld.lld --hash-style=sysv` produces for a reference binary of the same shape, on both
 architectures.
 
+## 8c. The Windows PE executable (`pe-exe-arm64` and `pe-exe-x86_64`)
+
+`src/backend_coff_exe.mc` writes a **PE32+ executable** with no `lld-link`, the Windows counterpart
+of `elf-exe` and `macho-exe`. It fills the executable slot of `windows/aarch64` and
+`windows/x86_64`, so `mc build` with `kind = "exe"` and no `[linker]` writes a runnable `.exe`
+directly, and `--backend=pe-exe-arm64` / `pe-exe-x86_64` name it. It reuses `src/backend_coff.mc`'s
+section characteristics and both relocation tables, and the same `arm64` / `x86_64-win` machines the
+COFF object writer uses.
+
+A PE is COFF's sections wrapped in an image layout, so the ideas are the ELF executable's in
+another spelling:
+
+* **A fixed `ImageBase` (`0x140000000`) and `IMAGE_FILE_RELOCS_STRIPPED`, no `.reloc`, no
+  DYNAMICBASE.** Every absolute address is known when the segments are placed; the loader maps at
+  `ImageBase` or fails. The cost is no ASLR — the same cost `ET_EXEC` pays, named for both here.
+* **The IAT is the only table the loader fills, before the entry runs** — the PE equivalent of
+  `DT_BIND_NOW`, so an import thunk is a plain indirect jump. No base-relocation directory follows:
+  the thunks address the IAT RIP-relative (x64) or adrp/ldr (arm64), the import tables hold RVAs,
+  and the resolved absolute addresses live only in the IAT.
+* **An import** is an `IMAGE_IMPORT_DESCRIPTOR` naming its DLL (default `kernel32.dll`; a `#dylib`
+  names another), an ILT and an IAT of 8-byte entries pointing at `hint 0` + name, and a thunk in a
+  `.text0` section. The ILT and IAT starts are 8-aligned so a scaled arm64 `ldr` addresses each
+  slot. `TimeDateStamp` and `CheckSum` are 0, no symbol table, so two builds are `cmp`-identical.
+* **The entry**: a program that defines `mc_start` (`#include <sys_windows_start>`, or a wrapper)
+  keeps it; anything else gets a synthesized stub that zeroes `argc`/`argv`/`envp`, calls `main`,
+  and calls `ExitProcess` (the one forced import — there is no exit syscall). With neither:
+  `no main and no mc_start: cannot generate an executable`.
+
+Unlike Linux there is **no bare I/O suite**: `write`/`open`/… are mc wrappers over kernel32, not DLL
+exports, so a portable test that declares `extern write` cannot both import and define it in one
+`--exe` translation unit (`function declared twice`). A program that writes its I/O directly against
+`<sys_windows>`, or a pure-compute program, is self-contained and `--exe`s; a portable I/O test
+stays on the `lld-link` object path (`scripts/test-windows.sh`). `scripts/test-windows-exe.sh` is
+the runtime gate for the self-contained subset, run on the `windows-11-arm` and `windows-2025` CI
+legs.
+
+Validation: `llvm-readobj --file-headers --sections --coff-imports` of an mc `.exe` against
+`lld-link`'s output of the same program agrees on `Machine`, the section characteristics and the
+import directory; the whole self-contained subset runs on the CI runners, and the x86-64 half runs
+under `wine` in `docker --platform linux/amd64` on the development machine (arm64 PE execution is
+the runner's job). `.pdata`/`.xdata` stay the accepted M19/M20 gap, below.
+
 ### No `.pdata`/`.xdata` (accepted M19 gap, M20 included)
 
 Neither `coff-obj-arm64` nor `coff-obj-x86_64` writes unwind data. Windows on ARM64 has no frame-pointer-walking fallback: the
@@ -898,9 +940,10 @@ void user_init() {
 
 The writers the core registers itself have exactly this shape and no other: `backend_exe(root, out)`,
 `backend_elf(root, out)` / `backend_elf_x86(root, out)`,
-`backend_elf_exe(root, out)` / `backend_elf_exe_x86(root, out)` and `backend_coff(root, out)` /
-`backend_coff_x86(root, out)` each name their machine with `machine_use` — `arm64`, `x86_64`, or
-`x86_64-win` for the last — call `gen_lower` and `gen_encode_all`, and then write. An object
+`backend_elf_exe(root, out)` / `backend_elf_exe_x86(root, out)`, `backend_coff(root, out)` /
+`backend_coff_x86(root, out)` and `backend_pe_exe(root, out)` / `backend_pe_exe_x86(root, out)`
+each name their machine with `machine_use` — `arm64`, `x86_64`, or
+`x86_64-win` for the Win64 ones — call `gen_lower` and `gen_encode_all`, and then write. An object
 backend picks the machine because the file format already records the architecture; a backend that
 consumes the AST directly needs none.
 

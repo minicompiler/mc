@@ -670,17 +670,47 @@ arch = "sparc"
 ' \
     'CFG:7:8: only aarch64 (see docs/build.md): target.arch'
 
-# M19: the same for Windows -- valid os, no direct executable, and the message
-# names the operating system the file asked for.
-diag "diag [target].os windows without [linker]" "$dir/build/d.toml" \
-    '[project]
-entry = "../app.mc"
-out   = "build/x"
+# M42 step 2: os = "windows" with no [linker] and kind = "exe" now writes a PE
+# executable directly (the two Windows exe slots are filled by the pe-exe-*
+# backends). Until this milestone the same two configs were the diagnostic
+# `windows requires [linker]`; that message now belongs only to a target whose
+# exe slot is 0 -- a pair a module registers with target(os, arch, obj, 0) --
+# and it is still asserted by the mc-noexe.mc / noexe.mc cases above. Only the
+# header is read here (no wine, no Windows host); running the PE is
+# scripts/test-windows-exe.sh. The PE machine is the u16 at e_lfanew (0x40) + 4,
+# i.e. byte 0x44: 0xAA64 (arm64) -> `100 170`, 0x8664 (x86-64) -> `100 134`.
+pe_hdr() { od -An -tu1 -j "$2" -N "$3" -v "$1" | tr -s ' ' | sed 's/^ //;s/ $//'; }
 
-[target]
-os = "windows"
-' \
-    'CFG:6:6: windows requires [linker]: there is no direct executable: target.os'
+for a in aarch64:win-exe.toml:build/win-exe.exe:100.170 x86_64:win-exe-x86.toml:build/win-exe-x86.exe:100.134; do
+    arch=${a%%:*}; rest=${a#*:}
+    cfg=${rest%%:*}; rest=${rest#*:}
+    out=${rest%%:*}; mach=$(echo "${rest##*:}" | tr . ' ')
+    total=$((total + 1))
+    rm -f "$dir/$out"
+    if ! "$mc" build "$dir" --config "$dir/$cfg" > "$tmp/o" 2>&1; then
+        fail "$cfg" "$(cat "$tmp/o")"
+    elif [ ! -f "$dir/$out" ]; then
+        fail "$cfg" "$out was not written"
+    elif [ "$(pe_hdr "$dir/$out" 0 2)" != "77 90" ]; then
+        fail "$cfg" "not an MZ image: $(pe_hdr "$dir/$out" 0 2)"
+    elif [ "$(pe_hdr "$dir/$out" 68 2)" != "$mach" ]; then
+        fail "$cfg" "PE Machine is not $mach: $(pe_hdr "$dir/$out" 68 2)"
+    else
+        ok "$cfg -> a PE executable for windows/$arch, no [linker]"
+        sed 's|^|  |' "$tmp/o"
+    fi
+done
+
+# determinism: the same source built twice is the same PE
+total=$((total + 1))
+cp "$dir/build/win-exe-x86.exe" "$tmp/win-exe.1"
+if ! "$mc" build "$dir" --config "$dir/win-exe-x86.toml" > "$tmp/o" 2>&1; then
+    fail "win-exe-x86.toml twice" "$(cat "$tmp/o")"
+elif ! cmp -s "$tmp/win-exe.1" "$dir/build/win-exe-x86.exe"; then
+    fail "win-exe-x86.toml twice" "two builds of the same source differ"
+else
+    ok "win-exe-x86.toml twice -> byte for byte the same PE"
+fi
 
 # post-M42 patch: the refused cells of the matrix. `link = "static"` against a
 # program that imports a symbol is the important one -- it is the cell mc

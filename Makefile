@@ -364,6 +364,17 @@ test-windows-x86_64: build/mc1
 	    scripts/test-windows.sh --arch x86_64 build/mc1; \
 	fi
 
+# M42 step 2: the SELF-CONTAINED subset cross-compiled to a PE executable
+# through the pe-exe-* backend, with NO lld-link and NO llvm-dlltool -- the
+# writer does the whole job. Nothing runs here (no Windows host); the windows-*
+# CI legs EXECUTE the .exe (docs/specs/M42-step2.md). No tool guard: a plain
+# `mc` cross-build.
+test-windows-exe: build/mc1
+	scripts/test-windows-exe.sh build/mc1
+
+test-windows-x86_64-exe: build/mc1
+	scripts/test-windows-exe.sh --arch x86_64 build/mc1
+
 # M25: the pinned sysroot table (src/sysroots.mc) and its documentation say the
 # same thing, and `mc sysroot list` matches its golden. No network: a dead URL
 # is a maintenance issue for a scheduled job, not a red pull request.
@@ -620,6 +631,7 @@ check-skipped:
 	@echo "check-minimal: SKIPPED (its ceilings are measured on the macOS backends)"
 	@echo "test-linux/test-linux-x86_64 (+ the two --exe modes): SKIPPED (cross-compilation from macOS, with Docker)"
 	@echo "test-windows/test-windows-x86_64: SKIPPED (cross-compilation from macOS; here the suite is native)"
+	@echo "test-windows-exe/test-windows-x86_64-exe: SKIPPED (PE --exe cross-compilation from macOS)"
 	@echo "check-examples/check-lang/check-conc/check-desktop: SKIPPED (macOS dylibs and --exe)"
 	@echo "check-docs/site/check-site: SKIPPED (their samples are built with --exe)"
 	@echo "check-opt: SKIPPED (its corpus is linked and run through the macOS host toolchain)"
@@ -637,6 +649,7 @@ check-skipped:
 	@echo "test-linux/test-linux-x86_64 (+ the two --exe modes): SKIPPED (cross-compilation from macOS; here the suite is native)"
 	@echo "test-windows: SKIPPED (cross-compilation from macOS; the windows-11-arm CI leg is the runtime oracle)"
 	@echo "test-windows-x86_64: SKIPPED (cross-compilation from macOS; the windows-2025 CI leg is the runtime oracle)"
+	@echo "test-windows-exe/test-windows-x86_64-exe: SKIPPED (PE --exe; the windows CI legs are the runtime oracle)"
 	@echo "check-examples/check-lang/check-conc/check-desktop: SKIPPED (macOS dylibs and --exe)"
 	@echo "check-docs/site/check-site: SKIPPED (their samples are built with --exe)"
 	@echo "check-opt: SKIPPED (its corpus is linked and run through the macOS host toolchain)"
@@ -650,7 +663,7 @@ else ifneq (,$(WINHOST))
 # Docker or python3 -- and `check-skipped` prints the reason for each one.
 check: budget bootstrap-windows check-lex check-ast check-asm check-obj check-bundle check-mc check-toml check-sysroots check-limits check-skipped
 else
-check: budget test check-lex check-ast check-bundle check-asm check-obj bootstrap check-surface check-opt test-exe check-mc check-standalone check-parts check-toml check-build check-pkg check-tool check-sysroots check-stubs check-limits check-minimal test-linux test-linux-x86_64 test-windows test-windows-x86_64 check-examples check-lang check-conc check-desktop check-float check-wide check-kernel check-avr check-docs site check-site check-site-linux test-linux-exe test-linux-x86_64-exe test-sandbox
+check: budget test check-lex check-ast check-bundle check-asm check-obj bootstrap check-surface check-opt test-exe check-mc check-standalone check-parts check-toml check-build check-pkg check-tool check-sysroots check-stubs check-limits check-minimal test-linux test-linux-x86_64 test-windows test-windows-x86_64 test-windows-exe test-windows-x86_64-exe check-examples check-lang check-conc check-desktop check-float check-wide check-kernel check-avr check-docs site check-site check-site-linux test-linux-exe test-linux-x86_64-exe test-sandbox
 endif
 
 budget:
@@ -673,7 +686,7 @@ bench: build/mc1
 .PHONY: check-site-linux
 .PHONY: check-tool check-linux-host check-skipped check-shim test-sandbox sandbox-trace sandbox-trace-check mc-linux-gnu mc-linux-x86_64-gnu
 .PHONY: bootstrap-windows mc-windows mc-windows-x86_64 mc-windows-obj mc-windows-x86_64-obj
-.PHONY: all stage0 stage0-san test check-lex check-ast check-asm check-obj mc1 mc-seed bootstrap check-surface test-exe bundle check-bundle check-mc check-standalone check-parts check-toml check-build check-pkg check-sysroots check-stubs check-limits sysroot-linux sysroot-linux-x86_64 sysroot-windows sysroot-windows-x86_64 test-linux test-linux-x86_64 test-windows test-windows-x86_64 check-examples check-lang check-conc check-docs site check-site check budget clean check-desktop check-minimal mcrt-windows mcrt-windows-x86_64 check-float check-wide check-kernel check-avr check-opt test-linux-exe test-linux-x86_64-exe bench
+.PHONY: all stage0 stage0-san test check-lex check-ast check-asm check-obj mc1 mc-seed bootstrap check-surface test-exe bundle check-bundle check-mc check-standalone check-parts check-toml check-build check-pkg check-sysroots check-stubs check-limits sysroot-linux sysroot-linux-x86_64 sysroot-windows sysroot-windows-x86_64 test-linux test-linux-x86_64 test-windows test-windows-x86_64 test-windows-exe test-windows-x86_64-exe check-examples check-lang check-conc check-docs site check-site check budget clean check-desktop check-minimal mcrt-windows mcrt-windows-x86_64 check-float check-wide check-kernel check-avr check-opt test-linux-exe test-linux-x86_64-exe bench
 
 # M32: examples/desktop -- a GTK4 application written in mc, and the same
 # application with its widget tree written in a UI language taught by ui.mc.

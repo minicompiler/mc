@@ -1115,16 +1115,36 @@ compile hello.mc -> build/hello.exe.o
 link build/hello.exe.o -> build/hello.exe
 ```
 
-`[linker]` is **required**, for the same reason it is on Linux, and asking for a direct executable
-says so:
-
-```
-$ build/mc1 build tests/proj --config /tmp/w.toml
-/tmp/w.toml:6:8: windows requires [linker]: there is no direct executable: target.os
-```
-
 `/entry:mc_start /nodefaultlib` is not a stylistic choice: the entry point comes from
-`lib/sys_windows.mc` and there is no C runtime in the link at all.
+`lib/sys_windows_start.mc` and there is no C runtime in the link at all.
+
+### A direct PE, no lld-link (M42 step 2)
+
+Since M42 step 2, `[linker]` is **optional** on Windows, exactly as it is on Linux since M42:
+with no `[linker]` and `kind = "exe"`, `mc build` writes the PE32+ executable itself through the
+`pe-exe-arm64` / `pe-exe-x86_64` backends (`src/backend_coff_exe.mc`), and `mc --exe` /
+`--backend=pe-exe-arm64` do the same from the single-file CLI. It fills the two Windows executable
+slots in the target registry, so the `windows requires [linker]` diagnostic is gone for
+`kind = "exe"` — it now belongs only to a pair a module registers with a 0 exe slot
+([reference/diagnostics.md](reference/diagnostics.md)).
+
+```toml
+[project]
+entry = "hello.mc"        # brings its own entry: #include <sys_windows_start>, or a pure main
+out   = "build/hello.exe"
+kind  = "exe"
+
+[target]
+os   = "windows"
+arch = "x86_64"           # or aarch64
+```
+
+A fixed `ImageBase`, relocs stripped, kernel32 imports resolved through an IAT the loader fills —
+the PE counterpart of the ELF `ET_EXEC` ([reference/objects.md](reference/objects.md) § 8c). Because
+`write`/`open`/… are mc wrappers over kernel32 and **not** DLL exports, a single `--exe`
+translation unit that uses them must include `<sys_windows>` (a portable test that declares
+`extern write` stays on the `lld-link` object path above). `[linker]` still works and is the only
+route to a static or import-library link.
 
 ### The sysroot: an import library, not a download
 
