@@ -94,7 +94,6 @@
 #define K_COLON    299       // only #rule uses this: `stmt:`
 #define K_ARROW    300       // only #rule uses this: `=>`
 #define K_DOT      301       // M44: only `#include <pack/file.mc>` uses this
-#define K_DOLLAR   302       // teko: `$"` (not `$name`); a module claims it with syntax_expr("$")
 
 // ---- TokEnt: { text, len, word, id, taught } ----
 // `taught` is the one field stage0's TokEnt does not have, and the divergence is
@@ -340,16 +339,6 @@ void tok_init() {
     // unchanged for every file that has no bare `.` outside a string, a comment
     // or a number, which is every file check-lex compares.
     tok_add(".", 1);
-    // teko: `$` is a claimable one-character token, emitted by lex_next ONLY when
-    // the next byte is `"` (string interpolation: a module registers
-    // syntax_expr("$")). Every other `$` is a #rule template hole (lex_hole) and
-    // never reaches the token table. Appended LAST, after `.` and every lexeme the
-    // frozen stage0/lex.c registers, so no id moves: K_U8..K_DOT stay put and
-    // K_DOLLAR is 302. Pinning it here (rather than letting word_add("$") create
-    // it) is what makes the id stable no matter what a module registers first.
-    // --dump-tokens is unchanged for every file with no bare `$"` outside a string,
-    // a comment or a number -- which is every file check-lex compares.
-    tok_add("$", 1);
 }
 
 #define TE_TAUGHT_BIT 1
@@ -1356,19 +1345,29 @@ void lex_next(uptr t) {
     if (ld8(cp) == '"') { lex_string(t); return; }        // start points into the arena
     if (ld8(cp) == '#') { lex_directive(t); set_tok_len(t, cp - tok_start(t)); return; }
     if (ld8(cp) == '$') {
-        // teko string interpolation: `$` immediately before `"` is a one-character
-        // token (K_DOLLAR); the `"` is LEFT for the next lex_next, where it becomes
-        // an ordinary string. A module claims `$` with syntax_expr("$") and reads
-        // the string that follows. Every other `$` is a #rule template hole --
-        // $name, $1, $$gensym -- so lex_hole, --dump-tokens and the M10
-        // capture-safety property (no identifier ever contains `$`) are unchanged.
-        if (cp + 1 < cend && ld8(cp + 1) == '"') {
-            cp = cp + 1;
-            set_tok_id(t, K_DOLLAR);
-            set_tok_len(t, 1);
-            return;
+        // A `$` is a #rule template hole -- $name, $1, $$gensym -- whenever the
+        // next byte begins one (alpha, digit, or the gensym `$`): lex_hole, and
+        // --dump-tokens plus the M10 capture-safety property (no identifier ever
+        // contains `$`) are unchanged. Otherwise `$` is punctuation: a module may
+        // have claimed it as a one-character token (syntax_expr("$") -> word_add
+        // -> tok_add), so run the surface matcher. A match sets that token id and
+        // LEAVES the following byte -- the `"` of `$"..."` then lexes as an
+        // ordinary string. No match means nobody claimed `$`, which is the same
+        // condition (and the same message) lex_hole raised for an unclaimed `$` or
+        // a typo'd hole like `$(` before -- `invalid hole`. Nothing is pinned in
+        // the core: `$` is not a token unless a module makes it one.
+        i64 nb = 0;
+        if (cp + 1 < cend) nb = ld8(cp + 1);
+        if (is_alpha(nb) || is_digit(nb) || nb == '$') {
+            lex_hole(t); set_tok_len(t, cp - tok_start(t)); return;
         }
-        lex_hole(t); set_tok_len(t, cp - tok_start(t)); return;
+        i64 dlen = 0;
+        i64 did = punct_id(cp, cend - cp, &dlen);
+        if (did < 0) err_at(tok_file(t), tok_line(t), "invalid hole");
+        cp = cp + dlen;
+        set_tok_id(t, did);
+        set_tok_len(t, dlen);
+        return;
     }
 
     i64 plen = 0;
