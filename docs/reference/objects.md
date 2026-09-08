@@ -848,14 +848,20 @@ HashTable { Num Buckets: 2  Num Chains: 2  Buckets: [0, 1]  Chains: [0, 0] }
 what `ld.lld --hash-style=sysv` produces for a reference binary of the same shape, on both
 architectures.
 
-## 8c. The Windows PE executable (`pe-exe-arm64` and `pe-exe-x86_64`)
+## 8c. The Windows PE executable (`pe-exe-x86_64`)
 
 `src/backend_coff_exe.mc` writes a **PE32+ executable** with no `lld-link`, the Windows counterpart
-of `elf-exe` and `macho-exe`. It fills the executable slot of `windows/aarch64` and
-`windows/x86_64`, so `mc build` with `kind = "exe"` and no `[linker]` writes a runnable `.exe`
-directly, and `--backend=pe-exe-arm64` / `pe-exe-x86_64` name it. It reuses `src/backend_coff.mc`'s
-section characteristics and both relocation tables, and the same `arm64` / `x86_64-win` machines the
-COFF object writer uses.
+of `elf-exe` and `macho-exe`. It fills the executable slot of **windows/x86_64**, so `mc build`
+with `kind = "exe"` and no `[linker]` writes a runnable `.exe` directly, and `--backend=pe-exe-x86_64`
+names it. It reuses `src/backend_coff.mc`'s section characteristics and both relocation tables, and
+the `x86_64-win` machine the COFF object writer uses.
+
+**windows/aarch64 has no direct executable.** The writer carries an arm64 half (`backend_pe_exe`,
+using the `arm64` machine) but it is **dormant and not registered**: an arm64 PE also needs
+`DYNAMICBASE` and a `.reloc` base-relocation table, which can only be validated on a real
+Windows-on-ARM loader (Wine lies), so it is deferred. The windows/aarch64 exe slot is `0` and that
+target goes through `[linker]` (object + `lld-link`); `mc --exe` there is refused with
+`windows/aarch64 requires a linker: there is no direct executable`.
 
 A PE is COFF's sections wrapped in an image layout, so the ideas are the ELF executable's in
 another spelling:

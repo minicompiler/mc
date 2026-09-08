@@ -365,12 +365,17 @@ test-windows-x86_64: build/mc1
 	fi
 
 # M42 step 2: the SELF-CONTAINED subset cross-compiled to a PE executable
-# through the pe-exe-* backend, with NO lld-link and NO llvm-dlltool -- the
-# writer does the whole job. Nothing runs here (no Windows host); the windows-*
-# CI legs EXECUTE the .exe (docs/specs/M42-step2.md). No tool guard: a plain
-# `mc` cross-build.
-test-windows-exe: build/mc1
-	scripts/test-windows-exe.sh build/mc1
+# through the pe-exe-x86_64 backend, with NO lld-link and NO llvm-dlltool -- the
+# writer does the whole job. Nothing runs here (no Windows host); the
+# windows-2025 CI leg EXECUTEs the .exe (docs/specs/M42-step2.md). No tool
+# guard: a plain `mc` cross-build.
+#
+# windows/aarch64 has NO direct executable -- an arm64 PE needs DYNAMICBASE + a
+# .reloc base-relocation table validated on real Windows-on-ARM, deferred -- so
+# there is no test-windows-exe for it: the object + lld-link path (test-windows)
+# is the arm64 road, and windows/aarch64 --exe is refused (check-build.sh).
+test-windows-exe:
+	@echo "test-windows-exe: SKIPPED (windows/aarch64 has no direct executable; use test-windows, object + lld-link)"
 
 test-windows-x86_64-exe: build/mc1
 	scripts/test-windows-exe.sh --arch x86_64 build/mc1
@@ -631,7 +636,7 @@ check-skipped:
 	@echo "check-minimal: SKIPPED (its ceilings are measured on the macOS backends)"
 	@echo "test-linux/test-linux-x86_64 (+ the two --exe modes): SKIPPED (cross-compilation from macOS, with Docker)"
 	@echo "test-windows/test-windows-x86_64: SKIPPED (cross-compilation from macOS; here the suite is native)"
-	@echo "test-windows-exe/test-windows-x86_64-exe: SKIPPED (PE --exe cross-compilation from macOS)"
+	@echo "test-windows-x86_64-exe: SKIPPED (PE --exe cross-compilation from macOS; windows/aarch64 has no direct exe)"
 	@echo "check-examples/check-lang/check-conc/check-desktop: SKIPPED (macOS dylibs and --exe)"
 	@echo "check-docs/site/check-site: SKIPPED (their samples are built with --exe)"
 	@echo "check-opt: SKIPPED (its corpus is linked and run through the macOS host toolchain)"
@@ -649,7 +654,7 @@ check-skipped:
 	@echo "test-linux/test-linux-x86_64 (+ the two --exe modes): SKIPPED (cross-compilation from macOS; here the suite is native)"
 	@echo "test-windows: SKIPPED (cross-compilation from macOS; the windows-11-arm CI leg is the runtime oracle)"
 	@echo "test-windows-x86_64: SKIPPED (cross-compilation from macOS; the windows-2025 CI leg is the runtime oracle)"
-	@echo "test-windows-exe/test-windows-x86_64-exe: SKIPPED (PE --exe; the windows CI legs are the runtime oracle)"
+	@echo "test-windows-x86_64-exe: SKIPPED (PE --exe; the windows-2025 CI leg is the runtime oracle; windows/aarch64 has no direct exe)"
 	@echo "check-examples/check-lang/check-conc/check-desktop: SKIPPED (macOS dylibs and --exe)"
 	@echo "check-docs/site/check-site: SKIPPED (their samples are built with --exe)"
 	@echo "check-opt: SKIPPED (its corpus is linked and run through the macOS host toolchain)"
@@ -663,7 +668,7 @@ else ifneq (,$(WINHOST))
 # Docker or python3 -- and `check-skipped` prints the reason for each one.
 check: budget bootstrap-windows check-lex check-ast check-asm check-obj check-bundle check-mc check-toml check-sysroots check-limits check-skipped
 else
-check: budget test check-lex check-ast check-bundle check-asm check-obj bootstrap check-surface check-opt test-exe check-mc check-standalone check-parts check-toml check-build check-pkg check-tool check-sysroots check-stubs check-limits check-minimal test-linux test-linux-x86_64 test-windows test-windows-x86_64 test-windows-exe test-windows-x86_64-exe check-examples check-lang check-conc check-desktop check-float check-wide check-kernel check-avr check-docs site check-site check-site-linux test-linux-exe test-linux-x86_64-exe test-sandbox
+check: budget test check-lex check-ast check-bundle check-asm check-obj bootstrap check-surface check-opt test-exe check-mc check-standalone check-parts check-toml check-build check-pkg check-tool check-sysroots check-stubs check-limits check-minimal test-linux test-linux-x86_64 test-windows test-windows-x86_64 test-windows-x86_64-exe check-examples check-lang check-conc check-desktop check-float check-wide check-kernel check-avr check-docs site check-site check-site-linux test-linux-exe test-linux-x86_64-exe test-sandbox
 endif
 
 budget:

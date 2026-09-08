@@ -192,8 +192,9 @@ uptr drv_backend_for(i64 role) {
         return tgt_obj_at(drv_target());
     }
     if (tgt_exe_at(drv_target()) == 0)
-        toml_err_key("target.os", tm_cat(drv_os(),
-                     " requires [linker]: there is no direct executable"));
+        toml_err_key("target.os", tm_cat(tm_cat(drv_os(), "/"),
+                     tm_cat(drv_arch(),
+                            " requires [linker]: there is no direct executable")));
     return tgt_exe_at(drv_target());
 }
 

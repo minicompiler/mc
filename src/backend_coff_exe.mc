@@ -1,6 +1,9 @@
-// backend_coff_exe.mc — backends `pe-exe-arm64` and `pe-exe-x86_64`: a Windows
-// PE32+ executable, written without lld-link (M42 step 2,
-// docs/specs/M42-step2.md).
+// backend_coff_exe.mc — backend `pe-exe-x86_64`: a Windows PE32+ executable,
+// written without lld-link (M42 step 2, docs/specs/M42-step2.md). The arm64
+// half (`backend_pe_exe`) is present but DORMANT: windows/aarch64 has no direct
+// executable yet (an arm64 PE needs DYNAMICBASE + a .reloc base-relocation
+// table validated on real Windows-on-ARM), so its exe slot is 0 and it goes
+// through [linker].
 //
 // It is to src/backend_coff.mc what src/backend_elf_exe.mc is to
 // src/backend_elf.mc: the same `gen_lower` + `gen_encode_all` in front of it,
@@ -760,6 +763,10 @@ void pe_write(uptr path) {
 // first: the file records the architecture, so the backend knows which
 // instruction set this executable is made of. `x86_64-win` is the Win64 ABI
 // half of the x86-64 machine, the same one coff-obj-x86_64 uses.
+// Dormant since the windows/aarch64 exe slot was set to 0 (an arm64 PE needs
+// DYNAMICBASE + a .reloc base-relocation table validated on real
+// Windows-on-ARM). Kept for when that deferred work lands; not registered, so
+// --backend=pe-exe-arm64 is not offered and windows/aarch64 --exe is refused.
 void backend_pe_exe(i64 root, uptr out) {
     machine_use("arm64");
     pe_init();

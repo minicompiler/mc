@@ -49,18 +49,20 @@ void mc_writers_init() {
     backend("elf-exe-x86_64", &backend_elf_exe_x86);
     backend("coff-obj-arm64", &backend_coff);
     backend("coff-obj-x86_64", &backend_coff_x86);
-    backend("pe-exe-arm64", &backend_pe_exe);
     backend("pe-exe-x86_64", &backend_pe_exe_x86);
     // M17/M33: the (os, arch) pairs `mc build` accepts, with the backend each
     // one writes objects and direct executables with. `0` as the executable
     // backend says the target has none and always goes through [linker].
     // M42 step 1 filled the two Linux slots (a dynamic ELF executable needs no
-    // linker and no sysroot, only names); M42 step 2 filled the two Windows
-    // ones with a PE writer (kernel32 imports through an IAT, no lld-link).
-    // src/driver.mc reads nothing but this table.
+    // linker and no sysroot, only names); M42 step 2 filled windows/x86_64 with
+    // a PE writer (kernel32 imports through an IAT, no lld-link). windows/aarch64
+    // has no direct executable yet -- an arm64 PE needs DYNAMICBASE + a .reloc
+    // base-relocation table validated on real Windows-on-ARM, so its exe slot is
+    // 0 and it goes through [linker] (object + lld-link). src/driver.mc reads
+    // nothing but this table.
     target("macos", "aarch64", "macho", "macho-exe");
     target("linux", "aarch64", "elf-obj", "elf-exe");
     target("linux", "x86_64", "elf-obj-x86_64", "elf-exe-x86_64");
-    target("windows", "aarch64", "coff-obj-arm64", "pe-exe-arm64");
+    target("windows", "aarch64", "coff-obj-arm64", 0);
     target("windows", "x86_64", "coff-obj-x86_64", "pe-exe-x86_64");
 }

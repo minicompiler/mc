@@ -49,9 +49,9 @@ while [ $# -gt 0 ]; do
 done
 
 case "$arch" in
-    aarch64) backend="pe-exe-arm64";  cmachine="IMAGE_FILE_MACHINE_ARM64" ;;
     x86_64)  backend="pe-exe-x86_64"; cmachine="IMAGE_FILE_MACHINE_AMD64" ;;
-    *) echo "FAIL: unknown --arch $arch (aarch64, x86_64)" >&2; exit 1 ;;
+    aarch64) echo "SKIP: windows/aarch64 has no direct executable (arm64 PE is deferred: needs DYNAMICBASE + a .reloc table validated on real Windows-on-ARM). Use scripts/test-windows.sh (object + lld-link)." >&2; exit 0 ;;
+    *) echo "FAIL: unknown --arch $arch (x86_64; aarch64 has no --exe)" >&2; exit 1 ;;
 esac
 mc="${mc:-build/mc1}"
 outdir="build/tests-windows-exe-$arch"

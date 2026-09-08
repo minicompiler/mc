@@ -372,8 +372,9 @@ i64 mc_main(i64 argc, uptr argv, uptr envp) {
         i64 he = target_find(host_os(), host_arch());
         if (he < 0) die2("the host is not a registered target", host_os());
         if (tgt_exe_at(he) == 0)
-            die(tm_cat(host_os(),
-                       " requires a linker: there is no direct executable"));
+            die(tm_cat(tm_cat(host_os(), "/"),
+                       tm_cat(host_arch(),
+                              " requires a linker: there is no direct executable")));
         bname = tgt_exe_at(he);
     } else if (bname == 0) {
         // M37: with no --backend and no --exe, `mc x.mc -o x.o` writes an

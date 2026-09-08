@@ -9,6 +9,18 @@ This is that spec. It fills `target("windows", "aarch64", "coff-obj-arm64", "pe-
 x86_64 pair with a **PE32+ writer**, `src/backend_coff_exe.mc`, so `mc --exe prog.exe` and a
 `[project].kind = "exe"` build produce a runnable Windows executable directly, with no `lld-link`.
 
+> **Amendment (owner decision, post-review): windows/aarch64 keeps `[linker]`; only
+> windows/x86_64 gets the direct PE.** The x86_64 PE writer is validated (the windows/x86_64 CI
+> leg runs it), but an arm64 PE also needs `DYNAMICBASE` and a `.reloc` base-relocation table, and
+> those can only be validated on a real Windows-on-ARM loader (Wine lies). The object + `lld-link`
+> path already runs the arm64 suite 67/67, so the arm64 direct-exe is **deferred, not chased**:
+> `src/core_writers.mc` registers `pe-exe-x86_64` alone, sets the windows/aarch64 exe slot to `0`,
+> and `mc --exe` / `mc build kind = "exe"` on windows/aarch64 is refused with
+> `windows/aarch64 requires a linker: there is no direct executable` (single-file CLI) /
+> `windows/aarch64 requires [linker]: there is no direct executable` (`mc build`). The refusal
+> messages now name `<os>/<arch>`, since Windows is split. `backend_pe_exe` (the arm64 entry) is
+> present but dormant, kept for when the deferred work lands.
+
 ## What already exists
 
 * `src/backend_coff.mc` (M19/M20) writes COFF **objects** for both Windows architectures: the
@@ -35,9 +47,8 @@ x86_64 pair with a **PE32+ writer**, `src/backend_coff_exe.mc`, so `mc --exe pro
 Two backends over the same `gen_lower` + `gen_encode_all` every writer consumes, registered in
 `src/core_writers.mc` and placed in the executable slot the two Windows targets left at 0:
 
-    backend("pe-exe-arm64",  &backend_pe_exe);
     backend("pe-exe-x86_64", &backend_pe_exe_x86);
-    target("windows", "aarch64", "coff-obj-arm64", "pe-exe-arm64");
+    target("windows", "aarch64", "coff-obj-arm64", 0);              // no direct exe (deferred)
     target("windows", "x86_64", "coff-obj-x86_64", "pe-exe-x86_64");
 
 `x86_64-win` is the Win64 ABI half of the x86-64 machine, the same one `coff-obj-x86_64` uses; each

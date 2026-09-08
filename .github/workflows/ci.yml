@@ -246,13 +246,13 @@ jobs:
         run: scripts/test-windows.sh --arch x86_64 --build-only build/windows-objs-x86_64 build/mc1
 
       # M42 step 2: the self-contained subset cross-compiled to a PE executable
-      # through the pe-exe-* backend -- NO lld-link, NO llvm-dlltool. The .exe
-      # ride in a subdirectory of the same artifacts the objects travel in, and
-      # the windows-11-arm / windows-2025 legs RUN them with --run-only (which
-      # needs nothing but a Windows host). docs/specs/M42-step2.md.
-      - name: Cross-compile the PE --exe suite for windows/arm64
-        run: scripts/test-windows-exe.sh --build-only build/windows-objs/exe build/mc1
-
+      # through the pe-exe-x86_64 backend -- NO lld-link, NO llvm-dlltool. The
+      # .exe ride in a subdirectory of the same artifact the objects travel in,
+      # and the windows-2025 leg RUNS them with --run-only (which needs nothing
+      # but a Windows host). docs/specs/M42-step2.md. windows/aarch64 has NO
+      # direct executable (an arm64 PE needs DYNAMICBASE + a .reloc table
+      # validated on real Windows-on-ARM, deferred), so there is no arm64 PE
+      # --exe leg: its road is the object + lld-link path above.
       - name: Cross-compile the PE --exe suite for windows/x86_64
         run: scripts/test-windows-exe.sh --arch x86_64 --build-only build/windows-objs-x86_64/exe build/mc1
 
@@ -1087,12 +1087,6 @@ jobs:
         shell: bash
         run: scripts/test-windows.sh --run-only build/windows-objs
 
-      # M42 step 2: run the PE executables the macOS job wrote through --exe.
-      # No linker: the PE writer did the whole job, so this needs nothing but
-      # the runner. docs/specs/M42-step2.md.
-      - name: Run the PE --exe suite natively (windows/arm64)
-        shell: bash
-        run: scripts/test-windows-exe.sh --run-only build/windows-objs/exe
 
   # M20: the x64 half of the same story. The runner ships LLVM under
   # C:\Program Files\LLVM, so the "Tool facts" step below normally finds
