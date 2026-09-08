@@ -13,6 +13,7 @@ machine_x86_64_float	lib/machine_x86_64_float.mc
 mc/arena	src/arena.mc
 mc/ast	src/ast.mc
 mc/backend_coff	src/backend_coff.mc
+mc/backend_coff_exe	src/backend_coff_exe.mc
 mc/backend_elf	src/backend_elf.mc
 mc/backend_elf_exe	src/backend_elf_exe.mc
 mc/backend_exe	src/backend_exe.mc

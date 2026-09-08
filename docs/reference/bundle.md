@@ -42,7 +42,7 @@ byte for byte what it was. See [packages.md](packages.md) § 2.
 
 ## The catalogue
 
-The manifest is `tools/bundle.list`, one `NAME<TAB>PATH` per line, sorted by name: 97 entries,
+The manifest is `tools/bundle.list`, one `NAME<TAB>PATH` per line, sorted by name: 101 entries,
 plus `mc/bundle_data`, which is regenerated on demand (see below). Those are the names `<...>`
 accepts.
 
@@ -100,6 +100,7 @@ and supplying that function *is* a taught compiler ([hooks.md](hooks.md)).
 | `<mc/macho>` | `src/macho.mc` — the Mach-O writer alone since M41 |
 | `<mc/backend_exe>` | `src/backend_exe.mc` |
 | `<mc/backend_coff>` | `src/backend_coff.mc` |
+| `<mc/backend_coff_exe>` | `src/backend_coff_exe.mc` — the PE32+ executable writer (M42 step 2) |
 | `<mc/backend_elf>` | `src/backend_elf.mc` |
 | `<mc/backend_elf_exe>` | `src/backend_elf_exe.mc` |
 | `<mc/sha256>` | `src/sha256.mc` |
@@ -259,7 +260,7 @@ this table cannot drift from the code.
 |---|---|---|---|
 | `<mc/core_min>` | `src/core_min.mc` | `arena` `lz` `objmodel` `lex` `ast` `parse` `gen_resolve` `gen_walk` `hooks` `version` `cli` | the compiler that has no target: lexer, parser, resolver, walker, every registry, `mc_version()`, and `mc_main()` |
 | `<mc/core_machines>` | `src/core_machines.mc` | `machine_arm64` `machine_x86_64` | `mc_machines_init()` — the two host machines |
-| `<mc/core_writers>` | `src/core_writers.mc` | `sha256` `macho` `backend_exe` `backend_elf` `backend_elf_exe` `backend_coff` | `mc_writers_init()` — the eight `backend()` and five `target()` registrations |
+| `<mc/core_writers>` | `src/core_writers.mc` | `sha256` `macho` `backend_exe` `backend_elf` `backend_elf_exe` `backend_coff` `backend_coff_exe` | `mc_writers_init()` — the ten `backend()` and five `target()` registrations |
 | `<mc/core_build>` | `src/core_build.mc` | `sha256` `toml` `deps` `driver` `fetch` `sysroots` `sysroot` `stubs` `limits` | `mc_build_init()` — `mc build`, `mc limits`, `mc sysroot`, the pre-scan, and the READ side of packages |
 | `<mc/core_bundle>` | `src/core_bundle.mc` | `bundle_data` `bundle` | `mc_bundle_init()` — `#include <name>` itself |
 | `<mc/core_pkg>` | `src/core_pkg.mc` | `core_build` `pkg` `install` `upgrade` | `mc_pkg_init()` — `mc pkg`, `mc update`, `mc install` and `mc upgrade` ([packages.md](packages.md)) |

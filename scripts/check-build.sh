@@ -180,7 +180,8 @@ fi
 # The host this script runs on always has an exe backend, so the empty slot is
 # reached the way M39.5 reached the empty object one -- a taught compiler,
 # tests/proj/mc-noexe.mc, which re-registers the host pair with that slot at 0.
-os=$("$mc" --host | sed -n 's|^os ||p')
+os=$("$mc" --host | sed -n "s|^os ||p")
+arch=$("$mc" --host | sed -n "s|^arch ||p")
 noexe="$tmp/mc-noexe"
 case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) noexe="$noexe.exe" ;; esac
 
@@ -195,7 +196,7 @@ else
     "$noexe" --exe tests/001-return42.mc -o "$tmp/noexe-out" > "$tmp/o" 2>&1
     rc=$?
     got=$(tail -1 "$tmp/o")
-    want="mc: $os requires a linker: there is no direct executable"
+    want="mc: $os/$arch requires a linker: there is no direct executable"
     if [ "$rc" != "1" ]; then
         fail "--exe with an empty exe slot" "exit $rc, expected 1"
     elif [ "$got" != "$want" ]; then
@@ -295,7 +296,7 @@ else
         else
             fail "the advice (--exe)" "the binary exited $run_check_exit, expected 42"
         fi
-    elif [ "$got" = "mc: $os requires a linker: there is no direct executable" ]; then
+    elif [ "$got" = "mc: $os/$arch requires a linker: there is no direct executable" ]; then
         ok "no direct executable on this host either, and it says so"
         echo "  $got"
     else
@@ -670,17 +671,62 @@ arch = "sparc"
 ' \
     'CFG:7:8: only aarch64 (see docs/build.md): target.arch'
 
-# M19: the same for Windows -- valid os, no direct executable, and the message
-# names the operating system the file asked for.
-diag "diag [target].os windows without [linker]" "$dir/build/d.toml" \
+# M42 step 2 / the pe-exe split: os = "windows" arch = "x86_64" with no [linker]
+# and kind = "exe" writes a PE executable directly (the windows/x86_64 exe slot
+# is filled by pe-exe-x86_64). windows/aarch64 has NO direct executable -- an
+# arm64 PE needs DYNAMICBASE + a .reloc base-relocation table validated on real
+# Windows-on-ARM, deferred -- so its exe slot is 0 and the same config is now
+# the refusal `windows/aarch64 requires [linker]` (asserted just below). Only
+# the header is read here (no wine, no Windows host); running the PE is
+# scripts/test-windows-exe.sh. The PE machine is the u16 at e_lfanew (0x40) + 4,
+# i.e. byte 0x44: 0x8664 (x86-64) -> `100 134`.
+pe_hdr() { od -An -tu1 -j "$2" -N "$3" -v "$1" | tr -s ' ' | sed 's/^ //;s/ $//'; }
+
+for a in x86_64:win-exe-x86.toml:build/win-exe-x86.exe:100.134; do
+    arch=${a%%:*}; rest=${a#*:}
+    cfg=${rest%%:*}; rest=${rest#*:}
+    out=${rest%%:*}; mach=$(echo "${rest##*:}" | tr . ' ')
+    total=$((total + 1))
+    rm -f "$dir/$out"
+    if ! "$mc" build "$dir" --config "$dir/$cfg" > "$tmp/o" 2>&1; then
+        fail "$cfg" "$(cat "$tmp/o")"
+    elif [ ! -f "$dir/$out" ]; then
+        fail "$cfg" "$out was not written"
+    elif [ "$(pe_hdr "$dir/$out" 0 2)" != "77 90" ]; then
+        fail "$cfg" "not an MZ image: $(pe_hdr "$dir/$out" 0 2)"
+    elif [ "$(pe_hdr "$dir/$out" 68 2)" != "$mach" ]; then
+        fail "$cfg" "PE Machine is not $mach: $(pe_hdr "$dir/$out" 68 2)"
+    else
+        ok "$cfg -> a PE executable for windows/$arch, no [linker]"
+        sed 's|^|  |' "$tmp/o"
+    fi
+done
+
+# determinism: the same source built twice is the same PE
+total=$((total + 1))
+cp "$dir/build/win-exe-x86.exe" "$tmp/win-exe.1"
+if ! "$mc" build "$dir" --config "$dir/win-exe-x86.toml" > "$tmp/o" 2>&1; then
+    fail "win-exe-x86.toml twice" "$(cat "$tmp/o")"
+elif ! cmp -s "$tmp/win-exe.1" "$dir/build/win-exe-x86.exe"; then
+    fail "win-exe-x86.toml twice" "two builds of the same source differ"
+else
+    ok "win-exe-x86.toml twice -> byte for byte the same PE"
+fi
+
+# windows/aarch64 has no direct executable: the same kind = "exe" config that
+# writes a PE on x86_64 is refused here, at the [target].os key's position, with
+# the road (a linker) and the arch named. This is the deferred arm64 PE.
+diag "diag windows/aarch64 --exe (no direct exe)" "$dir/build/d.toml" \
     '[project]
-entry = "../app.mc"
-out   = "build/x"
+entry = "../win-exe.mc"
+out   = "build/x.exe"
+kind  = "exe"
 
 [target]
-os = "windows"
+os   = "windows"
+arch = "aarch64"
 ' \
-    'CFG:6:6: windows requires [linker]: there is no direct executable: target.os'
+    'CFG:7:8: windows/aarch64 requires [linker]: there is no direct executable: target.os'
 
 # post-M42 patch: the refused cells of the matrix. `link = "static"` against a
 # program that imports a symbol is the important one -- it is the cell mc

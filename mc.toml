@@ -93,6 +93,7 @@ files = [
     "src/arena.mc",
     "src/ast.mc",
     "src/backend_coff.mc",
+    "src/backend_coff_exe.mc",
     "src/backend_elf.mc",
     "src/backend_elf_exe.mc",
     "src/backend_exe.mc",

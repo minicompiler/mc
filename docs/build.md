@@ -835,8 +835,9 @@ hello
 ```
 
 Until M42 that table was **required**: `linux requires [linker]: there is no direct executable`
-was the message for a Linux `mc.toml` without one. It is gone for Linux and still there for
-Windows, whose PE executable writer is a separate milestone.
+was the message for a Linux `mc.toml` without one. It is gone for Linux, gone for windows/x86_64
+(M42 step 2, the direct PE writer), and still there for windows/aarch64, whose arm64 PE is
+deferred (`windows/aarch64 requires [linker]: there is no direct executable`).
 
 ### The sysroot — when it is still needed
 
@@ -1115,16 +1116,41 @@ compile hello.mc -> build/hello.exe.o
 link build/hello.exe.o -> build/hello.exe
 ```
 
-`[linker]` is **required**, for the same reason it is on Linux, and asking for a direct executable
-says so:
-
-```
-$ build/mc1 build tests/proj --config /tmp/w.toml
-/tmp/w.toml:6:8: windows requires [linker]: there is no direct executable: target.os
-```
-
 `/entry:mc_start /nodefaultlib` is not a stylistic choice: the entry point comes from
-`lib/sys_windows.mc` and there is no C runtime in the link at all.
+`lib/sys_windows_start.mc` and there is no C runtime in the link at all.
+
+### A direct PE, no lld-link (M42 step 2)
+
+Since M42 step 2, `[linker]` is **optional** on **windows/x86_64**, exactly as it is on Linux
+since M42: with no `[linker]` and `kind = "exe"`, `mc build` writes the PE32+ executable itself
+through the `pe-exe-x86_64` backend (`src/backend_coff_exe.mc`), and `mc --exe` /
+`--backend=pe-exe-x86_64` do the same from the single-file CLI.
+
+**windows/aarch64 has no direct executable yet.** An arm64 PE needs `DYNAMICBASE` and a `.reloc`
+base-relocation table, and that has to be validated on a real Windows-on-ARM loader (Wine lies),
+so it is deferred; its exe slot is 0 and `kind = "exe"` with no `[linker]` is refused with
+`windows/aarch64 requires [linker]: there is no direct executable`. The arm64 road is the object
++ `lld-link` path above (`test-windows`, which runs the suite 67/67). This paragraph's PE writer
+therefore fills only the windows/x86_64 executable slot in the target registry
+([reference/diagnostics.md](reference/diagnostics.md)).
+
+```toml
+[project]
+entry = "hello.mc"        # brings its own entry: #include <sys_windows_start>, or a pure main
+out   = "build/hello.exe"
+kind  = "exe"
+
+[target]
+os   = "windows"
+arch = "x86_64"           # direct PE is windows/x86_64 only; aarch64 needs [linker]
+```
+
+A fixed `ImageBase`, relocs stripped, kernel32 imports resolved through an IAT the loader fills —
+the PE counterpart of the ELF `ET_EXEC` ([reference/objects.md](reference/objects.md) § 8c). Because
+`write`/`open`/… are mc wrappers over kernel32 and **not** DLL exports, a single `--exe`
+translation unit that uses them must include `<sys_windows>` (a portable test that declares
+`extern write` stays on the `lld-link` object path above). `[linker]` still works and is the only
+route to a static or import-library link.
 
 ### The sysroot: an import library, not a download
 
