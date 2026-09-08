@@ -17,7 +17,29 @@
 #   examples/avx one AVX instruction named by its encoding, applied to two values
 #                the allocator placed, with its own VEX bytes; re-assembled by
 #                llvm-mc, not executed (this host has no AVX to run it on)
+#
+# --build-only OUTDIR --os OS --arch ARCH [MC]  writes the WIDE half of an
+# EXISTING cross-compile artifact, exactly the shape check-float.sh does: one
+# <name>.{o,obj}, one <name>.expect and one manifest line per wide test, so the
+# `--run-only` half of scripts/test-{linux,windows}.sh links and RUNS the wide
+# corpus on the CI legs -- which is the only place the Win64 by-reference wide
+# ABI is actually EXECUTED (the local check below only links it). It must run
+# AFTER the suite's --build-only: that step truncates the manifest.
+mode="full"
+split=""
+bos=""
+barch=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --build-only) mode="build"; split="$2"; shift 2 ;;
+        --os)         bos="$2"; shift 2 ;;
+        --arch)       barch="$2"; shift 2 ;;
+        *)            break ;;
+    esac
+done
+
 mc="${1:-build/mc1}"
+root=$(pwd)
 llvm="/opt/homebrew/opt/llvm/bin"
 
 if [ ! -x "$mc" ]; then
@@ -33,6 +55,69 @@ trap cleanup EXIT INT TERM
 
 tool() { if command -v "$1" > /dev/null 2>&1; then echo "$1"; else echo "$llvm/$1"; fi; }
 have() { command -v "$1" > /dev/null 2>&1 || [ -x "$llvm/$1" ]; }
+
+# The taught compilers. mc-i128 registers BOTH i128 and u128, so it compiles the
+# whole wide corpus; mc-u128 is the second door and is built for parity with the
+# run-time checks below. Each is `#include <mc/core>` plus the module.
+build_wide_compilers() {
+    for pair in "lib/mc_i128.mc build/mc-i128" "lib/mc_u128.mc build/mc-u128"; do
+        set -- $pair
+        rm -f "$2"
+        if ! msg=$("$mc" --exe "$1" -o "$2" 2>&1); then
+            echo "FAIL: building $2 from $1: $msg"; return 1
+        fi
+    done
+    return 0
+}
+
+# which taught compiler owns a wide test (mc-i128 compiles all four, but the
+# u128 program is built by its own door, matching the full-run convention)
+wide_compiler() { case "$1" in *u128*) echo build/mc-u128 ;; *) echo build/mc-i128 ;; esac; }
+
+if [ "$mode" = "build" ]; then
+    [ -n "$split" ] && [ -n "$bos" ] && [ -n "$barch" ] || {
+        echo "FAIL: --build-only needs OUTDIR, --os and --arch"; exit 1; }
+    [ -f "$split/manifest" ] || {
+        echo "FAIL: '$split/manifest' not found (run the suite's --build-only first)"; exit 1; }
+    build_wide_compilers || exit 1
+    lmode="libc"; ext="o"
+    if [ "$bos" = "windows" ]; then lmode="kernel32"; ext="obj"; fi
+    tmpb="$tmp/build"; mkdir -p "$tmpb"
+    n=0
+    for f in tests/wide/030-i128.mc tests/wide/032-u128.mc \
+             tests/wide/033-wide-abi.mc tests/wide/034-cast-narrow.mc; do
+        [ -f "$f" ] || continue
+        name=$(basename "$f" .mc)
+        why=$(sed -n "s|^// skip-$bos: *||p" "$f" | head -1)
+        [ -n "$why" ] || why=$(sed -n "s|^// skip-$barch: *||p" "$f" | head -1)
+        if [ -n "$why" ]; then
+            echo "skip $name ($why)"; echo "$name — $why" >> "$split/skipped"; continue
+        fi
+        {
+            echo '[project]'
+            echo "entry = \"$root/$f\""
+            echo "out   = \"$root/$split/$name.$ext\""
+            echo 'kind  = "obj"'
+            echo
+            echo '[target]'
+            echo "os   = \"$bos\""
+            echo "arch = \"$barch\""
+        } > "$tmpb/mc.toml"
+        if ! msg=$("$(wide_compiler "$f")" build "$tmpb" --config "$tmpb/mc.toml" 2>&1); then
+            echo "FAIL $name (build: $msg)"; fails=$((fails + 1)); continue
+        fi
+        echo "exit: $(sed -n 's|^// expect-exit: *||p' "$f" | head -1)" > "$split/$name.expect"
+        if grep -q '^// expect-stdout:' "$f"; then
+            echo "stdout: $(sed -n 's|^// expect-stdout: *||p' "$f" | head -1)" >> "$split/$name.expect"
+        fi
+        echo "$name $lmode" >> "$split/manifest"
+        echo "built $name"
+        n=$((n + 1))
+    done
+    if [ "$fails" != 0 ]; then echo "check-wide --build-only: $fails failures"; exit 1; fi
+    echo "check-wide --build-only: $n wide objects for $bos/$barch in $split"
+    exit 0
+fi
 
 run_case() {                            # compiler-source, test-source, name
     csrc="$1"; tsrc="$2"; name="$3"
@@ -173,9 +258,24 @@ else
     fi
 fi
 
+# the cast test: a signed narrow source (i32) widened to i128/u128 must
+# sign-extend, an unsigned one (u32) zero-extend (macos/aarch64 native)
+rm -f "$tmp/cast"
+if ! msg=$(build/mc-i128 --exe tests/wide/034-cast-narrow.mc -o "$tmp/cast" 2>&1); then
+    echo "FAIL cast (compile: $msg)"; fails=$((fails + 1))
+else
+    got=$("$tmp/cast" 2>/dev/null); rc=$?
+    if [ "$rc" = 0 ] && [ "$got" = "1 1 1 1 1 1 1 1 1" ]; then
+        echo "ok   cast: tests/wide/034-cast-narrow.mc (macos/aarch64, exit 0)"
+    else
+        echo "FAIL cast (exit $rc '$got', expected 0 '1 1 1 1 1 1 1 1 1')"; fails=$((fails + 1))
+    fi
+fi
+
 x86_sweep tests/wide/030-i128.mc i128
 x86_sweep tests/wide/032-u128.mc u128
 x86_sweep tests/wide/033-wide-abi.mc i128
+x86_sweep tests/wide/034-cast-narrow.mc i128
 
 # ---- x86-64 and aarch64 EXECUTION in Docker (SysV) ----
 # The strongest check the sweep cannot make: does the code RUN? mc build with a
@@ -219,29 +319,56 @@ if docker info > /dev/null 2>&1 && have ld.lld; then
     wide_linux x86_64  linux/amd64 u128 tests/wide/032-u128.mc u128 0 "1 1 1 0 0 1 0 1 1 42 1 1"
     wide_linux aarch64 linux/arm64 i128 tests/wide/033-wide-abi.mc abi 0 "10 1 3000000000000000000"
     wide_linux x86_64  linux/amd64 i128 tests/wide/033-wide-abi.mc abi 0 "10 1 3000000000000000000"
+    wide_linux aarch64 linux/arm64 i128 tests/wide/034-cast-narrow.mc cast 0 "1 1 1 1 1 1 1 1 1"
+    wide_linux x86_64  linux/amd64 i128 tests/wide/034-cast-narrow.mc cast 0 "1 1 1 1 1 1 1 1 1"
 else
     echo "skip linux exec: need docker and ld.lld"
 fi
 
-# ---- windows/x86_64: the COFF object, machine AMD64 (execution is CI's job) ----
-# The Win64 by-reference ABI is proved by the sweep above (byte-exact against
-# llvm-mc for x86_64-windows-msvc); here we only assert a valid AMD64 COFF.
-if have llvm-objdump; then
-    for wsrc in tests/wide/030-i128.mc tests/wide/032-u128.mc; do
-        wnm=$(basename "$wsrc" .mc)
-        wcomp=i128; case "$wnm" in *u128*) wcomp=u128 ;; esac
-        if ! msg=$("build/mc-$wcomp" --backend=coff-obj-x86_64 "$wsrc" -o "$tmp/$wnm-win.obj" 2>&1); then
-            echo "FAIL windows/x86_64 $wnm (compile: $msg)"; fails=$((fails + 1)); continue
+# ---- windows/aarch64 and windows/x86_64: object + a real lld-link link ----
+# EXECUTION of the Win64 by-reference wide ABI is the CI legs' job (the macOS
+# check job cross-compiles the wide objects into windows-{arm64,x86_64}-objects
+# via `check-wide.sh --build-only`, and test-windows.sh --run-only links and
+# RUNS them). Here, as with the float suite's windows_leg, every wide object is
+# LINKED with the same kernel32.lib + winrt.obj + winstart.obj a Windows binary
+# needs, which proves symbol resolution -- not just a valid .text section.
+wide_windows() {                        # arch, lld machine, coff backend
+    warch="$1"; lmach="$2"; be="$3"
+    if ! have lld-link || ! have llvm-dlltool; then
+        echo "skip windows/$warch: lld-link or llvm-dlltool not found"; return 0
+    fi
+    sysroot="build/sysroot/windows-$warch"
+    if [ ! -f "$sysroot/kernel32.lib" ]; then
+        if ! msg=$(sh scripts/sysroot-windows.sh --arch "$warch" "$sysroot" 2>&1); then
+            echo "skip windows/$warch: no kernel32.lib ($msg)"; return 0
         fi
-        if $(tool llvm-objdump) -h "$tmp/$wnm-win.obj" 2>/dev/null | grep -q '\.text'; then
-            echo "ok   windows/x86_64 $wnm: COFF object built (Win64 ABI swept above)"
-        else
-            echo "FAIL windows/x86_64 $wnm: no .text in the COFF object"; fails=$((fails + 1))
+    fi
+    out="build/wide-windows-$warch"; mkdir -p "$out"
+    # the two support objects carry no wide code and are the STOCK compiler's,
+    # exactly the objects scripts/test-windows.sh links
+    for m in sys_windows sys_windows_start; do
+        if ! msg=$("$mc" --backend=$be "lib/$m.mc" -o "$out/$m.obj" 2>&1); then
+            echo "FAIL windows/$warch ($m: $msg)"; fails=$((fails + 1)); return 0
         fi
     done
-else
-    echo "skip windows/x86_64: llvm-objdump not found"
-fi
+    wp=0; wt=0
+    for wsrc in tests/wide/030-i128.mc tests/wide/032-u128.mc \
+                tests/wide/033-wide-abi.mc tests/wide/034-cast-narrow.mc; do
+        wnm=$(basename "$wsrc" .mc); wt=$((wt + 1))
+        if ! msg=$("$(wide_compiler "$wsrc")" --backend=$be "$wsrc" -o "$out/$wnm.obj" 2>&1); then
+            echo "FAIL windows/$warch $wnm (compile: $msg)"; fails=$((fails + 1)); continue
+        fi
+        if ! msg=$($(tool lld-link) -machine:$lmach -subsystem:console -entry:mc_start \
+                   -nodefaultlib -out:"$out/$wnm.exe" "$out/$wnm.obj" "$out/sys_windows.obj" \
+                   "$out/sys_windows_start.obj" "$sysroot/kernel32.lib" 2>&1); then
+            echo "FAIL windows/$warch $wnm (link: $msg)"; fails=$((fails + 1)); continue
+        fi
+        wp=$((wp + 1))
+    done
+    echo "ok   windows/$warch: $wp/$wt wide objects linked (executed on the CI leg)"
+}
+wide_windows aarch64 arm64 coff-obj-arm64
+wide_windows x86_64  x64   coff-obj-x86_64
 
 # f16: `f16 tbl[8]` is SIXTEEN bytes of __bss, from the width alone
 if build/mc-f16 --dump-syms tests/wide/031-f16.mc | grep -q '__DATA,__bss.*size=48'; then

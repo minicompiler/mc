@@ -197,8 +197,27 @@ Three modules the core has never heard of, each with an empty `git diff src/`.
 | `<f16>` | `lib/f16.mc` | half precision as a STORAGE type, on top of `<float>`'s machine: four slots and two `fcvt`s, because `<float>` dispatches on the KIND and not on the id. AArch64 only |
 | `<mc_f16>` | `lib/mc_f16.mc` | `<float>` plus `<f16>`, in one compiler |
 
-`examples/avx/` is the third and is not bundled: it is an example directory with
-its own README, and it teaches one AVX instruction by its encoding.
+Casting a narrow integer to `i128`/`u128` **sign-extends a signed source and
+zero-extends anything else**, keyed on `type_signed(src)` and not on the id — so
+`(i128)(i32) -5` and `(u128)(i32) -5` both fill the high half with ones (C
+sign-extends a signed source whatever the wide target's signedness), while
+`(i128)(u32) 0xffffffff` leaves it zero. `tests/wide/034-cast-narrow.mc` checks
+every case bit-for-bit and runs on macos/aarch64, linux/aarch64, linux/x86_64
+and — on the CI legs — windows/aarch64 and windows/x86_64.
+
+Known limits of `<i128>`/`<u128>`, all deliberate at M24:
+
+- **At most four 16-byte arguments in one call on arm64.** They take the eight
+  argument registers in even pairs; a fifth is a clean `i128/u128: too many
+  arguments for the register pairs` (a diagnostic, never a miscompile), and no
+  spill-to-stack path exists.
+- **`callp` with a wide argument or a wide result is unsupported.** Neither
+  machine overrides `MTASK_CALLP`, so an indirect call falls to the base
+  machine, which lays a 16-byte value out as if it were 8. Call a wide value
+  only through a named function (`MTASK_CALL`, which the module does override).
+- **A decimal literal `≥ 2^128` wraps silently.** `iw_muladd` accumulates the
+  digits in four 32-bit limbs and drops the carry off the top; there is no
+  overflow diagnostic on the literal.
 
 ### The demonstrations
 

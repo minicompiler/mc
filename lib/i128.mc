@@ -470,10 +470,15 @@ void wi_cast(i64 ty, i64 d) {
         dst_done(d, rd);
         return;
     }
-    i64 r = val_reg(d, REG_S1);                   // integer -> wide, sign-extended
+    i64 r = val_reg(d, REG_S1);                   // integer -> wide
     iw_put(d, IW_LO, r);
-    if (src == TY_I64) e2(WI_ASR63, REG_S2, r);
-    else               ei(I_MOVZ, REG_S2, 0, 0);
+    // A signed source (i64, i32, or a taught i8/i16) sign-extends into the
+    // high half; anything else (u8..u64, uptr) zero-extends. C sign-extends a
+    // signed source regardless of the wide target's signedness, so (u128) of a
+    // negative i32 is all-ones up top too. A narrow value already arrives
+    // sign/zero-extended to 64 bits, so r's bit 63 is the sign to replicate.
+    if (type_signed(src)) e2(WI_ASR63, REG_S2, r);
+    else                  ei(I_MOVZ, REG_S2, 0, 0);
     iw_put(d, IW_HI, REG_S2);
 }
 
@@ -762,8 +767,12 @@ void xw_cast(i64 ty, i64 d) {
     }
     i64 r = x86_val_reg(d, XR_RAX);                 // integer -> wide
     x86_mov(XR_RAX, r);
-    if (src == TY_I64) e0(X_CQO);                   // sign into rdx:rax
-    else               ei(X_MOVI, XR_RDX, 0, 0);
+    // A signed source (i64, i32, or a taught i8/i16) sign-extends into the high
+    // half; anything else zero-extends. C sign-extends a signed source whatever
+    // the wide target's signedness. A narrow value already arrives extended to
+    // 64 bits, so cqo replicates rax's bit 63 across rdx.
+    if (type_signed(src)) e0(X_CQO);                // sign into rdx:rax
+    else                  ei(X_MOVI, XR_RDX, 0, 0); // zero rdx
     xw_st(XR_RAX, d, IW_LO);
     xw_st(XR_RDX, d, IW_HI);
 }
