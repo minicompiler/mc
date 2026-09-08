@@ -1,0 +1,11 @@
+# a range, which the key does not accept: a minimum only. A TOML-position
+# error, exit 2.
+[package]
+name = "minver"
+mc = "1.0 - 2.0"
+
+[project]
+name  = "minver"
+entry = "app.mc"
+out   = "build/minver"
+kind  = "exe"

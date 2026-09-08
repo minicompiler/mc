@@ -122,6 +122,41 @@ arrives inside a downloaded tree and is then handed to `open`, to `write` and (b
 to `unlink`: `files = ["../../../../.ssh/id_rsa"]` used to be read on every build, and
 `mc pkg vendor` used to write it outside the project.
 
+### The minimum mc version
+
+A taught package depends on the compiler's hook API, which changes before 1.0.0, so a package
+tagged for one mc fails on an older one somewhere deep inside a handler. `[package].mc` lets it say
+which mc it needs, and get a clear diagnostic instead:
+
+```toml
+[package]
+name = "geo"
+mc   = "1.2.0"          # or ">= 1.2.0" -- both mean "at least this"
+```
+
+It is a **minimum only**. There is no upper bound and no range: the API is frozen at 1.0.0, so a
+newer mc keeps working. A malformed value — `banana`, `1.0 - 2.0` — is a `file:line:col` error,
+exit 2.
+
+The key is checked when the compiler **builds or resolves** a package: the entry's own `mc.toml`
+and each dependency's, whether the dependency comes from `[deps]`, `[replace]` or a vendored tree.
+When the running compiler is older than the minimum the build is refused —
+
+```text
+mc: -- but the message carries the package's own file:line:col, not this prefix
+geo 1.2.0 needs mc >= 1.2.0 (this is mc 1.1.0): upgrade the compiler
+```
+
+— at the key's own position, exit 2, naming the package (a dependency by its locked
+name-and-version, the entry by its `[package].name`).
+
+**A working-tree build reports the `0.0.0-dev` sentinel.** `0.0.0-dev` ranks below every real
+version, so a literal comparison would fail every pinned package on a local build; it is therefore
+treated as **newest** and skips the check entirely. A published `mc` reports a real version and is
+compared normally. (The registry's own validator reads `[package].mc` too, to publish it in the
+index row and to refuse a version whose declared minimum it cannot build; that is the separate
+`minicompiler/mc-registry` repository and out of scope here.)
+
 ### `[package].check` -- what the registry compiles
 
 A registry validates a tag by compiling the package, and a package that carries **alternatives**
@@ -393,6 +428,8 @@ the source, which are exit 1. See [diagnostics.md](diagnostics.md) § 13.
 | a file the build read is not in that package's `files` | `geo/extra.mc:1: not declared in geo's [package].files` | 1 |
 | a reserved or malformed name in `[deps]`/`[replace]` | `mc.toml:8:6: reserved package name: deps.mc` | 1 |
 | a `[package].files` entry that leaves the package (§ 3) | `mc: geo 1.2.0: files entry escapes the package: ../x` | 2 |
+| the running compiler is older than a package's `[package].mc` | `geo 1.2.0 needs mc >= 1.2.0 (this is mc 1.1.0): upgrade the compiler` | 2 |
+| a malformed `[package].mc` value | `mc.toml:3:6: package.mc must be a version like 1.2.3 or ">= 1.2.3"` | 2 |
 | an archive member that is a link | `mc: v1.2.0.tar.gz: archive member is a link: geo-1.2.0/x` | 2 |
 | an archive member that leaves the destination | `mc: v1.2.0.tar.gz: member escapes the archive: ../x` | 2 |
 | a body over its cap (64 MiB for an archive, 1 MiB for an index file) | `mc: larger than the cap of 67108864 bytes: <source>` | 2 |

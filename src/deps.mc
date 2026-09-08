@@ -278,6 +278,102 @@ i64 ver_major(uptr a) {
     return ver_field(a, &i);
 }
 
+// ---- [package].mc: the minimum mc version a package declares ----
+// A taught package depends on the hook API, which changes before 1.0.0, so a
+// package tagged for one mc must be able to say so and get a clear diagnostic
+// on an older one instead of a cryptic failure deep in a handler. The key is a
+// MINIMUM only: the 1.0.0 frozen API means a newer mc keeps working, so there
+// is no upper bound and no range.
+
+// A strict SemVer form: three dot-separated numeric fields, then an optional
+// `-pre` or `+build` tail (any of SemVer's identifier charset). Unlike
+// dep_ver_ok, which is a path-safety charset check that accepts `banana`, this
+// rejects anything ver_cmp would silently read as 0.0.0. `1.0 - 2.0` is refused
+// at the space after the second field; `banana` at its first byte.
+i64 dep_semver_ok(uptr s) {
+    i64 n = cstrlen(s);
+    if (n == 0 || n > 64) return 0;
+    i64 i = 0;
+    i64 field = 0;
+    while (field < 3) {
+        i64 digits = 0;
+        while (i < n && ld8(s + i) >= '0' && ld8(s + i) <= '9') {
+            digits = digits + 1;
+            i = i + 1;
+        }
+        if (digits == 0) return 0;
+        if (field < 2) {
+            if (i >= n || ld8(s + i) != '.') return 0;
+            i = i + 1;
+        }
+        field = field + 1;
+    }
+    if (i == n) return 1;
+    i64 c = ld8(s + i);
+    if (c != '-' && c != '+') return 0;
+    i = i + 1;
+    if (i >= n) return 0;                 // an empty pre-release/build tail
+    while (i < n) {
+        c = ld8(s + i);
+        i64 ok = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z')
+                 || (c >= 'A' && c <= 'Z')
+                 || c == '.' || c == '-' || c == '+';
+        if (!ok) return 0;
+        i = i + 1;
+    }
+    return 1;
+}
+
+// The raw `[package].mc` value, validated and normalized to a bare version.
+// Accepts a bare `X.Y.Z[-suffix]` and an optional leading `>= ` (both mean "at
+// least this"). A malformed value is a TOML-position error, exit 2. Must be
+// called with the offending manifest's table active, so the position points at
+// the right mc.toml.
+uptr dep_min_mc(uptr v) {
+    uptr s = v;
+    if (ld8(s) == '>' && ld8(s + 1) == '=') {
+        s = s + 2;
+        while (ld8(s) == ' ') { s = s + 1; }
+    }
+    if (!dep_semver_ok(s))
+        toml_err_key_code("package.mc",
+            "package.mc must be a version like 1.2.3 or \">= 1.2.3\"", 2);
+    return s;
+}
+
+// The enforcer. Reads `[package].mc` from the CURRENTLY PARSED table (the
+// entry's own, or a dependency's inside a push/pop) and refuses when this
+// compiler is older than the declared minimum. `what` names the package for the
+// refusal (`geo 1.2.0`, or the entry's own name).
+//
+// A working-tree build reports the sentinel `0.0.0-dev`, which ver_cmp ranks
+// below every real version, so it is treated as newest and SKIPS the check
+// entirely -- otherwise every local build of a pinned tree would fail. This is
+// documented in docs/reference/packages.md, and it is why the refusal path is
+// exercised in check-pkg through a compiler baked to a real version.
+void dep_enforce_mc(uptr what) {
+    uptr raw = toml_get("package.mc");
+    if (raw == 0) return;
+    uptr want = dep_min_mc(raw);
+    if (str_eq(mc_version(), "0.0.0-dev")) return;
+    if (ver_cmp(mc_version(), want) < 0)
+        toml_err_key_code("package.mc",
+            tm_cat(what, tm_cat(" needs mc >= ",
+                   tm_cat(want, tm_cat(" (this is mc ",
+                          tm_cat(mc_version(),
+                                 "): upgrade the compiler"))))), 2);
+}
+
+// The entry project's own label for the refusal: `[package].name` when it has
+// one, else `[project].name`, else a generic phrase -- both keys are already
+// read elsewhere, so no new TOML key is introduced for the label.
+uptr dep_entry_label() {
+    uptr nm = toml_get("package.name");
+    if (nm == 0) nm = toml_get("project.name");
+    if (nm == 0) return "this project";
+    return nm;
+}
+
 // A version string that is about to become a filesystem path component:
 // <libs>/<name>/v<version>/ and ~/.mc/tools/<name>/v<version>/. SemVer's charset
 // and nothing else -- [0-9A-Za-z.+_-], non-empty, at most 64 bytes, no leading
@@ -1264,6 +1360,21 @@ i64 dep_replace(i64 pk, uptr cfg) {
     return 1;
 }
 
+// A dependency's own `[package].mc`, checked inside a push/pop so the position
+// of a refusal points at the dependency's mc.toml. The tree's manifest is
+// readable by this point (dep_scan dies first if it is not), so the guard is
+// belt-and-braces. Covers a fetched tree, a vendored tree and a [replace] local
+// tree alike, because all three reach step 4 with dp_dir set.
+void dep_check_dep_mc(i64 pk) {
+    uptr dir = dp_dir(pk);
+    uptr mt = dep_in(dir, "mc.toml");
+    if (!lex_readable(mt)) return;
+    uptr frame = toml_push();
+    toml_parse(mt);
+    dep_enforce_mc(dep_pkg_what(pk, dir));
+    toml_pop(frame);
+}
+
 // ---- the entry point the driver calls ----
 // Runs for BOTH halves of `mc build` (the taught compiler and the entry), which
 // is why it is in drv_parse and not in drv_apply_config: a compiler-module
@@ -1275,6 +1386,10 @@ void deps_apply(uptr cfg) {
     uptr s = dp_state();
     if (ld64(s + DP_APPLIED)) return;
     st64(s + DP_APPLIED, 1);
+    // 0. the entry's own [package].mc, before anything is read and whether or
+    //    not there are any [deps]: a compiler too old for this project is
+    //    refused up front, with the entry's own manifest as the position.
+    dep_enforce_mc(dep_entry_label());
     // 1. the names, validated at their own position, before anything is read
     i64 nd = 0;
     i64 i = 0;
@@ -1334,6 +1449,7 @@ void deps_apply(uptr cfg) {
         uptr got = dep_scan(i);
         uptr want = dp_hash(i);
         if (want != 0 && !str_eq(got, want)) dep_mismatch(i);
+        dep_check_dep_mc(i);
         i = i + 1;
     }
 }

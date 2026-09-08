@@ -334,6 +334,7 @@ rule — is in [packages.md](packages.md).
 | key | type | meaning |
 |---|---|---|
 | `package.name` | string | the package's registry name |
+| `package.mc` | string | optional: the MINIMUM mc version the package needs, a minimum only |
 | `package.files` | array of strings | every file the package ships, in the order that fixes the hash |
 | `package.lib` | string | optional: the file a bare `#include <name>` means |
 | `package.module` | string | optional: the file a COMPILER includes; it exports `<name>_init()` |
@@ -348,6 +349,17 @@ outside of; see [packages.md](packages.md) § 3.
 
 `bin` is the one name in this file that may carry a hyphen (`[a-z][a-z0-9_-]*`, at most 32 bytes):
 it is a FILE name, not an identifier. `mc build` ignores it.
+
+`mc` is a MINIMUM mc version, checked when the compiler builds or resolves a package — the entry's
+own `mc.toml` and each dependency's, whether it comes from `[deps]`, `[replace]` or a vendored
+tree. A bare `1.2.3` (an optional `-suffix` allowed) or a leading `>= 1.2.3` both mean "at least
+this"; it is a minimum only, because the API is frozen at 1.0.0 and a newer mc keeps working, so
+there is no upper bound and no range. A malformed value (`banana`, `1.0 - 2.0`) is a
+`file:line:col` error, exit 2. When the running compiler is older than the minimum the build is
+refused with `<pkg> <ver> needs mc >= <min> (this is mc <cur>): upgrade the compiler`, exit 2, at
+the key's own position. **A working-tree build reports the `0.0.0-dev` sentinel, which is treated
+as newest and skips the check entirely** — otherwise every local build of a pinned tree would
+fail. See [packages.md](packages.md) § The minimum mc version.
 
 **A package's kind is `[project]`'s** and is written nowhere else: no `[project]` at all — every
 package published so far — or `kind = "obj"` is a library, `kind = "exe"` is a tool, and a

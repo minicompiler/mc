@@ -1,0 +1,12 @@
+# a malformed value: not a version. A TOML-position error, exit 2, on every
+# compiler including the dev build (the value is validated before the sentinel
+# skip).
+[package]
+name = "minver"
+mc = "banana"
+
+[project]
+name  = "minver"
+entry = "app.mc"
+out   = "build/minver"
+kind  = "exe"
