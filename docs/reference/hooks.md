@@ -396,6 +396,14 @@ fixed tree, so it can read neither a type (`bits i64`) nor an argument list
 `syntax_expr handler produced no expression` when it returns 0 — an expression position has no
 empty node to fall back on.
 
+**`word` may be `$`.** Every `$` in the source is a `#rule` template hole — `$name`, `$1`, the
+`$$name` gensym — *except* a `$` immediately followed by `"`, which the lexer emits as a
+one-character token (`$`, no `"`; the `"` then lexes as an ordinary string). Nothing claims it by
+default, so a bare `$"` is `expression expected`; a module that wants `$"..."` string
+interpolation registers `syntax_expr("$", &f)`, and the handler consumes the `$` and reads the
+`T_STR` token that follows. `$` is punctuation, so — unlike a taught *word* — it is never scoped
+by `source_claim` and cannot collide with an identifier.
+
 ### `void syntax_infix(uptr word, i64 prec, uptr fn)`
 
 Teaches a **binary operator**. There is no new table: the `#infix` entry gains a handler column,

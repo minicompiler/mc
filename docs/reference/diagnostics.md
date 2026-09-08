@@ -44,7 +44,7 @@ notatype main() { return 0; }
 | `invalid hexadecimal` | `0x` with no hex digit after it | write at least one digit |
 | `empty lexeme` | `#token ""` | give the lexeme at least one byte |
 | `unknown directive` | a `#name` that is not one of the ten | check the spelling; the list is in [directives.md](directives.md). `#include <name>` and `#embed` do not exist in the C seed |
-| `invalid hole` | a `$` that is not followed by a hole name | `$name` and `$$name` are only meaningful inside a `#rule` template |
+| `invalid hole` | a `$` that is not followed by a hole name (nor by `"`) | `$name` and `$$name` are only meaningful inside a `#rule` template; a `$` before `"` is a one-character token a module claims with `syntax_expr("$")`, not a hole |
 | `unknown bundled include` | `#include <name>` with a name the bundle does not carry | the catalogue is [bundle.md](bundle.md). There is no filesystem fallback for `<...>`. In a binary with no bundle at all the message names the install instead ([packages.md](packages.md) § 2) |
 | `path with too many segments` | a path with more than 64 components after normalisation | shorten it, or add an `[include].paths` root and include by a short name |
 | `too many substitutions` | more than 16 `p_subst_*` entries pending for one pushed source | a module bug: batch fewer substitutions per push |
