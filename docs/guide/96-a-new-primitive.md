@@ -153,7 +153,7 @@ src/` is empty.**
 
 | module | what it teaches | what it needed that `<float>` did not |
 |---|---|---|
-| `lib/i128.mc` | a 128-bit integer, memory-resident in ONE depth backed by a 16-byte slot: `adds`/`adc`, `subs`/`sbc`, `mul`/`umulh`, and a comparison built from the flags plus a separate equality | nothing. `MTASK_CONST` carries one `i64`, so the literal goes through a module-private global with an `N_BLOB` initializer and the handler returns a load from it |
+| `lib/i128.mc` | 128-bit integers `i128` and `u128`, memory-resident in ONE depth backed by a 16-byte slot: `adds`/`adc`, `subs`/`sbc`, `mul`/`umulh` on arm64, `add`/`adc`, `sub`/`sbb`, `mul` on x86-64, and a comparison built from the flags plus a separate equality. `u128` shares the whole machine and differs only in the compare (unsigned conditions), so the machine keys on the id. On **arm64, x86-64 (SysV) and x86-64-win (Win64)**; the Win64 ABI passes a 16-byte value by reference | nothing. `MTASK_CONST` carries one `i64`, so the literal (`123i` / `123u`) goes through a module-private global with an `N_BLOB` initializer and the handler returns a load from it |
 | `lib/f16.mc` | half precision as a **storage** type, with `fcvt` in both directions | four slots on a copy of `<float>`'s machine and nothing else, because `<float>` dispatches on `type_kind` and not on the id |
 | `examples/avx` | one AVX instruction named by its encoding, applied to two values the allocator placed | nothing. It writes its own VEX bytes in its own machine, which is exactly what `emit()` cannot do — `emit()` is 32 bits and a VEX3 instruction is five bytes |
 

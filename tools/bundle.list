@@ -74,6 +74,7 @@ mc_lit_nop	lib/mc_lit_nop.mc
 mc_param_nop	lib/mc_param_nop.mc
 mc_probe	lib/mc_probe.mc
 mc_syntax_demo	lib/mc_syntax_demo.mc
+mc_u128	lib/mc_u128.mc
 pass_demo	lib/pass_demo.mc
 prelude	lib/prelude.mc
 syntax_demo_test	lib/syntax_demo_test.mc
@@ -85,6 +86,7 @@ sys_svc	lib/sys_svc.mc
 sys_windows	lib/sys_windows.mc
 sys_windows_host	lib/sys_windows_host.mc
 sys_windows_start	lib/sys_windows_start.mc
+u128	lib/u128.mc
 user_badmach	lib/user_badmach.mc
 user_default	lib/user_default.mc
 user_demo	lib/user_demo.mc

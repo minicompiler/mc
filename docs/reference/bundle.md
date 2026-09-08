@@ -191,13 +191,33 @@ Three modules the core has never heard of, each with an empty `git diff src/`.
 
 | name | file | what it gives you |
 |---|---|---|
-| `<i128>` | `lib/i128.mc` | a 128-bit integer: `type_new(..., 16, 16, TK_WIDE)`, memory-resident in ONE depth, `adds`/`adc`, `subs`/`sbc`, `mul`/`umulh`, a compare that is not just the 64-bit one twice, and a literal through a module-private global with an `N_BLOB` initializer. AArch64 only |
-| `<mc_i128>` | `lib/mc_i128.mc` | the compiler that carries it |
+| `<i128>` | `lib/i128.mc` | 128-bit integers `i128` (signed) and `u128` (unsigned): `type_new(..., 16, 16, TK_WIDE)`, memory-resident in ONE depth, `adds`/`adc` (`add`/`adc` on x86), `subs`/`sbc` (`sub`/`sbb`), `mul`/`umulh` (`mul` + `imul` cross-terms), a compare that is not just the 64-bit one twice, and a literal through a module-private global with an `N_BLOB` initializer. **`u128` is `i128` with an unsigned compare** — the only difference is the six ordering comparisons; the machine keys on the id (`walk_depth_type(d) == ty_u128`). On **arm64, x86-64 (SysV) and x86-64-win (Win64)** — the ISAs with a native carry chain and a wide multiply, the same coverage as `<float>`. The Win64 ABI passes a 16-byte value **by reference** (caller allocates a copy, passes a pointer; a wide return is a hidden pointer as the first argument). Op set is `+ - *`, the six comparisons, load/store, call/ret, the literal, and `lo`/`hi` — no divide, shift or bitwise (M24 defers them; a language building `decimal` on top does its division in its own runtime, from `lo`/`hi`) |
+| `<u128>` | `lib/u128.mc` | a second door into `<i128>`: it registers the same two types and the same machine (`u128_init()` == `i128_init()`), so a program includes ONE of `<i128>` or `<u128>` and gets both types. They must not both be included in one unit |
+| `<mc_i128>` / `<mc_u128>` | `lib/mc_i128.mc` / `lib/mc_u128.mc` | the compiler that carries it |
 | `<f16>` | `lib/f16.mc` | half precision as a STORAGE type, on top of `<float>`'s machine: four slots and two `fcvt`s, because `<float>` dispatches on the KIND and not on the id. AArch64 only |
 | `<mc_f16>` | `lib/mc_f16.mc` | `<float>` plus `<f16>`, in one compiler |
 
-`examples/avx/` is the third and is not bundled: it is an example directory with
-its own README, and it teaches one AVX instruction by its encoding.
+Casting a narrow integer to `i128`/`u128` **sign-extends a signed source and
+zero-extends anything else**, keyed on `type_signed(src)` and not on the id — so
+`(i128)(i32) -5` and `(u128)(i32) -5` both fill the high half with ones (C
+sign-extends a signed source whatever the wide target's signedness), while
+`(i128)(u32) 0xffffffff` leaves it zero. `tests/wide/034-cast-narrow.mc` checks
+every case bit-for-bit and runs on macos/aarch64, linux/aarch64, linux/x86_64
+and — on the CI legs — windows/aarch64 and windows/x86_64.
+
+Known limits of `<i128>`/`<u128>`, all deliberate at M24:
+
+- **At most four 16-byte arguments in one call on arm64.** They take the eight
+  argument registers in even pairs; a fifth is a clean `i128/u128: too many
+  arguments for the register pairs` (a diagnostic, never a miscompile), and no
+  spill-to-stack path exists.
+- **`callp` with a wide argument or a wide result is unsupported.** Neither
+  machine overrides `MTASK_CALLP`, so an indirect call falls to the base
+  machine, which lays a 16-byte value out as if it were 8. Call a wide value
+  only through a named function (`MTASK_CALL`, which the module does override).
+- **A decimal literal `≥ 2^128` wraps silently.** `iw_muladd` accumulates the
+  digits in four 32-bit limbs and drops the carry off the top; there is no
+  overflow diagnostic on the literal.
 
 ### The demonstrations
 
