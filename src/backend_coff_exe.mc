@@ -318,6 +318,7 @@ void pe_build_idata() {
     }
     i64 i = 0;
     while (i < PE_IMPORT_DESC) { buf_u8(o, 0); i = i + 1; }  // null descriptor
+    buf_pad(o, 8);                             // mirror pe_plan_idata's exe_up(off, 8)
     d = 0;
     while (d < pe_g(PES_NDLL)) {                   // each DLL's ILT: RVAs to hint/name
         i64 k = 0;
@@ -343,6 +344,7 @@ void pe_build_idata() {
         buf_pad(o, 2);
         d = d + 1;
     }
+    buf_pad(o, 8);                             // mirror pe_plan_idata's exe_up(off, 8)
     d = 0;
     while (d < pe_g(PES_NDLL)) {                   // each DLL's IAT: the same RVAs
         k = 0;
