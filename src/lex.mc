@@ -1344,7 +1344,31 @@ void lex_next(uptr t) {
     }
     if (ld8(cp) == '"') { lex_string(t); return; }        // start points into the arena
     if (ld8(cp) == '#') { lex_directive(t); set_tok_len(t, cp - tok_start(t)); return; }
-    if (ld8(cp) == '$') { lex_hole(t);      set_tok_len(t, cp - tok_start(t)); return; }
+    if (ld8(cp) == '$') {
+        // A `$` is a #rule template hole -- $name, $1, $$gensym -- whenever the
+        // next byte begins one (alpha, digit, or the gensym `$`): lex_hole, and
+        // --dump-tokens plus the M10 capture-safety property (no identifier ever
+        // contains `$`) are unchanged. Otherwise `$` is punctuation: a module may
+        // have claimed it as a one-character token (syntax_expr("$") -> word_add
+        // -> tok_add), so run the surface matcher. A match sets that token id and
+        // LEAVES the following byte -- the `"` of `$"..."` then lexes as an
+        // ordinary string. No match means nobody claimed `$`, which is the same
+        // condition (and the same message) lex_hole raised for an unclaimed `$` or
+        // a typo'd hole like `$(` before -- `invalid hole`. Nothing is pinned in
+        // the core: `$` is not a token unless a module makes it one.
+        i64 nb = 0;
+        if (cp + 1 < cend) nb = ld8(cp + 1);
+        if (is_alpha(nb) || is_digit(nb) || nb == '$') {
+            lex_hole(t); set_tok_len(t, cp - tok_start(t)); return;
+        }
+        i64 dlen = 0;
+        i64 did = punct_id(cp, cend - cp, &dlen);
+        if (did < 0) err_at(tok_file(t), tok_line(t), "invalid hole");
+        cp = cp + dlen;
+        set_tok_id(t, did);
+        set_tok_len(t, dlen);
+        return;
+    }
 
     i64 plen = 0;
     i64 pid = punct_id(cp, cend - cp, &plen);

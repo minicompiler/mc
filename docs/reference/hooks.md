@@ -396,6 +396,15 @@ fixed tree, so it can read neither a type (`bits i64`) nor an argument list
 `syntax_expr handler produced no expression` when it returns 0 — an expression position has no
 empty node to fall back on.
 
+**`word` may be `$`.** `$` is not a core token. Every `$` that begins a `#rule` hole — `$name`,
+`$1`, the `$$name` gensym — is lexed as a hole; every other `$` runs the surface matcher, so a
+module that registers `syntax_expr("$", &f)` (which reserves the lexeme through `word_add`) gets a
+one-character `$` token. In `$"..."` the `"` is left and lexes as an ordinary string, so the
+handler consumes the `$` and reads the `T_STR` token that follows. With nothing registered a bare
+`$"` matches no token and is `invalid hole` (raised in the lexer, the same diagnostic a genuinely
+unclaimed `$` always got). `$` is punctuation, so — unlike a taught *word* — it is never scoped by
+`source_claim` and cannot collide with an identifier.
+
 ### `void syntax_infix(uptr word, i64 prec, uptr fn)`
 
 Teaches a **binary operator**. There is no new table: the `#infix` entry gains a handler column,

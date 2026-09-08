@@ -660,7 +660,11 @@ parser's public API.
 | `source_claim(&f)` | `i64 f(uptr name)` — 1 if the source is the module's, 0 if not | `lex_push_mem` too, once per frame: it says **where** the words above apply |
 
 The first five register the word in the lexer (`tok_add`), the same as `#rule` does with its
-dispatch literal, and all five **refuse a core keyword** (`K_U8`..`K_EXTERN`); the last six claim
+dispatch literal, and all five **refuse a core keyword** (`K_U8`..`K_EXTERN`). A `syntax_expr`
+word may also be `$` — punctuation the lexer runs through the surface matcher whenever the `$`
+does not begin a `#rule` hole (`$name`/`$1`/`$$name` stay holes), so a module that claims it with
+`syntax_expr("$")` gets a one-character token — the seam for `$"..."` interpolation; being
+punctuation, it is neither a core keyword nor scoped by `source_claim`. The last six claim
 no word at all — four of them observe, replace or own nodes at a position the parser reaches on
 its own, and the last two are not on the parse path at all:
 

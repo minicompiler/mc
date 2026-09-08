@@ -1956,6 +1956,57 @@ else
     fi
 fi
 
+# ---- teko: syntax_expr("$"), the `$"..."` token ----
+# `$` is not a core token. A `$` before `"` is not a #rule hole either, so the
+# lexer runs the surface matcher (punct_id): lib/user_dollar.mc claims `$` with
+# syntax_expr("$") (word_add -> tok_add), so punct_id finds the one-character
+# lexeme, the `"` is left as an ordinary string, and the handler makes $"..."
+# evaluate to the length of the string that follows -- a 42-character string is
+# exit code 42 here. The default compiler registers no `$`, so punct_id finds
+# nothing and the same `invalid hole` diagnostic a genuinely unclaimed `$` (or a
+# typo'd hole like `$(`) always got is raised during lexing.
+dollar="build/mc-dollar"
+rm -f "$dollar"
+cat > "$tmp/dollar.mc" <<'DOLEOF'
+i64 main() { return $"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"; }
+DOLEOF
+if ! msg=$("$mc1" --exe lib/mc_dollar.mc -o "$dollar" 2>&1); then
+    echo "FAIL: compiling lib/mc_dollar.mc: $msg"
+    fails=$((fails + 1))
+else
+    if ! msg=$("$dollar" --exe "$tmp/dollar.mc" -o "$tmp/dollar-tgt" 2>&1); then
+        echo "FAIL: the $ demo compiler rejected $\"...\": $msg"
+        fails=$((fails + 1))
+    else
+        "$tmp/dollar-tgt"; tgt=$?
+        if [ "$tgt" != 42 ]; then
+            echo "FAIL syntax_expr(\"$\"): taught=$tgt (want 42)"
+            fails=$((fails + 1))
+        elif "$dollar" --dump-ast "$tmp/dollar.mc" 2>&1 | grep -q '^      INT val=42 type=i64$'; then
+            echo "ok syntax_expr(\"$\"): the taught compiler reads \$\"...\" (42-char string -> 42)"
+        else
+            echo "FAIL syntax_expr(\"$\"): the tree does not hold INT val=42"
+            fails=$((fails + 1))
+        fi
+    fi
+    # the default compiler has no claim on `$`, so `$\"` reaches punct_id, finds
+    # no token, and is `invalid hole`. The path is compared by suffix: $tmp comes
+    # from TMPDIR, which may end in a slash, and the compiler prints the path it
+    # opened, normalized.
+    if msg=$("$mc1" "$tmp/dollar.mc" -o "$tmp/dollar-no.o" 2>&1); then
+        echo "FAIL: the default compiler accepted \$\"...\""
+        fails=$((fails + 1))
+    else
+        case "$msg" in
+            *"/dollar.mc:1: invalid hole")
+                echo "ok the default compiler refuses \$\"...\" (invalid hole)" ;;
+            *)
+                echo "FAIL: default compiler said '$msg' (want ...dollar.mc:1: invalid hole)"
+                fails=$((fails + 1)) ;;
+        esac
+    fi
+fi
+
 # decision 7.3: teaching the same operator twice is refused at user_init time,
 # before the first token of any source is read -- for a taught token (.+) and,
 # since M41.5, for a core one (+), where the FIRST registration is allowed
