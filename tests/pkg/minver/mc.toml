@@ -1,0 +1,11 @@
+# the accept path: a minimum at or below any plausible mc. The dev build skips
+# the compare (0.0.0-dev is treated as newest), so this always builds here.
+[package]
+name = "minver"
+mc = "1.0.0"
+
+[project]
+name  = "minver"
+entry = "app.mc"
+out   = "build/minver"
+kind  = "exe"

@@ -487,6 +487,8 @@ the source or about the config.
 | `mc.toml:9:10: a permission reason is at most 120 bytes: permission.0.reason` | 1 | a `reason` longer than a sentence | it is shown at an install prompt, not a policy document |
 | `mc.toml:4:11: invalid binary name: package.bin` | 1 | `[package].bin` is not `[a-z][a-z0-9_-]*` of at most 32 bytes; the same message at `project.out` when a tool's binary name is derived from it | it is a file name in `~/.mc/bin` |
 | `mc.toml:8:8: already a dependency: a name is a library or a tool, not both: tools.geo` | 1 | one name in `[deps]` and in `[tools]` | one table or the other |
+| `geo 1.2.0 needs mc >= 1.2.0 (this is mc 1.1.0): upgrade the compiler` | 2 | the running compiler is older than a package's `[package].mc`, the minimum mc it declares. At the key's own `file:line:col`, naming the entry by its `[package].name` or a dependency by its locked name-and-version. A `0.0.0-dev` working-tree build is treated as newest and never raises it ([packages.md](packages.md) § 3) | install a newer mc, or lower the minimum if it was set too high |
+| `mc.toml:3:6: package.mc must be a version like 1.2.3 or ">= 1.2.3"` | 2 | a `[package].mc` value that is not a bare `X.Y.Z[-suffix]` or a `>= X.Y.Z`; a range or a word. Validated before the version compare, so it is raised on every compiler including a dev build | it is a minimum only: one version, optionally prefixed `>= ` |
 | `prog.mc:1: unknown bundled include: geo/geo` | 1 | none of the three resolution steps had the name. In the single-file CLI there is no lock and therefore no step 1 at all | `mc build` with a `[deps]` entry, or `--include=DIR` and a quote include |
 | `mc: --libs-dir requires an argument` | 1 | the flag was last on the command line | give it a directory |
 

@@ -1746,5 +1746,106 @@ else
 fi
 fi
 
+# ---- 34. [package].mc: the minimum mc version a package declares ----
+# Two halves, because a working-tree build reports the 0.0.0-dev sentinel, which
+# is treated as newest and SKIPS the version compare. The dev build (build/mc1)
+# proves the key PARSES and that the ACCEPT and MALFORMED paths behave; the
+# REFUSAL is proven with the compiler baked to 9.9.9 that section 33 already
+# built ($tmp/u/bin/mc999), the one way to have a binary that reports a real
+# version. No env var or flag exists only for testing: the sentinel skip is the
+# real behaviour, and a real version is a real fixture.
+cd "$here" || exit 1
+mvbuild() {                           # mvbuild BINARY DIR CONFIG LIBSDIR
+    rm -rf "$2/build"
+    PATH="$tmp/bin2:$realpath_env" "$1" build "$2" --config "$3" --libs-dir "$4" > "$tmp/o" 2>&1; rc=$?
+}
+mkdir -p "$tmp/mv/l"
+
+# 34a. the dev build: mc = "1.0.0" is accepted (the sentinel skips the compare)
+# and the entry runs
+mvbuild "$mc" tests/pkg/minver tests/pkg/minver/mc.toml "$tmp/mv/l"
+if [ "$rc" = 0 ]; then
+    tests/pkg/minver/build/minver; arc=$?
+    if [ "$arc" = 42 ]; then
+        ok "package.mc = 1.0.0: accepted on the dev build and the entry runs (exit 42)"
+    else
+        fail "package.mc accept run" "exit $arc"
+    fi
+else
+    fail "package.mc = 1.0.0 accept (dev)" "exit $rc: $(cat "$tmp/o")"
+fi
+
+# 34b. the ">= " form is the same meaning, and also accepted
+mvbuild "$mc" tests/pkg/minver tests/pkg/minver/ge.toml "$tmp/mv/l"
+want_exit "package.mc = \">= 0.5.0\" accepted (dev)" 0 \
+    && ok "package.mc = \">= 0.5.0\": the >= form parses and is accepted"
+
+# 34c. a malformed value is a TOML-position error, exit 2, on the dev build too
+# (the value is validated before the sentinel skip)
+mvbuild "$mc" tests/pkg/minver tests/pkg/minver/bad.toml "$tmp/mv/l"
+want_exit "package.mc = \"banana\" refused (dev)" 2 \
+    && want_msg "package.mc = \"banana\" refused (dev)" \
+        "package.mc must be a version like 1.2.3"
+mvbuild "$mc" tests/pkg/minver tests/pkg/minver/range.toml "$tmp/mv/l"
+want_exit "package.mc = \"1.0 - 2.0\" refused (dev)" 2 \
+    && want_msg "package.mc = \"1.0 - 2.0\" refused (dev)" \
+        "package.mc must be a version like 1.2.3"
+
+# 34d..h. the REFUSAL, with the baked 9.9.9 compiler section 33 built
+if [ -x "$tmp/u/bin/mc999" ]; then
+    m9="$tmp/u/bin/mc999"
+
+    # 34d. the ENTRY's own [package].mc, above the compiler: refused at the
+    # entry's mc.toml, exit 2, with the exact sentence and both versions named
+    mkdir -p "$tmp/mv/hi/build"
+    printf 'i64 main() { return 42; }\n' > "$tmp/mv/hi/app.mc"
+    printf '[package]\nname = "demo"\nmc = "10.0.0"\n\n[project]\nname = "demo"\nentry = "app.mc"\nout = "build/demo"\nkind = "exe"\n' > "$tmp/mv/hi/mc.toml"
+    PATH="$tmp/bin2:$realpath_env" "$m9" build "$tmp/mv/hi" --libs-dir "$tmp/mv/l" > "$tmp/o" 2>&1; rc=$?
+    if [ "$rc" = 2 ] && grep -qF "demo needs mc >= 10.0.0 (this is mc 9.9.9): upgrade the compiler" "$tmp/o"; then
+        ok "package.mc = 10.0.0 above mc 9.9.9: refused, exit 2 -- $(grep -F 'needs mc >=' "$tmp/o")"
+    else
+        fail "package.mc entry refusal" "exit $rc: $(cat "$tmp/o")"
+    fi
+
+    # 34e. equal is accepted, and below is accepted -- both build under 9.9.9
+    printf '[package]\nname = "demo"\nmc = "9.9.9"\n\n[project]\nname = "demo"\nentry = "app.mc"\nout = "build/demo"\nkind = "exe"\n' > "$tmp/mv/hi/mc.toml"
+    PATH="$tmp/bin2:$realpath_env" "$m9" build "$tmp/mv/hi" --libs-dir "$tmp/mv/l" > "$tmp/o" 2>&1; rc=$?
+    [ "$rc" = 0 ] && ok "package.mc = 9.9.9 equals the compiler: accepted" \
+        || fail "package.mc = 9.9.9 accept" "exit $rc: $(cat "$tmp/o")"
+    printf '[package]\nname = "demo"\nmc = "0.5.0"\n\n[project]\nname = "demo"\nentry = "app.mc"\nout = "build/demo"\nkind = "exe"\n' > "$tmp/mv/hi/mc.toml"
+    PATH="$tmp/bin2:$realpath_env" "$m9" build "$tmp/mv/hi" --libs-dir "$tmp/mv/l" > "$tmp/o" 2>&1; rc=$?
+    [ "$rc" = 0 ] && ok "package.mc = 0.5.0 below the compiler: accepted" \
+        || fail "package.mc = 0.5.0 accept" "exit $rc: $(cat "$tmp/o")"
+
+    # 34f. the ">= " form of the refusal: ">= 9.9.10" is above 9.9.9
+    printf '[package]\nname = "demo"\nmc = ">= 9.9.10"\n\n[project]\nname = "demo"\nentry = "app.mc"\nout = "build/demo"\nkind = "exe"\n' > "$tmp/mv/hi/mc.toml"
+    PATH="$tmp/bin2:$realpath_env" "$m9" build "$tmp/mv/hi" --libs-dir "$tmp/mv/l" > "$tmp/o" 2>&1; rc=$?
+    if [ "$rc" = 2 ] && grep -qF "needs mc >= 9.9.10 (this is mc 9.9.9)" "$tmp/o"; then
+        ok "package.mc = \">= 9.9.10\": the >= form refuses, and names the bare version"
+    else
+        fail "package.mc >= refusal" "exit $rc: $(cat "$tmp/o")"
+    fi
+
+    # 34g. a DEPENDENCY's [package].mc, through [replace] (the lightest of the
+    # three dependency roads: no fetch, no hash to match). The refusal points at
+    # the DEPENDENCY's mc.toml and names the locked package.
+    mkdir -p "$tmp/mv/dep" "$tmp/mv/proj/build"
+    printf 'i64 dval() { return 7; }\n' > "$tmp/mv/dep/dep.mc"
+    printf '[package]\nname = "dep"\nfiles = ["dep.mc"]\nlib = "dep.mc"\nmc = "10.0.0"\n' > "$tmp/mv/dep/mc.toml"
+    printf 'i64 main() { return 42; }\n' > "$tmp/mv/proj/app.mc"
+    printf '[project]\nname = "proj"\nentry = "app.mc"\nout = "build/proj"\nkind = "exe"\n\n[deps]\ndep = "1.0.0"\n\n[replace]\ndep = "../dep"\n' > "$tmp/mv/proj/mc.toml"
+    # a lock row so [deps] is satisfied; [replace] zeroes the hash, so any value
+    # is fine here
+    printf '[[package]]\nname    = "dep"\nversion = "1.0.0"\nlib     = "dep.mc"\nsha256  = "0000000000000000000000000000000000000000000000000000000000000000"\ndeps    = []\n' > "$tmp/mv/proj/mc.lock"
+    PATH="$tmp/bin2:$realpath_env" "$m9" build "$tmp/mv/proj" --libs-dir "$tmp/mv/l" > "$tmp/o" 2>&1; rc=$?
+    if [ "$rc" = 2 ] && grep -qF "dep 1.0.0 needs mc >= 10.0.0 (this is mc 9.9.9): upgrade the compiler" "$tmp/o"; then
+        ok "a dependency's package.mc is enforced through [replace]: $(grep -F 'needs mc >=' "$tmp/o")"
+    else
+        fail "package.mc dependency refusal" "exit $rc: $(cat "$tmp/o")"
+    fi
+else
+    echo "skip package.mc refusal: no baked 9.9.9 compiler for this target"
+fi
+
 echo "check-pkg: $((total - fails))/$total"
 [ "$fails" -eq 0 ]

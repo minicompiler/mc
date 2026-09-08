@@ -495,6 +495,32 @@ void toml_err_key(uptr path, uptr msg) {
     _exit(1);
 }
 
+// file:line:col: msg, at a KEY's position, with a caller-chosen exit code and
+// NO key appended -- so the message is a self-contained sentence. This is what
+// src/deps.mc uses to refuse `[package].mc` (a version, or a compiler too old)
+// with code 2, "the environment is not ready" (docs/reference/cli.md § Exit
+// codes), where the parser's own diagnostics are code 1. When the key is
+// missing the file itself is the position, as toml_err_key does.
+void toml_err_key_code(uptr path, uptr msg, i64 code) {
+    i64 i = toml_find(path);
+    if (i >= 0) {
+        out_str(2, tm_file);
+        out_str(2, ":");
+        out_num(2, toml_line_at(i));
+        out_str(2, ":");
+        out_num(2, tme_col(tme_at(i)));
+        out_str(2, ": ");
+        out_str(2, msg);
+        out_str(2, "\n");
+        _exit(code);
+    }
+    out_str(2, tm_file);
+    out_str(2, ": ");
+    out_str(2, msg);
+    out_str(2, "\n");
+    _exit(code);
+}
+
 i64 toml_int(uptr path, i64 dflt) {
     uptr v = toml_get(path);
     if (v == 0) return dflt;

@@ -1,0 +1,10 @@
+# the ">= " form: the same meaning as a bare version, at least this.
+[package]
+name = "minver"
+mc = ">= 0.5.0"
+
+[project]
+name  = "minver"
+entry = "app.mc"
+out   = "build/minver"
+kind  = "exe"
