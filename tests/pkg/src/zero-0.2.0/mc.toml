@@ -1,0 +1,5 @@
+# zero 0.2.0 -- a fixture package with 0.x versions, for the caret's 0.x rule.
+[package]
+name  = "zero"
+files = ["zero.mc"]
+lib   = "zero.mc"

@@ -97,11 +97,21 @@ uptr pkg_default_registry() { return "https://pkg.minicompiler.dev"; }
 #define VR_SIZE  120
 
 #define SL_NAME 0
-#define SL_VER  8                     // the maximum minimum: what MVS selects
-#define SL_LOW  16                    // the smallest minimum seen, for majors
+#define SL_VER  8                     // the CONCRETE selected version (for bare/
+                                      // >= only, this equals SL_MIN)
+#define SL_LOW  16                    // the smallest lower bound seen, for majors
 #define SL_DONE 24                    // 1 once its requirements were expanded
 #define SL_TOOL 32                    // 1 when the PROJECT asked for it as a tool
-#define SL_SIZE 40
+// Version-constraint bounds accumulated across every requirement on this name
+// (roadmap 1.0.0). SL_MIN is the maximum of the lower bounds, 0 when only `*`
+// has been seen; SL_HIGH the minimum exclusive ceiling, 0 = none; SL_EXACT an
+// `=` pin, 0 = none. For a name required only by bare/`>=` versions all three
+// leave SL_VER = SL_MIN and the registry is never searched, byte for byte the
+// M44 path.
+#define SL_MIN   40                   // uptr, max lower bound, 0 = none (*)
+#define SL_HIGH  48                   // uptr, min ceiling, 0 = none
+#define SL_EXACT 56                   // uptr, exact pin, 0 = none
+#define SL_SIZE 64
 
 #define PL_WHAT 0                     // "index geo" / "geo 1.2.0"
 #define PL_URL  8
@@ -444,6 +454,48 @@ uptr pkg_newest(uptr name, i64 major, i64 pre) {
     return best;
 }
 
+// The LOWEST non-yanked registered version of `name` satisfying the bounds
+// (roadmap 1.0.0): V >= lo (lo == 0 = no floor), V < hi (hi == 0 = no ceiling),
+// and the pre-release rule -- a candidate is admitted only when `pre` is set,
+// which the caller does iff the constraint itself named a pre-release. This is
+// MVS's "minimal satisfying", now bounded above; 0 when nothing satisfies.
+uptr pkg_lowest(uptr name, uptr lo, uptr hi, i64 pre) {
+    uptr best = 0;
+    i64 i = 0;
+    while (i < pk_nvr()) {
+        uptr e = pk_vr(i);
+        uptr v = ld64(e + VR_VER);
+        if (str_eq(ld64(e + VR_NAME), name) && !ld64(e + VR_YANK)
+            && (pre || !ver_is_pre(v))
+            && (lo == 0 || ver_cmp(v, lo) >= 0)
+            && (hi == 0 || ver_cmp(v, hi) < 0)) {
+            if (best == 0 || ver_cmp(v, best) < 0) best = v;
+        }
+        i = i + 1;
+    }
+    return best;
+}
+
+// The HIGHEST non-yanked registered version satisfying the bounds -- what
+// `mc update` raises a bounded constraint's anchor to, staying below the
+// ceiling. Same admission rule as pkg_lowest; 0 when nothing satisfies.
+uptr pkg_highest(uptr name, uptr lo, uptr hi, i64 pre) {
+    uptr best = 0;
+    i64 i = 0;
+    while (i < pk_nvr()) {
+        uptr e = pk_vr(i);
+        uptr v = ld64(e + VR_VER);
+        if (str_eq(ld64(e + VR_NAME), name) && !ld64(e + VR_YANK)
+            && (pre || !ver_is_pre(v))
+            && (lo == 0 || ver_cmp(v, lo) >= 0)
+            && (hi == 0 || ver_cmp(v, hi) < 0)) {
+            if (best == 0 || ver_cmp(v, best) > 0) best = v;
+        }
+        i = i + 1;
+    }
+    return best;
+}
+
 // ---- MVS (§ 3, D6) ----
 // Go's algorithm, exactly: the build list starts from the project's [deps]; for
 // every selected (name, version) the requirements of THAT version are added; a
@@ -475,25 +527,115 @@ void pkg_majors(uptr name, uptr a, uptr b) {
              "different majors: no solver");
 }
 
-void pkg_require(uptr name, uptr ver) {
+// The range description used in a conflict message, e.g. ">= 1.5.0 < 2.0.0" or
+// ">= 1.5.0" (open) or "< 2.0.0" (only a ceiling from *).
+uptr pkg_range_desc(uptr lo, uptr hi) {
+    uptr s = "";
+    if (lo != 0) s = tm_cat(">= ", lo);
+    if (hi != 0) {
+        if (lo != 0) s = tm_cat(s, " ");
+        s = tm_cat(s, tm_cat("< ", hi));
+    }
+    return s;
+}
+
+// A constraint conflict on `name`: the accumulated [lo, hi) is empty, or no
+// registered version falls inside it. Exit 2 (the environment is not ready),
+// naming the package and the clashing bounds.
+void pkg_conflict(uptr name, uptr lo, uptr hi) {
+    dep_die(tm_cat(name, ": no version satisfies"), pkg_range_desc(lo, hi), 0);
+}
+
+// Recompute selection `i`'s concrete version from its accumulated bounds. For a
+// name with only bare/`>=` constraints (SL_HIGH == 0, SL_EXACT == 0, SL_MIN
+// non-zero) SL_VER is set to SL_MIN with NO registry lookup -- byte for byte the
+// M44 path, and pkg_expand's pkg_row still verifies the version exists. For a
+// ranged or exact or `*` constraint the concrete version is chosen from the
+// registry (the lowest satisfying), and SL_DONE is cleared when SL_VER moved so
+// the fixed-point loop re-expands the right version's requirements.
+void pkg_reselect(i64 i) {
+    uptr e = pk_sel(i);
+    uptr lo = ld64(e + SL_MIN);
+    uptr hi = ld64(e + SL_HIGH);
+    uptr ex = ld64(e + SL_EXACT);
+    uptr pick = 0;
+    if (ex == 0 && hi == 0 && lo != 0) {
+        pick = lo;                         // bare/>= only: no registry lookup
+    } else if (ex != 0) {
+        if (lo != 0 && ver_cmp(ex, lo) < 0) pkg_conflict(ld64(e + SL_NAME), lo, hi);
+        if (hi != 0 && ver_cmp(ex, hi) >= 0) pkg_conflict(ld64(e + SL_NAME), lo, hi);
+        pick = ex;                         // pkg_expand checks it exists / yanked
+    } else {
+        // a range (possibly lo == 0 for a bare `*`)
+        if (lo != 0 && hi != 0 && ver_cmp(lo, hi) >= 0)
+            pkg_conflict(ld64(e + SL_NAME), lo, hi);
+        if (!pkg_index_load(ld64(e + SL_NAME))) {
+            // plan mode (URL registry, no snapshot, no --yes): a provisional so
+            // nothing dereferences 0; pkg_expand returns incomplete and the plan
+            // is printed without a concrete version being locked
+            uptr prov = lo;
+            if (prov == 0) prov = "0.0.0";
+            st64(e + SL_VER, prov);
+            return;
+        }
+        i64 pre = lo != 0 && ver_is_pre(lo);
+        pick = pkg_lowest(ld64(e + SL_NAME), lo, hi, pre);
+        if (pick == 0) pkg_conflict(ld64(e + SL_NAME), lo, hi);
+    }
+    if (ld64(e + SL_VER) == 0 || ver_cmp(pick, ld64(e + SL_VER)) != 0) {
+        st64(e + SL_VER, pick);
+        st64(e + SL_DONE, 0);
+    }
+}
+
+// Add a requirement: `constraint` is a version-constraint string (validated by
+// the caller for a good position). Its bounds are folded into the selection's
+// accumulated [SL_MIN, SL_HIGH) and SL_EXACT, then the concrete SL_VER is
+// recomputed. `*` contributes no bounds at all (all VC fields 0) yet still
+// requires the package to be selected.
+void pkg_require(uptr name, uptr constraint) {
+    u8 vc[VC_SIZE];
+    if (!ver_parse(constraint, vc))
+        dep_die("malformed version constraint", constraint, 0);
+    uptr lo = ld64(vc + VC_MIN);
+    uptr hi = ld64(vc + VC_HIGH);
+    uptr ex = ld64(vc + VC_EXACT);
     i64 i = pkg_sel_find(name);
     if (i < 0) {
         uptr e = pk_add(PKS_SEL, PKS_NSEL, PKS_SELCAP, SL_SIZE);
         st64(e + SL_NAME, name);
-        st64(e + SL_VER, ver);
-        st64(e + SL_LOW, ver);
+        st64(e + SL_VER, 0);
+        st64(e + SL_LOW, lo);
         st64(e + SL_DONE, 0);
         st64(e + SL_TOOL, 0);
+        st64(e + SL_MIN, lo);
+        st64(e + SL_HIGH, hi);
+        st64(e + SL_EXACT, ex);
+        pkg_reselect(pk_nsel() - 1);
         return;
     }
     uptr e = pk_sel(i);
-    if (ver_major(ver) != ver_major(ld64(e + SL_VER)))
-        pkg_majors(name, ld64(e + SL_LOW), ver);
-    if (ver_cmp(ver, ld64(e + SL_LOW)) < 0) st64(e + SL_LOW, ver);
-    if (ver_cmp(ver, ld64(e + SL_VER)) > 0) {
-        st64(e + SL_VER, ver);
-        st64(e + SL_DONE, 0);           // a raised version has other requirements
+    // majors: only meaningful between two concrete lower bounds; a `*` (lo == 0)
+    // never forces a major conflict
+    if (lo != 0 && ld64(e + SL_MIN) != 0
+        && ver_major(lo) != ver_major(ld64(e + SL_MIN)))
+        pkg_majors(name, ld64(e + SL_LOW), lo);
+    if (lo != 0) {
+        if (ld64(e + SL_LOW) == 0 || ver_cmp(lo, ld64(e + SL_LOW)) < 0)
+            st64(e + SL_LOW, lo);
+        if (ld64(e + SL_MIN) == 0 || ver_cmp(lo, ld64(e + SL_MIN)) > 0)
+            st64(e + SL_MIN, lo);
     }
+    if (hi != 0 && (ld64(e + SL_HIGH) == 0 || ver_cmp(hi, ld64(e + SL_HIGH)) < 0))
+        st64(e + SL_HIGH, hi);
+    if (ex != 0) {
+        uptr cur = ld64(e + SL_EXACT);
+        if (cur != 0 && ver_cmp(cur, ex) != 0)
+            dep_die(tm_cat(name, ": two exact pins"),
+                    tm_cat(tm_cat("=", cur), tm_cat(" and =", ex)), 0);
+        st64(e + SL_EXACT, ex);
+    }
+    pkg_reselect(i);
 }
 
 // `mathx 1.1.0` -> the name, and the version after the space
@@ -540,6 +682,11 @@ i64 pkg_expand(i64 i) {
         uptr dv = pkg_req_ver(d);
         if (dv == 0) pkg_die1("a [[versions]].deps entry needs a version", d);
         if (dep_reserved(dn) || !dep_name_ok(dn)) pkg_die1("invalid package name", dn);
+        // a registry row may carry a version constraint (^1.1.0), which flows
+        // through the same resolver; a malformed one is refused at the row
+        u8 vc[VC_SIZE];
+        if (!ver_parse(dv, vc))
+            dep_die("malformed version constraint in a registry dep", d, 0);
         pkg_require(dn, dv);
         j = j + 1;
     }
@@ -570,6 +717,15 @@ i64 pkg_resolve() {
 // the same package -- so the only thing that distinguishes them here is the
 // mark that says which table asked, which is what decides the lock's `kind` and
 // what the install table's last block lists.
+// Validate a [deps]/[tools] version constraint at its own file:line:col, exit 2
+// on malformed. Called before pkg_require so a bad constraint is reported at its
+// position, not deep in the resolver.
+void pkg_check_constraint(uptr table, uptr name, uptr cs) {
+    u8 vc[VC_SIZE];
+    if (!ver_parse(cs, vc))
+        toml_err_key_code(tm_cat(table, name), ver_bad_msg(), 2);
+}
+
 i64 pkg_read_deps() {
     i64 n = 0;
     i64 i = 0;
@@ -577,6 +733,7 @@ i64 pkg_read_deps() {
         uptr k = opt_val(toml_path_at(i), "deps.");
         if (k != 0) {
             dep_check_name("deps.", k);
+            pkg_check_constraint("deps.", k, toml_val_at(i));
             pkg_require(k, toml_val_at(i));
             n = n + 1;
         }
@@ -585,6 +742,7 @@ i64 pkg_read_deps() {
         k = opt_val(toml_path_at(i), "tools.");
         if (k != 0) {
             dep_check_name("tools.", k);
+            pkg_check_constraint("tools.", k, toml_val_at(i));
             pkg_require(k, toml_val_at(i));
             i64 s = pkg_sel_find(k);
             st64(pk_sel(s) + SL_TOOL, 1);
@@ -1550,11 +1708,44 @@ i64 pkg_update(uptr only) {
     while (i < n) {
         uptr name = ld64(names + i * 8);
         uptr cur = toml_get(tm_cat("deps.", name));
-        // a minimum that already names a candidate keeps looking at them
-        uptr v = pkg_pick(name, 0, ver_major(cur), ver_is_pre(cur));
-        if (ver_cmp(v, cur) > 0) {
-            pkg_add_write(cfg_file(), name, v);
-            drv_step("update", name, tm_cat(tm_cat(cur, " -> "), v));
+        u8 vc[VC_SIZE];
+        if (!ver_parse(cur, vc))
+            toml_err_key_code(tm_cat("deps.", name), ver_bad_msg(), 2);
+        uptr ex = ld64(vc + VC_EXACT);
+        uptr lo = ld64(vc + VC_MIN);
+        uptr hi = ld64(vc + VC_HIGH);
+        // `=X.Y.Z` is pinned and `*` allows everything already: neither has an
+        // anchor to raise, so update leaves them exactly as written.
+        if (ex != 0 || lo == 0) {
+            i = i + 1;
+            continue;
+        }
+        uptr v = 0;
+        uptr newc = 0;
+        if (hi == 0) {
+            // a bare or `>=` minimum: the M44 behaviour, byte for byte -- the
+            // newest non-yanked within the same major, no ceiling from the
+            // constraint. The prefix (empty for bare, ">=" for >=) is kept.
+            v = pkg_pick(name, 0, ver_major(lo), ver_is_pre(lo));
+            uptr prefix = "";
+            if (ld8(cur) == '>' && ld8(cur + 1) == '=') prefix = ">=";
+            newc = tm_cat(prefix, v);
+        } else {
+            // `~` or `^`: the newest satisfying version WITHIN the constraint's
+            // ceiling, so an update never crosses `high`. The operator is kept.
+            if (!pkg_index_load(name)) {
+                pkg_print_plan();
+                out_str(1, "nothing was downloaded: re-run with --yes\n");
+                return 0;
+            }
+            v = pkg_highest(name, lo, hi, ver_is_pre(lo));
+            if (v == 0) { i = i + 1; continue; }
+            uptr prefix = xstrdup(cur, 1);   // '~' or '^'
+            newc = tm_cat(prefix, v);
+        }
+        if (v != 0 && ver_cmp(v, lo) > 0) {
+            pkg_add_write(cfg_file(), name, newc);
+            drv_step("update", name, tm_cat(tm_cat(cur, " -> "), newc));
         }
         i = i + 1;
     }

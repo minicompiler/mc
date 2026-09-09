@@ -134,9 +134,13 @@ name = "geo"
 mc   = "1.2.0"          # or ">= 1.2.0" -- both mean "at least this"
 ```
 
-It is a **minimum only**. There is no upper bound and no range: the API is frozen at 1.0.0, so a
-newer mc keeps working. A malformed value — `banana`, `1.0 - 2.0` — is a `file:line:col` error,
-exit 2.
+It takes the same version-constraint grammar as `[deps]`
+([toml.md](toml.md#deps-tools-replace-and-registry-packages)), but a bare/`>=` **minimum** is
+the normal form: the API is frozen at 1.0.0, so a newer mc keeps working and no upper bound is
+usually wanted. A `^`/`~`/`=` there is **allowed but unusual** — it CAPS the compiler version,
+refusing a newer mc as well as an older one, which is what you write only to pin against a future
+break you already know about. A malformed value — `banana`, `1.0 - 2.0` — is a `file:line:col`
+error, exit 2.
 
 The key is checked when the compiler **builds or resolves** a package: the entry's own `mc.toml`
 and each dependency's, whether the dependency comes from `[deps]`, `[replace]` or a vendored tree.
@@ -422,14 +426,17 @@ the source, which are exit 1. See [diagnostics.md](diagnostics.md) § 13.
 | a file's bytes differ from the manifest's line | `mc: geo 1.2.0: vec.mc does not match mc.lock` | 2 |
 | the tree hash differs but no file line does (the `files` list changed) | `mc: geo 1.2.0: mc.toml does not match mc.lock` | 2 |
 | the same, with no manifest to attribute it to (a vendored tree) | `mc: geo 1.2.0: the tree does not match mc.lock` | 2 |
-| `[deps]` names a package the lock lacks, or asks a minimum above the lock | `mc: mc.lock is stale: geo` | 2 |
+| `[deps]` names a package the lock lacks, or a constraint the lock does not satisfy | `mc: mc.lock is stale: geo` | 2 |
+| a `[deps]`/`[tools]` version constraint that no version can satisfy | `mc: mathx: no version satisfies: >= 1.1.0 < 1.1.0` | 2 |
+| two `=` pins on one package disagree | `mc: mathx: two exact pins: =1.0.0 and =1.1.0` | 2 |
+| a malformed version constraint | `mc.toml:8:9: a version constraint must be X.Y.Z, =X.Y.Z, ~X.Y.Z, ^X.Y.Z, >=X.Y.Z, or *` | 2 |
 | the lock names a version that is neither vendored nor installed | `mc: geo 1.2.0 is not fetched` | 2 |
 | a package reads outside its tree | `geo/vec.mc:3: package geo reaches outside its tree: ...` | 1 |
 | a file the build read is not in that package's `files` | `geo/extra.mc:1: not declared in geo's [package].files` | 1 |
 | a reserved or malformed name in `[deps]`/`[replace]` | `mc.toml:8:6: reserved package name: deps.mc` | 1 |
 | a `[package].files` entry that leaves the package (§ 3) | `mc: geo 1.2.0: files entry escapes the package: ../x` | 2 |
 | the running compiler is older than a package's `[package].mc` | `geo 1.2.0 needs mc >= 1.2.0 (this is mc 1.1.0): upgrade the compiler` | 2 |
-| a malformed `[package].mc` value | `mc.toml:3:6: package.mc must be a version like 1.2.3 or ">= 1.2.3"` | 2 |
+| a malformed `[package].mc` value | `mc.toml:3:6: package.mc must be a version like 1.2.3, ">= 1.2.3", "^1.2.3" or "=1.2.3"` | 2 |
 | an archive member that is a link | `mc: v1.2.0.tar.gz: archive member is a link: geo-1.2.0/x` | 2 |
 | an archive member that leaves the destination | `mc: v1.2.0.tar.gz: member escapes the archive: ../x` | 2 |
 | a body over its cap (64 MiB for an archive, 1 MiB for an index file) | `mc: larger than the cap of 67108864 bytes: <source>` | 2 |
@@ -523,6 +530,36 @@ freezes it, so the index can move afterwards without moving the build. A project
 `mathx 1.0.0` whose `plot` asks for `mathx 1.1.0` gets **1.1.0** — not 1.0.0, and not the 2.0.0
 the registry also carries.
 
+**Constraints with a ceiling.** A `[deps]`/`[tools]` value (and a registry row's own dependency
+version) is a constraint, not just a minimum (the grammar is in
+[toml.md](toml.md#deps-tools-replace-and-registry-packages)). MVS is extended to honour a
+ceiling: across every constraint on one package, the lower bound is the **maximum of the mins**
+and the upper bound the **minimum of the ceilings** (`~`/`^` supply a ceiling; `=` an exact pin;
+`*` neither). The selected version is the **lowest REGISTERED version that is `>= low`, `< high`
+and equal to every `=` pin** — MVS's "minimal satisfying", now bounded above. For a package
+constrained only by bare/`>=` versions this is exactly the maximum-of-minimums the four steps
+above compute, byte for byte; the registry is not even searched, so a manifest that uses only bare
+or `>=` versions resolves precisely as it did before the operators existed. A ceiling matters when
+another constraint raises the lower bound into it, or when the lower bound is not itself a
+registered version:
+
+```text
+[deps]
+mathx = "^1.0.5"     # ceiling 2.0.0; 1.0.0 is below the floor, so 1.1.0 is chosen
+```
+
+**An empty intersection is a conflict, never a silent pick.** If the maximum min meets or exceeds
+the minimum ceiling, or no registered version falls in the range, or two `=` pins disagree, the
+build is refused, exit 2, naming the package and the bounds:
+
+```text
+mc: mathx: no version satisfies: >= 1.1.0 < 1.1.0
+mc: mathx: two exact pins: =1.0.0 and =1.1.0
+```
+
+A cross-**major** clash is reported as the different-majors error below rather than a range
+conflict, since MVS has no solver for two majors either way.
+
 **Two majors of one name are refused, not solved:**
 
 ```text
@@ -535,6 +572,11 @@ exit 1, and no lock is written. Semantic import versioning (`/v2` in the name) i
 already pins one keeps working — a published build never breaks retroactively. `mc update` also
 stays inside the current major: raising a minimum across a major is not an update, it is the case
 above.
+
+`mc update` respects a constraint's ceiling. For a bare or `>=` dependency it raises the anchor to
+the newest non-yanked version of the same major, exactly as before; for a `~` or `^` dependency it
+raises the anchor to the newest version **within the constraint's ceiling** and keeps the operator
+(`^1.0.0` → `^1.9.0`, never crossing `2.0.0`), and for a `=` pin or a `*` it changes nothing.
 
 ### Versions, and pre-releases
 

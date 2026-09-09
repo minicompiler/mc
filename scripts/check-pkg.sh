@@ -494,6 +494,18 @@ permissions = ["net"]'
 index_row net 1.0.0 tests/pkg/src/net-1.0.0 ""
 ixx='permissions = ["exec sh", "net"]'
 index_row net 1.1.0 tests/pkg/src/net-1.1.0 ""
+# roadmap 1.0.0: a package with 0.x versions, for the caret's 0.x special case.
+index_open zero
+index_row zero 0.0.3 tests/pkg/src/zero-0.0.3 ""
+index_row zero 0.0.4 tests/pkg/src/zero-0.0.4 ""
+index_row zero 0.1.0 tests/pkg/src/zero-0.1.0 ""
+index_row zero 0.2.0 tests/pkg/src/zero-0.2.0 ""
+index_row zero 0.2.5 tests/pkg/src/zero-0.2.5 ""
+index_row zero 0.3.0 tests/pkg/src/zero-0.3.0 ""
+# a package whose REGISTRY dep on `zero` carries a caret (the registry side of
+# the constraint syntax): zdep -> "zero ^0.0.3", ceiling 0.0.4.
+index_open zdep
+index_row zdep 1.0.0 tests/pkg/src/zdep-1.0.0 '"zero ^0.0.3"'
 reg="$tmp/registry"
 
 # ---- 17. `mc pkg hash` is the same rule as the shell and as the lock ----
@@ -1746,7 +1758,113 @@ else
 fi
 fi
 
-# ---- 34. [package].mc: the minimum mc version a package declares ----
+# ---- 34. version constraints in [deps]/[tools] (roadmap 1.0.0) ----
+# MVS extended to honour a ceiling: the lowest registered version satisfying
+# every constraint, refused with a clear message when the intersection is empty.
+# The fixture registry above carries mathx {1.0.0, 1.1.0, 2.0.0, 2.0.1 yanked,
+# 2.1.0-rc1, 2.1.0}, zero {0.0.3, 0.0.4, 0.1.0, 0.2.0, 0.2.5, 0.3.0}, plot
+# (dep "mathx 1.1.0"), heavy (dep "mathx 2.0.0") and zdep (dep "zero ^0.0.3").
+#
+# vc_deps writes a project whose [deps] is the given block, runs `mc pkg sync`
+# into a FRESH cache, and captures rc, output and -- on success -- the resolved
+# version of PKG from the lock.
+vc_deps() {                           # vc_deps PKG DEPSBLOCK
+    d="$tmp/vc"; rm -rf "$d" "$tmp/vclibs"; mkdir -p "$d" "$tmp/vclibs"
+    printf 'i64 main() { return 42; }\n' > "$d/main.mc"
+    printf '[project]\nname = "vc"\nentry = "main.mc"\nout = "build/vc"\nkind = "exe"\n\n[deps]\n%s\n[limits]\ntolerance = 1.0\n' "$2" > "$d/mc.toml"
+    PATH="$tmp/bin2:$realpath_env" "$mc" pkg sync "$d" --registry "$reg" --libs-dir "$tmp/vclibs" --yes > "$tmp/o" 2>&1; rc=$?
+    vres=""
+    if [ "$rc" = 0 ] && [ -f "$d/mc.lock" ]; then
+        vres=$(awk -v n="\"$1\"" '
+            /^\[\[package\]\]/ { f=0 }
+            $1=="name"    && $3==n { f=1 }
+            $1=="version" && f     { gsub(/"/,"",$3); print $3; exit }
+        ' "$d/mc.lock")
+    fi
+}
+vc_want() {                           # vc_want LABEL PKG DEPSBLOCK WANT
+    vc_deps "$2" "$3"
+    if [ "$rc" = 0 ] && [ "$vres" = "$4" ]; then
+        ok "constraint $1: $2 -> $4"
+    else
+        fail "constraint $1" "rc $rc, got '$vres', want '$4': $(head -3 "$tmp/o")"
+    fi
+}
+vc_conflict() {                       # vc_conflict LABEL DEPSBLOCK WANTMSG
+    vc_deps _ "$2"
+    if [ "$rc" = 2 ] && grep -qF "$3" "$tmp/o"; then
+        ok "constraint $1: refused, $(grep -F "$3" "$tmp/o" | head -1)"
+    else
+        fail "constraint $1" "rc $rc (want 2), $(head -3 "$tmp/o")"
+    fi
+}
+vc_malformed() {                      # vc_malformed LABEL DEPSBLOCK
+    vc_deps _ "$2"
+    if [ "$rc" = 2 ] && grep -q "a version constraint must be" "$tmp/o"; then
+        ok "constraint $1: malformed refused, $(grep 'a version constraint must be' "$tmp/o" | head -1 | sed -E 's/^([^:]*:[0-9]+:[0-9]+):.*/\1/')"
+    else
+        fail "constraint $1" "rc $rc (want 2), $(head -3 "$tmp/o")"
+    fi
+}
+
+# each operator on its own
+vc_want "bare = minimum"   mathx 'mathx = "1.1.0"'   1.1.0
+vc_want ">= minimum"       mathx 'mathx = ">=1.1.0"' 1.1.0
+vc_want "exact ="          mathx 'mathx = "=1.1.0"'  1.1.0
+vc_want "patch ~"          mathx 'mathx = "~1.0.0"'  1.0.0
+vc_want "minor ^"          mathx 'mathx = "^1.0.0"'  1.0.0
+vc_want "any *"            mathx 'mathx = "*"'       1.0.0
+# a range whose min is NOT a registered version: MVS's lowest-satisfying picks
+# the lowest REGISTERED one inside the ceiling (1.0.0 excluded, 1.1.0 chosen)
+vc_want "^ lowest-in-range" mathx 'mathx = "^1.0.5"' 1.1.0
+# the 0.x caret narrowing: ^0.2.0 -> [0.2.0, 0.3.0); ^0.0.3 -> [0.0.3, 0.0.4)
+vc_want "^0.x minor"       zero  'zero = "^0.2.0"'  0.2.0
+vc_want "^0.x patch"       zero  'zero = "^0.0.3"'  0.0.3
+# an intersection of two constraints on ONE package (a bare-min transitive from
+# plot, a caret direct) resolving to the version both admit
+vc_want "intersection"     mathx 'mathx = "^1.0.0"
+plot  = "1.0.0"'  1.1.0
+# an empty intersection within one major: plot needs mathx 1.1.0, but ~1.0.0
+# caps below 1.1.0 (a cross-major clash is the different-majors error instead,
+# not a range conflict)
+vc_conflict "empty range (two)" 'mathx = "~1.0.0"
+plot = "1.0.0"'  "mathx: no version satisfies"
+# a single-package range with no registered version inside it
+vc_conflict "no version in ~range" 'mathx = "~1.0.5"' "mathx: no version satisfies"
+# the 0.x narrowing proved by a conflict: zdep pins zero ^0.0.3 (ceiling 0.0.4),
+# a direct >=0.0.4 has no overlap -- which would NOT conflict if ^0.0.3 reached
+# 1.0.0
+vc_conflict "0.x caret ceiling" 'zdep = "1.0.0"
+zero = ">=0.0.4"' "zero: no version satisfies"
+# malformed constraints are refused at the key's position, exit 2
+vc_malformed "tilde word" 'mathx = "~banana"'
+vc_malformed "strict >"   'mathx = ">1.2.3"'
+vc_malformed "caret .x"   'mathx = "^1.2.x"'
+vc_malformed "two ops"    'mathx = "^>1.2.3"'
+
+# mc update stays within a ~/^ ceiling and keeps the operator
+vc_update() {                         # vc_update LABEL CONSTRAINT WANT
+    d="$tmp/vcu"; rm -rf "$d" "$tmp/vculibs"; mkdir -p "$d" "$tmp/vculibs"
+    printf 'i64 main() { return 42; }\n' > "$d/main.mc"
+    printf '[project]\nname = "vcu"\nentry = "main.mc"\nout = "build/vcu"\nkind = "exe"\n\n[deps]\nmathx = "%s"\n\n[limits]\ntolerance = 1.0\n' "$2" > "$d/mc.toml"
+    PATH="$tmp/bin2:$realpath_env" "$mc" pkg sync "$d" --registry "$reg" --libs-dir "$tmp/vculibs" --yes > "$tmp/o" 2>&1
+    PATH="$tmp/bin2:$realpath_env" "$mc" update mathx "$d" --registry "$reg" --libs-dir "$tmp/vculibs" --yes > "$tmp/o" 2>&1; rc=$?
+    got=$(grep '^mathx' "$d/mc.toml" | sed -E 's/.*"([^"]+)".*/\1/')
+    if [ "$rc" = 0 ] && [ "$got" = "$3" ]; then
+        ok "update $1: $2 -> $3"
+    else
+        fail "update $1" "rc $rc, got '$got', want '$3': $(head -3 "$tmp/o")"
+    fi
+}
+# ^1.0.0 has ceiling 2.0.0; update raises the anchor to the newest below it and
+# keeps the caret (2.0.0 would cross the ceiling and is NOT chosen)
+vc_update "^ within ceiling" '^1.0.0' '^1.1.0'
+# ~1.0.0 has ceiling 1.1.0; nothing above 1.0.0 fits, so the anchor stays
+vc_update "~ pinned by ceiling" '~1.0.0' '~1.0.0'
+# an exact pin is never moved
+vc_update "= not moved" '=1.0.0' '=1.0.0'
+
+# ---- 35. [package].mc: the minimum mc version a package declares ----
 # Two halves, because a working-tree build reports the 0.0.0-dev sentinel, which
 # is treated as newest and SKIPS the version compare. The dev build (build/mc1)
 # proves the key PARSES and that the ACCEPT and MALFORMED paths behave; the

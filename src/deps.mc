@@ -278,6 +278,126 @@ i64 ver_major(uptr a) {
     return ver_field(a, &i);
 }
 
+// ---- version constraints (roadmap 1.0.0: the [deps]/[tools]/[package].mc
+// version syntax) ----
+// One parser for every place a version constraint is read. A constraint maps to
+// a half-open range [min, max) plus an optional exact pin, held in a caller-
+// supplied VC record (three uptr fields, no allocation). Every operator reuses
+// ver_cmp/ver_field/dep_semver_ok, so pre-releases and the SemVer ordering are
+// exactly what the rest of this file already agrees on.
+//
+//   *X.Y.Z          bare = a MINIMUM, unchanged from M44's MVS (>=X.Y.Z)
+//   >=X.Y.Z         the same minimum, spelled explicitly (spaces after >= ok)
+//   =X.Y.Z          exact: the version must equal X.Y.Z
+//   ~X.Y.Z          patch: >=X.Y.Z <X.(Y+1).0
+//   ^X.Y.Z          minor: >=X.Y.Z <(X+1).0.0, with the 0.x caret narrowing
+//   *               any version
+//
+// >, <, <= and > (strict) are DELIBERATELY not supported: the resolver is
+// Minimal Version Selection, whose model is a lower bound and a caller-chosen
+// upper bound, so a ceiling is always derived from ~/^/= and never spelled with
+// a bare < or >. `>1.2.3`, `<1.2.3`, `<=1.2.3` are malformed and refused.
+#define VC_MIN   0                    // uptr, lower bound version, 0 = none (*)
+#define VC_HIGH  8                    // uptr, exclusive ceiling, 0 = none
+#define VC_EXACT 16                   // uptr, exact pin, 0 = none
+#define VC_SIZE  24
+
+// "a.b.c" as a fresh string
+uptr ver_mk(i64 a, i64 b, i64 c) {
+    uptr s = tm_num_str(a);
+    s = tm_cat(s, ".");
+    s = tm_cat(s, tm_num_str(b));
+    s = tm_cat(s, ".");
+    s = tm_cat(s, tm_num_str(c));
+    return s;
+}
+
+// ~X.Y.Z -> X.(Y+1).0
+uptr ver_tilde_ceiling(uptr s) {
+    i64 p = 0;
+    i64 a = ver_field(s, &p);
+    i64 b = ver_field(s, &p);
+    return ver_mk(a, b + 1, 0);
+}
+
+// ^X.Y.Z -> the caret ceiling, with the SemVer/npm 0.x special case: for a 0.x
+// a "minor" bump is breaking, so the caret narrows -- ^0.2.3 -> 0.3.0 and
+// ^0.0.3 -> 0.0.4.
+uptr ver_caret_ceiling(uptr s) {
+    i64 p = 0;
+    i64 a = ver_field(s, &p);
+    i64 b = ver_field(s, &p);
+    i64 c = ver_field(s, &p);
+    if (a > 0) return ver_mk(a + 1, 0, 0);
+    if (b > 0) return ver_mk(0, b + 1, 0);
+    return ver_mk(0, 0, c + 1);
+}
+
+// Parse `cs` into the VC record `out` (VC_SIZE bytes). Returns 1 on success, 0
+// when malformed. Pure -- raises no error itself, so each call site reports the
+// malformed case at its own position and exit code.
+i64 ver_parse(uptr cs, uptr out) {
+    st64(out + VC_MIN, 0);
+    st64(out + VC_HIGH, 0);
+    st64(out + VC_EXACT, 0);
+    i64 c0 = ld8(cs);
+    if (c0 == '*') {
+        if (ld8(cs + 1) != 0) return 0;   // "*" and nothing else
+        return 1;                          // any version: all bounds 0
+    }
+    if (c0 == '=') {
+        uptr v = cs + 1;
+        if (!dep_semver_ok(v)) return 0;
+        st64(out + VC_MIN, v);
+        st64(out + VC_EXACT, v);
+        return 1;
+    }
+    if (c0 == '~') {
+        uptr v = cs + 1;
+        if (!dep_semver_ok(v)) return 0;
+        st64(out + VC_MIN, v);
+        st64(out + VC_HIGH, ver_tilde_ceiling(v));
+        return 1;
+    }
+    if (c0 == '^') {
+        uptr v = cs + 1;
+        if (!dep_semver_ok(v)) return 0;
+        st64(out + VC_MIN, v);
+        st64(out + VC_HIGH, ver_caret_ceiling(v));
+        return 1;
+    }
+    if (c0 == '>' && ld8(cs + 1) == '=') {
+        uptr v = cs + 2;
+        while (ld8(v) == ' ') { v = v + 1; }
+        if (!dep_semver_ok(v)) return 0;
+        st64(out + VC_MIN, v);
+        return 1;                          // no ceiling
+    }
+    // a bare version = a minimum; `>1.2.3`, `<...` etc. fail dep_semver_ok here
+    if (!dep_semver_ok(cs)) return 0;
+    st64(out + VC_MIN, cs);
+    return 1;
+}
+
+// Does version `v` satisfy the parsed constraint? Exact wins; otherwise the
+// half-open range. The pre-release exclusion is a SELECTION rule (which
+// candidate to pick), not a satisfaction rule -- a version already selected and
+// pinned in the lock is checked only against the range.
+i64 ver_satisfies(uptr out, uptr v) {
+    uptr ex = ld64(out + VC_EXACT);
+    if (ex != 0) return ver_cmp(v, ex) == 0;
+    uptr lo = ld64(out + VC_MIN);
+    uptr hi = ld64(out + VC_HIGH);
+    if (lo != 0 && ver_cmp(v, lo) < 0) return 0;
+    if (hi != 0 && ver_cmp(v, hi) >= 0) return 0;
+    return 1;
+}
+
+// The malformed-constraint message, one text for every call site.
+uptr ver_bad_msg() {
+    return "a version constraint must be X.Y.Z, =X.Y.Z, ~X.Y.Z, ^X.Y.Z, >=X.Y.Z, or *";
+}
+
 // ---- [package].mc: the minimum mc version a package declares ----
 // A taught package depends on the hook API, which changes before 1.0.0, so a
 // package tagged for one mc must be able to say so and get a clear diagnostic
@@ -329,16 +449,17 @@ i64 dep_semver_ok(uptr s) {
 // least this"). A malformed value is a TOML-position error, exit 2. Must be
 // called with the offending manifest's table active, so the position points at
 // the right mc.toml.
+// Validate the raw `[package].mc` value as a version constraint, at its own
+// position, and return it. A bare/`>=` is the normal form and means a MINIMUM;
+// a `^`/`~`/`=` CAPS the compiler version (allowed but unusual -- documented in
+// docs/reference/packages.md). Malformed is a TOML-position error, exit 2. Must
+// be called with the offending manifest's table active.
 uptr dep_min_mc(uptr v) {
-    uptr s = v;
-    if (ld8(s) == '>' && ld8(s + 1) == '=') {
-        s = s + 2;
-        while (ld8(s) == ' ') { s = s + 1; }
-    }
-    if (!dep_semver_ok(s))
+    u8 vc[VC_SIZE];
+    if (!ver_parse(v, vc))
         toml_err_key_code("package.mc",
-            "package.mc must be a version like 1.2.3 or \">= 1.2.3\"", 2);
-    return s;
+            "package.mc must be a version like 1.2.3, \">= 1.2.3\", \"^1.2.3\" or \"=1.2.3\"", 2);
+    return v;
 }
 
 // The enforcer. Reads `[package].mc` from the CURRENTLY PARSED table (the
@@ -354,14 +475,25 @@ uptr dep_min_mc(uptr v) {
 void dep_enforce_mc(uptr what) {
     uptr raw = toml_get("package.mc");
     if (raw == 0) return;
-    uptr want = dep_min_mc(raw);
+    dep_min_mc(raw);                       // validates at the key's position
     if (str_eq(mc_version(), "0.0.0-dev")) return;
-    if (ver_cmp(mc_version(), want) < 0)
-        toml_err_key_code("package.mc",
-            tm_cat(what, tm_cat(" needs mc >= ",
-                   tm_cat(want, tm_cat(" (this is mc ",
-                          tm_cat(mc_version(),
-                                 "): upgrade the compiler"))))), 2);
+    u8 vc[VC_SIZE];
+    ver_parse(raw, vc);
+    if (ver_satisfies(vc, mc_version())) return;
+    // The requirement phrase: a plain minimum keeps M44's ">= X" text byte for
+    // byte; an exact or a capped constraint describes its range.
+    uptr ex = ld64(vc + VC_EXACT);
+    uptr lo = ld64(vc + VC_MIN);
+    uptr hi = ld64(vc + VC_HIGH);
+    uptr phrase = 0;
+    if (ex != 0) phrase = tm_cat("= ", ex);
+    else if (hi != 0) phrase = tm_cat(">= ", tm_cat(lo, tm_cat(" and < ", hi)));
+    else phrase = tm_cat(">= ", lo);
+    toml_err_key_code("package.mc",
+        tm_cat(what, tm_cat(" needs mc ",
+               tm_cat(phrase, tm_cat(" (this is mc ",
+                      tm_cat(mc_version(),
+                             "): upgrade the compiler"))))), 2);
 }
 
 // The entry project's own label for the refusal: `[package].name` when it has
@@ -1414,14 +1546,20 @@ void deps_apply(uptr cfg) {
     if (nd == 0) return;
     // 2. the lock, and the roots it names
     dep_read_lock(cfg);
-    // 3. every [deps] minimum has to be met by a row: the lock is the answer to
-    //    the manifest, so a manifest that moved makes the lock stale
+    // 3. every [deps] constraint has to be satisfied by a row: the lock is the
+    //    answer to the manifest, so a manifest that moved (a raised minimum, a
+    //    tightened ceiling, a new exact pin) makes the lock stale. A bare/`>=`
+    //    constraint reduces to the M44 minimum comparison, byte for byte.
     i = 0;
     while (i < toml_entries()) {
         uptr k = opt_val(toml_path_at(i), "deps.");
         if (k != 0) {
+            uptr cs = toml_val_at(i);
+            u8 vc[VC_SIZE];
+            if (!ver_parse(cs, vc))
+                toml_err_key_code(tm_cat("deps.", k), ver_bad_msg(), 2);
             i64 pk = dp_find(k);
-            if (pk < 0 || ver_cmp(dp_ver(pk), toml_val_at(i)) < 0)
+            if (pk < 0 || !ver_satisfies(vc, dp_ver(pk)))
                 dep_die("mc.lock is stale", k, "mc pkg sync --yes");
         }
         i = i + 1;
