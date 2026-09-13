@@ -217,8 +217,10 @@ said so: `mc: machine answers MTASK_REG_COUNT but leaves a version 5 slot empty`
    what `MTASK_REG_LOAD` records, and it emits no instruction at all — so `val_reg` is the only
    function that knows where it is. A derived machine that computes the register itself reads a
    stale `x9`. `lib/machine_arm64_float.mc` did exactly that in its own `fa_save_live` and in its
-   stack-argument path and was corrected with this version; `lib/machine_x86_64_float.mc` has the
-   same three lines and will need the same correction when the x86-64 allocator lands (D2).
+   stack-argument path and was corrected with this version; `lib/machine_x86_64_float.mc` had the
+   same three (its `fx_save_live`, its `fx_restore_live` and its stack-argument path) and
+   `lib/i128.mc`'s `xw_call` a fourth, all corrected when the x86-64 allocator landed (D2). Nothing
+   else in `lib/` or `examples/` computes a depth register by hand.
 2. **A machine that overrides `MTASK_PARAM` MUST override `MTASK_PARAM_REG`.** The bundled
    `a64_param_reg` reads argument `i` out of `x_i`, because on an integer-only ABI the source index
    *is* the register number. On a float ABI it is not — `fa_param` walks its own NGRN/NSRN/stack
@@ -226,7 +228,9 @@ said so: `mc: machine answers MTASK_REG_COUNT but leaves a version 5 slot empty`
    disagree from the second parameter on. Inheriting the bundled slot put the wrong register in the
    local, measured: `tests/float/019-putf64.mc` printed `0. -1.3 0.4` where it prints
    `3.500 -1.25 0`. `lib/machine_arm64_float.mc` and `lib/i128.mc` (whose own counter skips a
-   register for the even-pair rule) each carry a `*_param_reg` of their own for this reason.
+   register for the even-pair rule) each carry a `*_param_reg` of their own for this reason, and so
+   do their x86-64 halves, `fx_param_reg` and `xw_param_reg` — on Win64 the float and integer
+   argument slots are SHARED, so `i` and the register disagree there for a different reason again.
 
 ### What the arm64 allocator does
 
@@ -275,6 +279,53 @@ and is not an `I_CSET`, so the guard fails and the plain lowering stands.
 encoded, dumped and in `lib/backend_arm64.mc` and simply had no emitter before. Together P1 and P2
 turn the prelude's five-instruction `while` condition — `cmp; cset lt; cmp #0; cset eq; cbz` — into
 `cmp; b.lt` plus the loop's own unconditional branch.
+
+### What the x86-64 allocators do (step D2)
+
+`x86_reg_count()` answers **5** on BOTH machines: `rbx`, `r12`, `r13`, `r14`, `r15` — the five that
+System V and Win64 agree are the callee's to preserve. `rdi` and `rsi` are callee-saved on Win64 and
+argument registers 1 and 2 on System V, so a count that depended on which prologue last ran would be
+stale for the first function of a unit; two registers are not worth a second code path (D11), and
+the assertion in `scripts/check-surface.sh` is that `x86_64-win`'s optimized lowering of `src/mc.mc`
+does not NAME them at all. The register partition does not move: depths stay in `r8..r11` and
+scratch stays `rax`/`rcx`/`rdx`. `r` is an index and `x86_allocreg_at(r)` is the map — arithmetic
+rather than a base, because the set is not contiguous.
+
+The saves and restores are `mov [rbp - k], rbx` / `mov rbx, [rbp - k]` into ordinary frame slots, so
+they add **no instruction form**: `leave` still ends every function, `MTASK_FRAME_FIX` still patches
+only the prologue's `sub rsp`, and a stack walker's view does not change.
+
+The alias table is the same mechanism, in the same place (`xalias_at`, the second half of the
+`xdslot` array), with one difference that is the architecture and not a choice:
+
+* **the store rewrite is a much smaller whitelist.** x86 is two-operand, so `add rd, rn` means
+  `rd = rd + rn`: retargeting its destination at the local's register would add to a register that
+  does not hold the old value. So `add`/`sub`/`and`/`or`/`xor`/`imul`/`shl`/`shr`/`sar`/`neg`/`not`
+  are all out, every store is out (its `rd` is its SOURCE), `setcc` is out (it writes one byte),
+  `call r` 's `rd` is the target and `idiv`/`div` 's is the divisor. What is left is every form that
+  only WRITES: the three `mov`s, the two `lea`s, the five register `movzx`/`movsx` and the seven
+  loads — which is what a local's initialiser, a constant, a global read and a comparison's boolean
+  all end in. `x = x + 1` therefore costs one `mov` on x86-64 where it costs none on AArch64.
+* **far more tasks have to materialise an aliased depth first**, for the same reason: `x86_own(d)`
+  is `a64_own`'s counterpart and is called by `MTASK_BIN` (whose destination IS its left operand),
+  `MTASK_UN`, `MTASK_BOOL` and `MTASK_CAST`.
+
+The two peepholes are the same two patterns over the pair x86 needs for a boolean, `setcc rd, cc`
+followed by `movzx rd, rd` (setcc writes one byte, so the `movzx` is never separable from it):
+
+* **P1** — `x86_jz`/`x86_jnz`: when the last two instructions are that pair on the depth's own
+  register, drop both (`X_NOP` generates no bytes and no dump line) and branch on the flags the
+  `cmp` left, instead of the `test rd, rd; jcc` the plain road emits. `JNZ` uses `cc`, `JZ` uses
+  `cc ^ 1` — x86 condition codes are defined in negation pairs (the low bit of `tttn`), so one xor
+  inverts `e`/`ne`, `l`/`ge` and `le`/`g` alike.
+* **P2** — `x86_un` for `MUN_LNOT`: the same pair, condition flipped in place, nothing emitted.
+
+**`jcc rel32` is NOT a new form**, which is a correction to `docs/specs/M49.md` § 4.7: `x86_jz` has
+always ended in `X_JCC`, so the descriptor row and the encoder were already there and already swept.
+What the peephole adds is four new CONDITION VALUES of that existing form — `jl` (`0f 8c`), `jge`
+(`0f 8d`), `jle` (`0f 8e`), `jg` (`0f 8f`) beside the `je`/`jne` the plain road already emits — and
+the mnemonic set of the optimized object is the plain one's plus exactly those four, on System V and
+on Win64 alike, with 0 mismatches in the `llvm-mc` sweep.
 
 **Loop-invariant values are allocated the same way, as pseudo-locals.** A register a taken local
 did not want goes to a value that a loop rebuilds every iteration, and there are two kinds: an
@@ -440,7 +491,8 @@ writer is shared with aarch64 down to the section table.
 | stack parameters | `[x29+16]`, `[x29+24]`, … | `[rbp+16]`, `[rbp+24]`, … | `[rbp+48]`, `[rbp+56]`, … |
 | outgoing area | the bottom of the frame, `sp` never moves | `push`, given back with `add rsp` | the same, plus the shadow space |
 | shadow space | — | none | 32 bytes, reserved by the caller |
-| callee-saved, never touched | `x18..x28` | `rbx`, `r12..r15` | those plus `rsi`, `rdi` |
+| callee-saved, never touched | `x18` (`x19..x28` are the allocator's, M49) | `rsi`, `rdi` (System V argument registers, so only on Win64) | — |
+| allocatable (`MTASK_REG_COUNT`, M49) | 10: `x19..x28` | 5: `rbx`, `r12..r15` | the same five (D11) |
 | result | `x0` | `rax` | `rax` |
 | `callp` pointer | `x16`, `blr x16` | `rax`, `call rax` | the same |
 | instruction width | 4 bytes | 1..10 bytes | the same |

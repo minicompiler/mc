@@ -161,6 +161,10 @@ gen_toml_obj() {
         echo "entry = \"$1\""
         echo "out   = \"$2\""
         echo 'kind  = "obj"'
+        # M49 step D2: the optimized road. `opt = 1` in [project] is the TOML
+        # half of --opt=1 (docs/reference/toml.md), so the pass costs one line
+        # per generator and the flag never has to travel on a command line.
+        [ -n "$optkey" ] && echo 'opt   = 1'
         echo
         echo '[target]'
         echo 'os   = "windows"'
@@ -358,6 +362,24 @@ else
             build_one "$f" "$name" kernel32
         fi
     done
+
+    # M49 step D2: the same sources again with the OPTIMIZER ON, as
+    # scripts/test-linux.sh does it. The two Windows CI legs are the only place a
+    # Win64 (or a windows/arm64) `--opt=1` binary is ever RUN -- nothing on the
+    # development host can execute one -- so these objects are what proves the
+    # allocator on that ABI.
+    optkey=1
+    for f in tests/mc/09[4-9]*.mc tests/mc/1*.mc; do
+        [ -f "$f" ] || continue
+        name=$(basename "$f" .mc)
+        why=$(skip_reason "$f")
+        if [ -n "$why" ]; then
+            :                                     # already reported on the plain road
+        else
+            build_one "$f" "$name-opt" kernel32
+        fi
+    done
+    optkey=""
 
     # the cases with no runtime object next to them: the source includes
     # <sys_windows> itself, so it carries the wrappers and links with nothing but

@@ -33,8 +33,11 @@ in its own file.
 
 ## What it does
 
-**It keeps locals and parameters in callee-saved registers.** On AArch64 that is `x19..x28`, ten of
-them, one per declaration, for the length of a function. Before, every read of a local was a load
+**It keeps locals and parameters in callee-saved registers, on every target `mc` ships.** On
+AArch64 that is `x19..x28`, ten of them; on x86-64 it is `rbx`, `r12`, `r13`, `r14`, `r15`, five of
+them, and the same five under System V and under Win64 — `rdi` and `rsi` are argument registers on
+one ABI and callee-saved on the other, and two registers were not worth a second code path. One per
+declaration, for the length of a function. Before, every read of a local was a load
 from `[sp, #k]` and every write a store; the loop of `bench/mc/bench.mc`'s `mix` was 50
 instructions per iteration, thirteen of them loads and ten stores of the same four values and
 fourteen `movz`/`movk` rebuilding two 64-bit constants. With `-O` it is **18**, none of them
@@ -102,10 +105,17 @@ in the object for a gain nothing measured.
   machine that says nothing — `examples/kernel`'s RISC-V 64 and `examples/avr`'s AVR fill the
   thirty-one slots that existed before and leave the six new ones empty — gets **byte-identical
   output on both roads**, with no edit. `--opt=1` on such a target is accepted and does nothing.
-  The x86-64 machines are in that state today too; the allocator there is a later step.
-- **It does not let a runtime keep state in `x19..x28` any more.** That permission
-  ([objects.md](../reference/objects.md) § 4) still holds on the plain road and is withdrawn for
-  `-O`. Nothing in this repository relied on it.
+  Since M49 step D2 the five machines `mc` itself ships all offer it: `arm64` (macOS, Linux and
+  Windows on ARM), `x86_64` and `x86_64-win`.
+- **It does not let a runtime keep state in `x19..x28` — or in `rbx`, `r12..r15` — any more.** That
+  permission ([objects.md](../reference/objects.md) § 4, § 4b, § 4c) still holds on the plain road
+  and is withdrawn for `-O`. Nothing in this repository relied on it.
+- **It is not measured on x86-64.** There is no x86-64 machine in this repository's development
+  loop, so the table below is AArch64's; the x86-64 allocator's correctness comes from
+  `scripts/test-linux.sh` and `scripts/test-windows.sh`, which build every `tests/mc/09[4-9]*`,
+  `tests/mc/1*` and `tests/float/*` case on both roads and run them — in Docker for Linux, on the
+  two Windows runners for Windows — and compare exit code and stdout with each other and with the
+  header. A reproducible x86-64 cell is M50's job.
 
 ## What it costs
 

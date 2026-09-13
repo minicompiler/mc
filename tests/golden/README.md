@@ -19,6 +19,21 @@ it worth having. `scripts/bootstrap.sh` records it when the file is absent and o
 is the cross-road identity and is not a golden -- it is an equality between two files the same run
 produced. To rewrite: delete the file and run `make bootstrap` again.
 
+Since M49 step D2 the optimized road has a golden on EVERY host, so there are **ten** files here,
+five per road: `mc2-linux-arm64-opt.sha256` and `mc2-linux-x86_64-opt.sha256` (recorded by
+`scripts/bootstrap-linux.sh`, from `build/mc2lo.o`) and `mc2-windows-arm64-opt.sha256` and
+`mc2-windows-x86_64-opt.sha256` (from `build/mc2wo.obj`). Each is recorded only after its own
+cell's optimized fixed point (`cmp build/mc2lo.o build/mc3lo.o`, `cmp build/mc2wo.obj
+build/mc3wo.obj`) AND its own cross-road identity (the optimized compiler, asked for the plain road,
+writing byte for byte the plain compiler's object). All ten move together whenever `src/*.mc` or the
+bundle move; an `-opt` file also moves on its own whenever the optimizer changes and the plain road
+does not, which is what makes it worth having. The two Windows `-opt` files are cross-computed on
+macOS exactly like the plain pair, with `--opt=1` added:
+
+    build/mc1 --opt=1 --backend=coff-obj-arm64  src/mc_windows.mc        -o build/mc2wo-arm64.obj
+    build/mc1 --opt=1 --backend=coff-obj-x86_64 src/mc_windows_x86_64.mc -o build/mc2wo-x86_64.obj
+    shasum -a 256 build/mc2wo-arm64.obj build/mc2wo-x86_64.obj
+
 Since M37 there are two more goldens, `mc2-linux-arm64.sha256` and `mc2-linux-x86_64.sha256`:
 the SHA-256 of `build/mc2l.o`, the object the Linux-hosted `mc` writes for `src/mc_linux.mc` on
 each host, recorded by `scripts/bootstrap-linux.sh` (`docs/bootstrap.md` § The Linux chain). They

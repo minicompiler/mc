@@ -207,6 +207,15 @@ Nine artifacts come out:
   the suite's own `--build-only`, which truncates the manifest. That is what makes the two Windows
   jobs the runtime oracle for `<float>` too — macOS can build those objects but cannot execute
   them.
+
+  Since **M49 step D2** each artifact also carries a SECOND copy of part of the corpus, built with
+  the optimizer on: `tests/mc/09[4-9]*`, `tests/mc/1*` and every `tests/float/*` case again, under
+  the name `<name>-opt`, with `opt = 1` in the generated `[project]`. It needed **no change to this
+  workflow at all** — the extra manifest lines the `--build-only` half writes are picked up by the
+  `--run-only` half like any other, so the four suite jobs run both roads. That is the only place a
+  `--opt=1` binary is ever EXECUTED for `x86_64`, `x86_64-win` or `arm64`-on-Windows: the
+  development host can build all three and run none of them, and nothing in this repository can
+  measure the allocator's SPEED on x86-64 (M50's job) — only its answers.
 - `mc-linux-hosts` — `build/mc-linux-arm64.o` and `build/mc-linux-x86_64.o`, `mc` itself
   cross-compiled for each Linux host by `make mc-linux-obj` / `make mc-linux-x86_64-obj`. Objects,
   not executables, for the same reason: no linker and no sysroot here (§ M37).

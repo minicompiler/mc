@@ -369,6 +369,10 @@ gen_toml() {
         echo '[project]'
         echo "entry = \"$1\""
         echo "out   = \"$2\""
+        # M49 step D2: the optimized road. `opt = 1` in [project] is the TOML
+        # half of --opt=1 (docs/reference/toml.md), so the pass costs one line
+        # per generator and the flag never has to travel on a command line.
+        [ -n "$optkey" ] && echo 'opt   = 1'
         echo
         echo '[target]'
         echo 'os   = "linux"'
@@ -392,6 +396,10 @@ gen_toml_obj() {
         echo "entry = \"$1\""
         echo "out   = \"$2\""
         echo 'kind  = "obj"'
+        # M49 step D2: the optimized road. `opt = 1` in [project] is the TOML
+        # half of --opt=1 (docs/reference/toml.md), so the pass costs one line
+        # per generator and the flag never has to travel on a command line.
+        [ -n "$optkey" ] && echo 'opt   = 1'
         echo
         echo '[target]'
         echo 'os   = "linux"'
@@ -408,6 +416,10 @@ gen_toml_exe() {
         echo '[project]'
         echo "entry = \"$1\""
         echo "out   = \"$2\""
+        # M49 step D2: the optimized road. `opt = 1` in [project] is the TOML
+        # half of --opt=1 (docs/reference/toml.md), so the pass costs one line
+        # per generator and the flag never has to travel on a command line.
+        [ -n "$optkey" ] && echo 'opt   = 1'
         echo
         echo '[target]'
         echo 'os   = "linux"'
@@ -665,6 +677,29 @@ else
             run_one "$f" "$name" "$MUSL_ARGS"
         fi
     done
+
+    # M49 step D2: the same sources again, with the OPTIMIZER ON. This is the only
+    # place a linux/$arch `--opt=1` binary is ever RUN, and it is the whole
+    # correctness argument for the x86-64 allocator, whose performance nothing in
+    # this repository can measure (docs/specs/M49.md § 10, row 5). The subset is
+    # where the milestone's own tests live -- 094..101 plus every later tests/mc
+    # case -- and each `-opt` name is a second binary beside the plain one, judged
+    # against the SAME expect header, so the two roads are compared through their
+    # answers and not through their bytes.
+    optkey=1
+    for f in tests/mc/09[4-9]*.mc tests/mc/1*.mc; do
+        [ -f "$f" ] || continue
+        name=$(basename "$f" .mc)
+        why=$(skip_reason "$f")
+        if [ -n "$why" ]; then
+            :                                     # already reported on the plain road
+        elif [ "$mode" = "build" ]; then
+            build_one "$f" "$name-opt" musl
+        else
+            run_one "$f" "$name-opt" "$MUSL_ARGS"
+        fi
+    done
+    optkey=""
 
     # M42: errno (thread-local) and malloc, from an entry point that is not
     # crt1.o. It links like any other libc test in the object mode and is one

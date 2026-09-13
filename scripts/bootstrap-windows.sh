@@ -73,6 +73,7 @@ case "$harch" in
        exit 1 ;;
 esac
 golden="tests/golden/mc2-windows-$target.sha256"
+golden_opt="tests/golden/mc2-windows-$target-opt.sha256"
 objdir="${MC_WINTESTS:-build/tests-windows-$larch}"
 
 if [ ! -f "$entry" ]; then
@@ -239,6 +240,66 @@ else
         exit 1
     fi
     echo "  ok: $got_hash matches $golden"
+fi
+
+# ---- M49 step D2: the optimized road, and the cross-road identity ----------
+# The same two self-hosted stages with `--opt=1`, and the line that makes the
+# allocator falsifiable: the optimized compiler, asked for the PLAIN road, has to
+# write byte for byte the object the plain one wrote. Self-skipping, because a
+# published release older than M49 does not accept the flag.
+if build/mc1w.exe --opt=0 --version > /dev/null 2>&1; then
+    echo ""
+    echo "=== M49 -- the optimized road on windows/$target: mc1w -O -> mc2wo -> mc3wo ==="
+
+    echo "-- stage 2o: build/mc1w.exe --opt=1 $entry -> build/mc2wo.obj --"
+    rm -f build/mc2wo.obj build/mc2wo.exe
+    step "mc1w -O compiles $entry"   build/mc1w.exe --opt=1 "$entry" -o build/mc2wo.obj
+    echo "  size build/mc2wo.obj: $(size_of build/mc2wo.obj) bytes"
+    step "link build/mc2wo.exe"      scripts/link-windows.sh --arch "$larch" build/mc2wo.exe build/mc2wo.obj
+
+    echo "-- stage 3o: build/mc2wo.exe --opt=1 $entry -> build/mc3wo.obj --"
+    rm -f build/mc3wo.obj
+    step "mc2wo -O compiles $entry"  build/mc2wo.exe --opt=1 "$entry" -o build/mc3wo.obj
+    echo "  size build/mc3wo.obj: $(size_of build/mc3wo.obj) bytes"
+
+    echo "-- fixed-point criterion: cmp build/mc2wo.obj build/mc3wo.obj --"
+    if ! cmp build/mc2wo.obj build/mc3wo.obj; then
+        echo "FAIL: build/mc2wo.obj != build/mc3wo.obj -- no fixed point on the optimized road" >&2
+        echo "diagnosis: diff <(build/mc1w.exe --dump-asm --opt=1 $entry) <(build/mc2wo.exe --dump-asm --opt=1 $entry)" >&2
+        exit 1
+    fi
+    echo "  ok: build/mc2wo.obj == build/mc3wo.obj"
+
+    echo "-- golden SHA-256 of build/mc2wo.obj --"
+    got_hash=$(sha256_of build/mc2wo.obj)
+    mkdir -p "$(dirname "$golden_opt")"
+    if [ ! -f "$golden_opt" ]; then
+        printf '%s  build/mc2wo.obj\n' "$got_hash" > "$golden_opt"
+        echo "  WARNING: $golden_opt did not exist -- recorded now:"
+        echo "  $got_hash"
+    else
+        want_hash=$(awk '{print $1}' "$golden_opt")
+        if [ "$got_hash" != "$want_hash" ]; then
+            echo "FAIL: build/mc2wo.obj diverges from the golden $golden_opt" >&2
+            echo "  expected: $want_hash" >&2
+            echo "  got:      $got_hash" >&2
+            echo "  (review the --dump-asm --opt=1 diff before rewriting it)" >&2
+            exit 1
+        fi
+        echo "  ok: $got_hash matches $golden_opt"
+    fi
+
+    echo "-- cross-road identity: build/mc2wo.exe $entry == build/mc2w.obj --"
+    rm -f build/mc2wo-plain.obj
+    step "mc2wo compiles $entry plain" build/mc2wo.exe "$entry" -o build/mc2wo-plain.obj
+    if ! cmp build/mc2wo-plain.obj build/mc2w.obj; then
+        echo "FAIL: the optimized compiler does not compute the plain compiler" >&2
+        exit 1
+    fi
+    echo "  ok: build/mc2wo-plain.obj == build/mc2w.obj"
+else
+    echo ""
+    echo "=== M49 -- the optimized road: SKIPPED (build/mc1w.exe does not accept --opt=) ==="
 fi
 
 # the seed check, on the compiler that came out of the chain rather than on the

@@ -5563,14 +5563,178 @@ agents (`.claude/agents/`): `stage0-dev` (C23), `mc-dev` (`.mc` code), `reviewer
   `bench/RESULTS.md` § A1 (new, the `-O` block with its own method) and § C (three rows).
   Not in this step, and named: **D2**, the same allocator for the x86-64 and Win64 machines, where
   the six v5 slots are still null and `--opt=1` is accepted and does nothing.
+- M49 step D2 ✔ (`docs/specs/M49.md` § 4.7, § 10 row 5, + its new § Implementation notes -- step D2):
+  **the register allocator, the peephole and hoisting on the two x86-64 machines** -- the step that
+  CLOSES the milestone, because `--opt=1` now means the same thing on every target `mc` ships. All
+  in `src/machine_x86_64.mc` and the two derived x86 machines in `lib/`; `src/gen_walk.mc` needed
+  **nothing at all** (which is the M17 split's own claim, tested), and `stage0/` is untouched
+  (2848/3000, `git diff main -- stage0/` empty).
+  * **Five registers, the same five on both ABIs.** `x86_reg_count()` answers 5 -- `rbx`, `r12`,
+    `r13`, `r14`, `r15` -- and `m_x86_64_win` gets them through the table copy, so Win64 leaves
+    `rdi`/`rsi` alone (D11: they are argument registers 1 and 2 on System V, and a count that
+    depended on which prologue last ran would be stale for the first function of a unit). Depths
+    stay in `r8..r11`, scratch stays `rax`/`rcx`/`rdx`. The set is not contiguous, so
+    `x86_allocreg_at(r)` is arithmetic (`r == 0 ? 3 : r + 11`) and NOT a table: a five-entry global
+    array put `build/mc1 limits src/mc.mc` at `globals 447/512`, and it is **446/512 unchanged**
+    with the arithmetic. The alias vector went into `xdslot`, `MAXDEPTH -> MAXDEPTH * 2`, the way
+    `src/machine_arm64.mc` does it -- **zero new file-level globals in the whole step**.
+  * **`jcc rel32` is not a new form, and § 4.7 was wrong about it.** The spec says the peephole
+    "needs the `jcc rel32` row, one `x86_desc` line"; it does not -- `x86_jz` has ended in `X_JCC`
+    since M17 step B, so the row, the encoder branch, `MTASK_INS_SIZE`, `MTASK_RELOC_OFF` and the
+    dump were all there and already swept. **Step D2 adds no instruction form at all.** What it adds
+    is four new CONDITION VALUES of that form: `jl` `0f 8c`, `jge` `0f 8d`, `jle` `0f 8e`, `jg`
+    `0f 8f`, beside the `je`/`jne` the plain road already emitted -- each checked against
+    `llvm-mc -filetype=obj`'s own bytes.
+  * **The store rewrite is a much smaller whitelist, and the reason is the architecture.** x86 is
+    two-operand: `add rd, rn` means `rd = rd + rn`, so retargeting its destination at the local's
+    register would add to a register that does not hold the old value. The eleven forms that make
+    AArch64's rewrite pay are all OUT, along with `neg`/`not`/`imul`/the shifts, every store (its
+    `rd` is its SOURCE), `setcc` (one byte), `call r` (the target) and `idiv`/`div` (the divisor).
+    What is left is every form that only WRITES -- three `mov`s, two `lea`s, five register
+    `movzx`/`movsx`, seven loads -- so `x = x + 1` costs one `mov` here where it costs none on
+    AArch64, while `x = <const>`, `x = g`, `x = *p` and `x = a < b` cost none on either. Only the
+    64-bit `mov` collapses to `X_NOP` when retargeted onto its own source: `mov32 rbx, rbx` is a
+    TRUNCATION, not a no-op. For the same two-operand reason **four tasks** need `x86_own(d)` to
+    materialise an aliased depth first (`MTASK_BIN`, `_UN`, `_BOOL`, `_CAST`) where AArch64 needs
+    two, and `x86_arg_to` became one line, `x86_mov(r, x86_val_reg(d, r))`.
+  * **P1/P2 over the pair x86 needs for a boolean.** `setcc rd, cc` + `movzx rd, rd` (setcc writes
+    one byte, so the `movzx` is never separable): P1 drops both and branches on the `cmp`'s flags
+    instead of emitting `test rd, rd; jcc`, with `cc ^ 1` for `JZ` -- x86 condition codes are
+    defined in negation pairs (the low bit of `tttn`), so one xor inverts `e`/`ne`, `l`/`ge` and
+    `le`/`g` alike; P2 flips the condition in place for `MUN_LNOT` and emits nothing.
+  * **Hoisting came free**, as § 4.8 says it would: it is walker-side, so filling the six slots is
+    all it took.
+  * **Four `XREG_BASE + d` reads in `lib/` were the version 5 obligation coming due**, and all four
+    are corrected: `fx_save_live`, `fx_restore_live` and `fx_push_args`
+    (`lib/machine_x86_64_float.mc`) plus `xw_call`'s argument spill (`lib/i128.mc`). Both derived x86
+    machines also owed `MTASK_PARAM_REG` -- `fx_param_reg` and `xw_param_reg` -- for three DIFFERENT
+    reasons behind one rule: the float machine walks its own NGRN/NSRN counters on System V, shares
+    one slot counter between the integer and float files on Win64, and `xw_param` counts slots of its
+    own because a 16-byte value takes two registers on System V and a pointer on Win64.
+    `examples/avx/avx.mc` needed nothing (it already read through `x86_val_reg`), and
+    `examples/kernel`'s riscv64 and `examples/avr`'s AVR are null-slot machines that never see an
+    alias.
+  * **The tenth ABI assertion was VACUOUS since D1, and writing its x86 twin is what found it.**
+    `scripts/check-surface.sh` matched registers with `/x(19|2[0-8])\y/`; `\y` is a GNU `awk` word
+    boundary that the `awk` on macOS and the one in `alpine:3` both ignore, so `used` was empty for
+    every function and the check could not fail (verified directly: the loop never matches). The x86
+    twin has no `\y`, worked at once, and reported 2895 "violations" -- every one a false positive
+    (`lea r9, [rip+l_str1330]` contains `r13`), which is what exposed the arm64 side. Two more
+    mistakes came out with it: the arm64 save/restore patterns required `[sp, #`, so the slot at
+    offset 0 (`str x20, [sp]`) was never recorded as saved, and `pro` was cleared by the frame record
+    three lines before the first save could arrive. All three sweeps are real now:
+    **arm64 1929 functions / 3556 allocated registers, x86_64 1929 / 2860, x86_64-win 1929 / 2860**,
+    every one saved after the prologue and restored before `leave`/`add sp`, `x18` named nowhere, and
+    `rdi`/`rsi` named **0** times on Win64 (against 15 810 on System V, where they are arguments 1
+    and 2 -- so that half of D11's claim is `x86_allocreg_at`'s range, `{3,12,13,14,15}` by
+    construction).
+  * **The `--opt=1` pass on the four foreign legs is one variable and one loop per script**:
+    `optkey` writes `opt = 1` into the generated `[project]` (`scripts/test-linux.sh`,
+    `scripts/test-windows.sh`, a third argument to a new `build_float_obj` in
+    `scripts/check-float.sh`), and every `tests/mc/09[4-9]*`, `tests/mc/1*` and `tests/float/*` case
+    becomes a SECOND artefact named `<name>-opt` in the same manifest, judged against the same
+    `expect-*` header. **`.github/workflows/ci.yml` needed no change**: the legs are `--build-only`
+    on macOS and `--run-only` on the runner, so the new objects travel in the artifacts that already
+    existed and the run half picks them up from the manifest -- which is the only place a `--opt=1`
+    binary is ever EXECUTED for `x86_64`, `x86_64-win` or `arm64`-on-Windows.
+  * **Ten goldens.** `scripts/bootstrap-linux.sh` and `scripts/bootstrap-windows.sh` each grew the
+    second chain `bootstrap.sh` has had since step A -- `mc1l -O -> mc2lo.o`, `mc2lo -O -> mc3lo.o`,
+    `cmp`, the golden, then `mc2lo` on the PLAIN road compared with `mc2l.o` (the cross-road
+    identity) -- self-skipping when the seed does not accept `--opt=`. The four new files are
+    `mc2-linux-arm64-opt`, `mc2-linux-x86_64-opt`, `mc2-windows-arm64-opt`, `mc2-windows-x86_64-opt`.
+  -- cost, `git diff --numstat main` (the generated `src/bundle_data.mc` excluded):
+  `src/machine_x86_64.mc` **+218/-18, 110 of the added lines neither comment nor blank**;
+  `lib/machine_x86_64_float.mc` +35/-3 and `lib/i128.mc` +27/-1, **40 code**; scripts +337/-41
+  (`check-surface.sh` +91/-8, `check-float.sh` +64/-33, `bootstrap-linux.sh` +64,
+  `bootstrap-windows.sh` +61, `test-linux.sh` +35, `test-windows.sh` +22). The spec priced ~110 for
+  `src/` and the x86 half came in at exactly that.
+  **The plain road does not move, on all THREE machines** (the gate; the goldens move only because
+  `src/machine_x86_64.mc` is bundled and `src/bundle_data.mc` is part of `src/mc.mc`):
+  `build/mc1.pre --backend=elf-obj-x86_64 src/mc.mc` and `build/mc1`'s are `cmp`-**identical**, and
+  so are the two `coff-obj-x86_64` objects; `diff` of `--dump-asm`, of `--dump-asm --machine=x86_64`
+  and of `--dump-asm --machine=x86_64-win` between the two compilers over `src/mc.mc` is **empty**
+  in all three; `check-obj` **32/32 identical to the frozen seed**; and
+  `scripts/check-inert.sh build/mc1.pre build/mc1` (pre = a `mc1` built from `main` db93361) --
+  **33 objects identical on BOTH roads** (`tests/*.mc` and `src/mc.mc`) plus byte-identical artefacts
+  for `examples/api`, `lang`, `conc`, `desktop` and `kernel`.
+  **The sweep**: the four x86 objects of `src/mc.mc` through `llvm-mc`
+  (`-triple=x86_64-linux-musl` and `-triple=x86_64-windows-msvc`) -- plain **1339 (System V) /
+  1337 (Win64)** distinct instructions re-assemble byte for byte, optimized **1666 / 1643**,
+  **0 mismatches** in all four; the pc-relative forms (`jmp`/`jcc`/`call rel32` and
+  `lea r, [rip+d]`, whose operand llvm-objdump prints as an absolute address) are reduced to
+  (mnemonic, the bytes before the four-byte field) and go 4 -> 8 per ABI, the four additions being
+  exactly the four new `jcc` conditions; the mnemonic set goes 38 -> 42 on each, delta
+  `{jg, jge, jl, jle}`.
+  **Performance is NOT measured** (§ 10 row 5): there is no x86-64 machine in this repository's
+  development loop and a reproducible cell is M50's job. The one number available is instruction
+  count: `--dump-asm --machine=x86_64 src/mc.mc` goes **148 042 -> 130 846 lines (-11.6%)** with
+  `--opt=1`, with **20 700** mentions of `rbx`/`r12..r15` against **0** on the plain road; the
+  objects go 1.7 MiB -> 1.7 MiB (ELF) and 1.6 -> 1.5 MiB (COFF).
+  `make check` green end to end (RC 0, zero FAIL): `budget` 2848/3000, `test` 32/32,
+  `check-lex`/`check-ast`/`check-asm` at their counts, `check-obj` **32/32 identical to the frozen
+  seed**, `check-bundle`, `bootstrap` at BOTH fixed points (plain `mc2.o == mc3.o` 1550032 B,
+  optimized `mc2o.o == mc3o.o` 1492272 B, the cross-road identity `mc2o src/mc.mc == mc2.o`, and
+  both `--dump-asm` diffs between `mc1` and `mc2`/`mc2o` **empty**), `check-surface` **154 ok / 0
+  FAIL** including the three real ABI sweeps, `check-opt` 75/75, `test-exe` 32/32, `check-mc`,
+  `check-standalone`, `check-parts`, `check-toml`, `check-build`, `check-pkg`, `check-tool`,
+  `check-stubs`, `check-sysroots`, `check-limits` **17/17 under 90%** (the seed guard is
+  `src/mc_seed.mc`: globals 268/512 = 52%; `src/mc.mc` itself is `globals 446/512`, unchanged),
+  `check-minimal`, **`test-linux` 55/55 on linux/aarch64 and 51/51 on linux/x86_64** (the `-opt`
+  cases among them; `100-opt-opcode` skipped on x86_64, its `#opcode` word being an AArch64 one),
+  the four `--exe` cells, `test-windows` / `test-windows-x86_64` objects cross-compiled and linked,
+  `check-examples`, `check-lang`, `check-conc`, `check-desktop`, **`check-float` ok on all five
+  legs with both roads** (macos/aarch64 19/19, linux/aarch64 **38/38**, linux/x86_64 **38/38**,
+  windows/aarch64 34/34 and windows/x86_64 34/34 objects linked) and its four sweeps at 61 / 70 /
+  311 / 293 distinct instructions, 0 mismatches, `check-wide`, `check-kernel`, `check-avr`,
+  `test-sandbox` 73 ok / 0 failed / 1 skipped, `check-docs` (**206 symbols**, 49 flags, 35 TOML
+  keys, 10 directives, 52 samples, 476 links), `site` + `check-site`.
+  `make check-linux-host` RC 0 over all four cells (aarch64 musl and gnu, x86_64 musl and gnu), each
+  after its own PLAIN fixed point AND its own OPTIMIZED one, each with its own cross-road identity
+  and with the cross proof (`mc2l --backend=macho src/mc.mc` byte for byte the macOS `build/mc2.o`)
+  green.
+  **The ten goldens**, each recorded only after its own criterion: `mc2.sha256`
+  `e965d181727a77ba1a863c032cea6412d23b4962a2f722bd8bf9935a37f80682` and `mc2-opt.sha256`
+  `968037e8f8539896100d24fea34e87e0c9da7b4a44b670df66d9feef8dd6f0d6` (after the two empty
+  `--dump-asm` diffs and the two `cmp`s); the four Linux ones deleted and re-recorded by
+  `make check-linux-host` -- `mc2-linux-arm64.sha256`
+  `1fee89282756dc78ae481ca001bd12c5e50fd220d3f6179e17d01a4506b50052`,
+  `mc2-linux-arm64-opt.sha256`
+  `7028d5a22f5335fc6e6c412a6e7459fa763d39a9e2c74b3d205a9dc109e2a44b`,
+  `mc2-linux-x86_64.sha256`
+  `35b37fdc67b31a46a6d0fe60a07dfbe1b5373b67a8927e5d6357354ed71b1af4`,
+  `mc2-linux-x86_64-opt.sha256`
+  `44ff42f03e24fc3a8e8545070d117a7ad9c3c4df3b78e3779ba190344cff1d86`, each recorded in its musl cell
+  and re-verified by the gnu cell of the same architecture; the four Windows ones cross-computed on
+  macOS per `tests/golden/README.md`, with `--opt=1` added for the two new ones --
+  `mc2-windows-arm64.sha256`
+  `991a1963da104f99105ecc7c57b057d7673690cb0d6bfe602c57d3f809fe2169`,
+  `mc2-windows-arm64-opt.sha256`
+  `d099f12e9c6a9e64fa6ade80027dc290e86d3be7aa19f58cbcbc7cb4d2b0892f`,
+  `mc2-windows-x86_64.sha256`
+  `e43583c1bce51fd0fd05211d59929685f972a00f60cc8912539d55937d462af5`,
+  `mc2-windows-x86_64-opt.sha256`
+  `f95c976c1f02a7ea5dc6556f34760cd6373c215d9ad477fb6e34c480fce796c8`.
+  Docs: `docs/reference/machine.md` (§ "What the x86-64 allocators do (step D2)", the two version 5
+  obligations brought up to date, the allocatable row in the x86 table), `docs/reference/objects.md`
+  § 4b and § 4c (the callee-saved rows on both ABIs, and the corrected arm64 numbers with the
+  vacuity finding on record), `docs/guide/15-optimizing.md` ("on every target `mc` ships", and that
+  the measured table is AArch64's), `docs/bootstrap.md` § "The same chain on every foreign host",
+  `tests/golden/README.md` (ten goldens and how the two new Windows ones are cross-computed),
+  `docs/ci.md`, `docs/specs/M49.md` (row 5 LANDED with the real line count, + twelve implementation
+  notes).
+  **M49 is closed**: A, D1, B, C and D2 are all landed; E (small-leaf inlining, constant
+  propagation) stays deferred to its own spec with its own measurement.
 - Next: the **site + registry server, M47 S4-S6**, in
   `minicompiler/mc-registry`; then **M42 step 2** (PE `--exe`, CI-gated on the Windows runners).
   **M46** only on the owner's request; **M43 Layer 2** after 1.0.0. M13 and M18 stay in the backlog
   (`docs/specs/M13.md`: sizing a program's memory at compile time -- the fixed 4 MiB arena in
   `examples/api/lib/rt.mc` is one more motivating case; M18 is Linux x86 32-bit). From the
-  2026-09-06 benchmark (`docs/comparison.md`): **M49** (a register allocator/peephole/inliner,
-  estimated to close most of the 2.2x gap to `clang -O2` measured on the workload benchmark),
-  **M50** (a reproducible Docker bench cell replacing this host's one-off numbers) and **M51**
+  2026-09-06 benchmark (`docs/comparison.md`): **M49 is CLOSED** (steps A, D1, B, C and D2 --
+  the register allocator, the peephole and hoisting on all five machines `mc` ships; 1.30x of
+  `clang -O2` on the workload, measured on AArch64; step E, inlining and constant propagation,
+  stays deferred to its own spec), and what is left of that batch is
+  **M50** (a reproducible Docker bench cell replacing this host's one-off numbers -- and the only
+  way to measure the x86-64 allocator's speed at all) and **M51**
   (a bundled `<http>` library carrying the `mc-forkka` fork-per-connection-keep-alive shape) —
   the registry server's own move off fork-per-request is `minicompiler/mc-registry`'s work, not
   this repository's.

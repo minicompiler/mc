@@ -80,6 +80,29 @@ The whole block is **skipped, with a printed message**, when `build/mc1` does no
 the frozen seed does not, and neither does any release older than M49, so a bootstrap from an old
 seed still runs stages 1 to 3 exactly as before.
 
+### The same chain on every foreign host (step D2)
+
+Since step D2 the allocator answers on all five machines `mc` ships, so each foreign chain has the
+same second half, with the same three criteria and the same self-skip. `scripts/bootstrap-linux.sh`
+runs `mc1l --opt=1 -> mc2lo.o`, `mc2lo --opt=1 -> mc3lo.o`, `cmp`, the golden, and then
+`mc2lo <entry>` on the plain road compared with `mc2l.o`; `scripts/bootstrap-windows.sh` does the
+same with `mc1w.exe`/`mc2wo.obj`/`mc3wo.obj`. **Ten goldens** live in `tests/golden/` now, five per
+road:
+
+| host | plain | optimized |
+|---|---|---|
+| macos/aarch64 | `mc2.sha256` | `mc2-opt.sha256` |
+| linux/aarch64 | `mc2-linux-arm64.sha256` | `mc2-linux-arm64-opt.sha256` |
+| linux/x86_64 | `mc2-linux-x86_64.sha256` | `mc2-linux-x86_64-opt.sha256` |
+| windows/aarch64 | `mc2-windows-arm64.sha256` | `mc2-windows-arm64-opt.sha256` |
+| windows/x86_64 | `mc2-windows-x86_64.sha256` | `mc2-windows-x86_64-opt.sha256` |
+
+The Linux pair of each road is recorded by `make check-linux-host` (Docker, both architectures, both
+libcs) after that cell's own fixed point; the Windows pair is cross-computed on macOS, `--opt=1`
+added to the command [tests/golden/README.md](../tests/golden/README.md) gives for the plain one.
+An ELF or COFF **object** records no interpreter, so the musl chain and the glibc chain write the
+same `mc2lo.o`, exactly as they write the same `mc2l.o`.
+
 ## The criterion is `mc2.o == mc3.o`, not `mc1.o` vs `mc2.o`
 
 `mc1.o` is produced by `mc0` (clang) compiling `src/mc.mc`; `mc2.o` is produced by `mc1` (the
