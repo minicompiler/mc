@@ -449,6 +449,21 @@ void a64_cmp(i64 cond, i64 d, i64 d2) {
 }
 
 void a64_un(i64 op, i64 d) {
+    // M49 P2: `cset rd, cc` then a logical NOT on the same rd is `cset rd, !cc`.
+    // When the value at this depth was just produced by a cset in the depth's
+    // own register, flip its condition in place and emit nothing at all -- the
+    // negation of any C_* pair (EQ/NE, GE/LT, GT/LE) is exactly `cc ^ 1`, the
+    // same inversion the CSET encoder applies (0x9A9F07E0 | (imm ^ 1) << 12).
+    // Guarded by walk_opt() and by adjacency, like the store rewrite: an
+    // I_LABEL between would BE the last instruction and is not an I_CSET.
+    if (op == MUN_LNOT && walk_opt() != 0 && dalias_at(d) < 0 && in_reg(d)
+            && nins > ins_base) {
+        uptr e = ins_at(nins - 1);
+        if (ins_op(e) == I_CSET && ins_rd(e) == REG_BASE + d) {
+            set_ins_imm(e, ins_imm(e) ^ 1);
+            return;                              // the boolean stays at depth d, now inverted
+        }
+    }
     i64 rd = a64_own(d);                         // operates in place -- never on the local's own register
     if (op == MUN_NEG)      e2(I_NEG, rd, rd);
     else if (op == MUN_NOT) e2(I_MVN, rd, rd);
@@ -563,8 +578,28 @@ void a64_callp(i64 d, i64 na) {
 
 void a64_ret(i64 d)          { e2(I_MOV, 0, val_reg(d, REG_S1)); }
 void a64_jump(i64 l)         { el(I_B, l); }
-void a64_jz(i64 d, i64 l)    { elr(I_CBZ, val_reg(d, REG_S1), l); }
-void a64_jnz(i64 d, i64 l)   { elr(I_CBNZ, val_reg(d, REG_S1), l); }
+
+// M49 P1: `cmp; cset rd, cc` then a branch on that boolean is one `b.cond`.
+// When the value at depth d was just produced by a cset in the depth's own
+// register, drop the cset (I_NOP generates no word) and branch on the flags
+// the cmp left. take_true selects the sense: JNZ (branch when the boolean is
+// true) uses cc; JZ (branch when it is false) uses cc ^ 1 -- the negation of
+// every C_* pair. Returns 1 when fused. The cset's register is dead after the
+// branch at every walker site (gen_if at depth 0, gen_logic overwrites the
+// depth on both paths), so no liveness beyond adjacency is needed.
+i64 a64_fuse_branch(i64 d, i64 l, i64 take_true) {
+    if (walk_opt() == 0 || dalias_at(d) >= 0 || !in_reg(d) || nins <= ins_base) return 0;
+    uptr e = ins_at(nins - 1);
+    if (ins_op(e) != I_CSET || ins_rd(e) != REG_BASE + d) return 0;
+    i64 cc = ins_imm(e);
+    if (take_true == 0) cc = cc ^ 1;
+    set_ins_op(e, I_NOP);                        // the cset is consumed; no boolean survives
+    ins_add(I_BCOND, 0, 0, 0, cc, l, 0);
+    return 1;
+}
+
+void a64_jz(i64 d, i64 l)    { if (!a64_fuse_branch(d, l, 0)) elr(I_CBZ, val_reg(d, REG_S1), l); }
+void a64_jnz(i64 d, i64 l)   { if (!a64_fuse_branch(d, l, 1)) elr(I_CBNZ, val_reg(d, REG_S1), l); }
 void a64_label(i64 l)        { a64_alias_reset(); el(I_LABEL, l); }
 void a64_word(i64 w)         { ins_add(I_EMIT, 0, 0, 0, w, 0, 0); }
 
@@ -780,7 +815,8 @@ void dump_ins(uptr in) {
     if (op == I_LDP_POST) { out_str(1, "  ldp x29, x30, [sp], #16\n");  return; }
     if (op == I_RET)  { out_str(1, "  ret\n"); return; }
     if (op == I_B)    { d_lab("b", ins_label(in)); return; }
-    if (op == I_BCOND){ d_head("b."); out_str(1, cond_name(ins_imm(in))); out_str(1, " L");
+    if (op == I_BCOND){ out_str(1, "  b.");                // not d_head: it pads with a space
+                        out_str(1, cond_name(ins_imm(in))); out_str(1, " L");
                         out_num(1, ins_label(in)); out_str(1, "\n"); return; }
     if (op == I_CBZ || op == I_CBNZ) {
                         if (op == I_CBZ) d_head("cbz"); else d_head("cbnz");
