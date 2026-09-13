@@ -810,6 +810,18 @@ are listed rather than averaged into a number no run produced. It uploads
 `bench-cell-report-<run id>` and appends every cell's page to the run summary with the one
 `gh run download` command that fetches it into `bench/results/<date>-<run id>/`.
 
+Its last step is `bench/cell/gate.py` against the **committed** history under `bench/results/`, and
+what that step can fail is worth stating precisely. **It fails the run on the teeth** —
+`mc --opt=1` no longer beating `--opt=0` on the phase the optimizer is about, per-architecture floors
+from `bench/cell/versions.env` — and on a row that printed the wrong answer, which is the milestone
+row's "a deliberately regressed `mc` build fails the cell". Everything else is an annotation:
+every row's drift against the newest committed run of the same cell id is a `::notice::`, never a
+failure, because the reference is timed once per JOB and a cross-run comparison of that ratio adds
+two independent samples of runner load (measured: a job's own reference median moved 31.8% between
+two consecutive runs). A cell id with nothing committed says `baseline recorded` and passes. **It
+blocks no merge and no release either way**: this workflow runs on neither a pull request nor a tag,
+so the only thing it can fail is its own run.
+
 **Nothing is committed.** `permissions: contents: read`, like the soak: a human opens the
 docs-only pull request, which is the merge discipline the repository already has, and a workflow
 that pushed to `main` would make `autotag.yml` cut a version for a benchmark run.

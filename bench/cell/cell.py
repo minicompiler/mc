@@ -726,7 +726,11 @@ def write_report(path, res, phases):
     L.append("Written by `bench/cell/cell.py` (M50 step A). Absolute seconds are recorded and")
     L.append("never gated; the verdict is the ratio of per-row medians to `%s`, built and timed"
              % res["reference"])
-    L.append("in this same run. See [`../cell/README.md`](../cell/README.md) for the protocol.\n")
+    # A repository-root path and not a relative link: this file is written into
+    # build/bench-cell/<run>/, into a per-cell directory of the merge, and then
+    # committed under bench/results/<date>-<run>/<cell id>/ -- three depths, and
+    # a relative link would be right at one of them (M50 step C).
+    L.append("in this same run. See `bench/cell/README.md` for the protocol.\n")
     L.append("| | |")
     L.append("|---|---|")
     L.append("| cell | `%s` |" % c["id"])

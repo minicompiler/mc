@@ -13,8 +13,8 @@ unverifiable tree label — with two mechanisms:
   gated: the same unchanged `clang -O2` binary of this program has timed 0.420 s, 0.49 s and
   0.52–0.56 s in three sessions on one Mac, a 33% span with nothing changed.
 
-This is **step A + step B**: the runner, the schema, the phase argument and the workflow that runs it
-on three cells. The committed history with its gate (step C) is not here yet.
+All three steps are here: the runner, the schema and the phase argument (A), the workflow that runs
+it on three cells (B), and the committed history with its gate (C).
 
 ## Running it on the three cells
 
@@ -215,6 +215,53 @@ excuse.
 
 `RESULTS.md` — the same run as a page: the header table, one table per phase, the verdict, and the
 skipped rows with their reasons.
+
+## The committed history, and `gate.py`
+
+A run becomes history when a **human** commits it (D8; the workflow keeps `permissions: contents:
+read`, and one that pushed to `main` would make `autotag.yml` cut a version for a benchmark):
+
+```sh
+gh run download <run id> -n bench-cell-report-<run id> \
+   -D bench/results/$(date -u +%Y-%m-%d)-<run id>
+```
+
+which lands `bench/results/<date>-<run id>/<cell id>/{results.json,RESULTS.md}` — the soak's dated
+shape, so a later run sits beside an earlier one instead of overwriting it, and `git blame` over
+`results.json` is the regression history. The first one committed is
+[`../results/2026-09-13-34783020976/`](../results/2026-09-13-34783020976).
+
+`gate.py` reads a fresh run and the **newest committed run of the same cell id**, and answers in
+three registers. It is run by `make bench-cell` and by the workflow's `report` job, and it gates
+exactly one thing:
+
+* **gate** — the teeth (above) and a row that printed the wrong answer. Non-zero exit. Both medians
+  in the tooth come from the same job of the same run, which is why it is the one ratio a cross-run
+  comparison can carry: it drifts 0.13% (`linux-arm64`), 1.6% (`linux-x86_64`) and 5.1%
+  (`macos-arm64`) between two consecutive runs.
+* **report** — every row's `ratio_to_reference` against the committed run's, with `TOLERANCE` as the
+  band, the worst five printed and the count beside them. **Not gated, by measurement.** The
+  reference is timed once per JOB, so a row's ratio carries its own job's reference noise: between
+  two consecutive runs a job's own reference median moved +31.81% (`macos-arm64`'s `mc` job), −23.57%
+  (its `go` job) and −13.27% (`linux-x86_64`'s `mc` job), and inside ONE run the six per-job
+  references of `macos-arm64` spanned 0.556 to 0.719 s for the same `clang -O2` binary. A 5% band
+  held on `linux-arm64` (0 rows over on the whole workload) and failed on the other two, so it is a
+  report here and the per-cell history the committed JSON gives for free is the thing to read.
+* **note** — the reference row's own absolute median against the committed run's, at a 10% threshold
+  (D15), plus a changed CPU model or runner image. Never gating: the same unchanged `clang -O2`
+  binary of this program has timed 0.420 s, 0.49 s and 0.52–0.56 s in three sessions on one Mac. It
+  says whether the machine was the same one, which is the honest replacement for "one host, shared
+  with other work" rather than a claim of quiet.
+
+A cell id with nothing committed says `baseline recorded` and exits 0: the first run on a new cell is
+a baseline, and reading a regression into the only data point would be reading it into nothing. The
+thresholds come from `versions.env` and never from the run being gated — a gate that took its floor
+out of its own artefact would pass whatever the artefact claimed.
+
+```sh
+python3 bench/cell/gate.py bench/cell/report          # a merge's per-cell directories
+python3 bench/cell/gate.py                            # the newest local run under build/bench-cell
+```
 
 ## An optimizer milestone's use of this
 

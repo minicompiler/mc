@@ -693,8 +693,15 @@ bench: build/mc1
 # and results.json + facts.json + RESULTS.md written under build/bench-cell/.
 # A toolchain that is not here is SKIPPED with its reason, never faked. NOT in
 # `make check`, for the same reason `bench` is not: it measures the host.
+# Then the gate (M50 step C): the tooth against the floor versions.env carries
+# for this architecture, and every row's ratio against the newest committed run
+# of the same cell id under bench/results/ -- a report, because a row's ratio
+# carries its own job's reference noise (docs/specs/M50.md § Implementation
+# notes -- step B, item 6). With no argument it gates the newest directory under
+# build/bench-cell; pass the path when CELLFLAGS names its own --out.
 bench-cell: build/mc1
 	python3 bench/cell/cell.py $(CELLFLAGS)
+	python3 bench/cell/gate.py $(GATEFLAGS)
 
 .PHONY: bootstrap-linux mc-linux mc-linux-x86_64 mc-linux-obj mc-linux-x86_64-obj mc-slim mc-linux-slim-obj mc-linux-x86_64-slim-obj mc-windows-slim-obj mc-windows-x86_64-slim-obj
 .PHONY: check-site-linux
