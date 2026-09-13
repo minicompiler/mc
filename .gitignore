@@ -7,3 +7,5 @@ site/public/
 dist/
 site/preview/
 tests/pkg/*/deps/
+bench/*/bin/
+bench/*/obj/

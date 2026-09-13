@@ -1,7 +1,10 @@
 // bench.go -- the benchmark workload in Go
 package main
 
-import "fmt"
+import (
+	"fmt"
+	"os"
+)
 
 const N = 50000000
 const ITERS = 200000000
@@ -48,8 +51,23 @@ func fib(n int64) int64 {
 	return fib(n-1) + fib(n-2)
 }
 
+// No argument runs all three phases in this order (the recorded cross-check);
+// one argument selects one phase by its first byte -- mix, primes, fib.
 func main() {
-	fmt.Println(mix())
-	fmt.Println(primes())
-	fmt.Println(fib(38))
+	p := byte('a')
+	if len(os.Args) > 1 && len(os.Args[1]) > 0 {
+		p = os.Args[1][0]
+	}
+	if p != 'm' && p != 'p' && p != 'f' {
+		p = 'a'
+	}
+	if p == 'm' || p == 'a' {
+		fmt.Println(mix())
+	}
+	if p == 'p' || p == 'a' {
+		fmt.Println(primes())
+	}
+	if p == 'f' || p == 'a' {
+		fmt.Println(fib(38))
+	}
 }

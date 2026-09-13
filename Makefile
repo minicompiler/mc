@@ -687,11 +687,20 @@ clean:
 bench: build/mc1
 	sh bench/run.sh
 
+# One local run of the reproducible cell (M50 step A, docs/specs/M50.md D12):
+# every row whose toolchain is installed, seven interleaved repetitions with the
+# first dropped, `clang -O2` built and timed beside every row as the reference,
+# and results.json + facts.json + RESULTS.md written under build/bench-cell/.
+# A toolchain that is not here is SKIPPED with its reason, never faked. NOT in
+# `make check`, for the same reason `bench` is not: it measures the host.
+bench-cell: build/mc1
+	python3 bench/cell/cell.py $(CELLFLAGS)
+
 .PHONY: bootstrap-linux mc-linux mc-linux-x86_64 mc-linux-obj mc-linux-x86_64-obj mc-slim mc-linux-slim-obj mc-linux-x86_64-slim-obj mc-windows-slim-obj mc-windows-x86_64-slim-obj
 .PHONY: check-site-linux
 .PHONY: check-tool check-linux-host check-skipped check-shim test-sandbox sandbox-trace sandbox-trace-check mc-linux-gnu mc-linux-x86_64-gnu
 .PHONY: bootstrap-windows mc-windows mc-windows-x86_64 mc-windows-obj mc-windows-x86_64-obj
-.PHONY: all stage0 stage0-san test check-lex check-ast check-asm check-obj mc1 mc-seed bootstrap check-surface test-exe bundle check-bundle check-mc check-standalone check-parts check-toml check-build check-pkg check-sysroots check-stubs check-limits sysroot-linux sysroot-linux-x86_64 sysroot-windows sysroot-windows-x86_64 test-linux test-linux-x86_64 test-windows test-windows-x86_64 test-windows-exe test-windows-x86_64-exe check-examples check-lang check-conc check-docs site check-site check budget clean check-desktop check-minimal mcrt-windows mcrt-windows-x86_64 check-float check-wide check-kernel check-avr check-opt test-linux-exe test-linux-x86_64-exe bench
+.PHONY: all stage0 stage0-san test check-lex check-ast check-asm check-obj mc1 mc-seed bootstrap check-surface test-exe bundle check-bundle check-mc check-standalone check-parts check-toml check-build check-pkg check-sysroots check-stubs check-limits sysroot-linux sysroot-linux-x86_64 sysroot-windows sysroot-windows-x86_64 test-linux test-linux-x86_64 test-windows test-windows-x86_64 test-windows-exe test-windows-x86_64-exe check-examples check-lang check-conc check-docs site check-site check budget clean check-desktop check-minimal mcrt-windows mcrt-windows-x86_64 check-float check-wide check-kernel check-avr check-opt test-linux-exe test-linux-x86_64-exe bench bench-cell
 
 # M32: examples/desktop -- a GTK4 application written in mc, and the same
 # application with its widget tree written in a UI language taught by ui.mc.

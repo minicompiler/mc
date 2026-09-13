@@ -46,12 +46,21 @@ fn fib(n: i64) i64 {
     return fib(n - 1) + fib(n - 2);
 }
 
+// No argument runs all three phases in this order (the recorded cross-check);
+// one argument selects one phase by its first byte -- mix, primes, fib.
 pub fn main(init: std.process.Init) !void {
     var buf: [256]u8 = undefined;
     var w = std.Io.File.stdout().writer(init.io, &buf);
     const out = &w.interface;
-    try out.print("{d}\n", .{mix()});
-    try out.print("{d}\n", .{primes()});
-    try out.print("{d}\n", .{fib(38)});
+    var p: u8 = 'a';
+    var it = try std.process.Args.Iterator.initAllocator(init.minimal.args, init.gpa);
+    _ = it.skip();
+    if (it.next()) |a| {
+        if (a.len > 0) p = a[0];
+    }
+    if (p != 'm' and p != 'p' and p != 'f') p = 'a';
+    if (p == 'm' or p == 'a') try out.print("{d}\n", .{mix()});
+    if (p == 'p' or p == 'a') try out.print("{d}\n", .{primes()});
+    if (p == 'f' or p == 'a') try out.print("{d}\n", .{fib(38)});
     try out.flush();
 }

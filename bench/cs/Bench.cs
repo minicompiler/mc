@@ -49,10 +49,14 @@ static class Bench
         return Fib(n - 1) + Fib(n - 2);
     }
 
-    static void Main()
+    // No argument runs all three phases in this order (the recorded
+    // cross-check); one argument selects one phase by its first byte.
+    static void Main(string[] args)
     {
-        Console.WriteLine(Mix());
-        Console.WriteLine(Primes());
-        Console.WriteLine(Fib(38));
+        char p = (args.Length > 0 && args[0].Length > 0) ? args[0][0] : 'a';
+        if (p != 'm' && p != 'p' && p != 'f') p = 'a';
+        if (p == 'm' || p == 'a') Console.WriteLine(Mix());
+        if (p == 'p' || p == 'a') Console.WriteLine(Primes());
+        if (p == 'f' || p == 'a') Console.WriteLine(Fib(38));
     }
 }
