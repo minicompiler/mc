@@ -5724,6 +5724,86 @@ agents (`.claude/agents/`): `stage0-dev` (C23), `mc-dev` (`.mc` code), `reviewer
   notes).
   **M49 is closed**: A, D1, B, C and D2 are all landed; E (small-leaf inlining, constant
   propagation) stays deferred to its own spec with its own measurement.
+- The cpu-cap verdict survives host contention (`docs/specs/M43.md` § Implementation notes -- the
+  cpu-verdict flake, `docs/reference/sandbox.md` § The report): **a measured fraction, not a typed
+  slack.** `stage0/` untouched (2848/3000, the diff against `origin/main` for `stage0/` is empty).
+  Two M49 pull requests hit it in `make check` -- `scripts/test-sandbox.sh`'s `forever` case, a
+  program that spins past its 2 s CPU cap, intermittently reported `killed: signal 9 (SIGKILL)`
+  where the header asks for `killed: cpu limit (2 s)`.
+  * **The mechanism was documented and the number was not.** `RLIMIT_CPU` is soft = hard, so the
+    kernel's cap arrives as SIGKILL (step B's measurement) and J tells it from a program that died
+    for its own reasons by the rusage of that step alone -- which comes back UNDER the cap, because
+    the accounting the kill was decided on is not the accounting `wait4` reports. Step B measured
+    1.997 s for a 2 s cap on a quiet host and wrote `us + 100000 >= cap`.
+  * **That shortfall is PROPORTIONAL to the cap.** Measured on the Lima oracle (Ubuntu 26.04,
+    kernel 7.0.0-30, aarch64, glibc, 4 CPUs) with a temporary fourth field on the `S` line carrying
+    `us`, as the worst `cap - rusage` of each cell over **220 runs**: cap 1 s -> **9.34%**, cap 2 s
+    -> **9.14%** quiet (66.8 ms .. 182.9 ms, n=40), 7.70% with 4 spinners, 9.23% with 8, 9.14% with
+    16, cap 4 s -> **9.10%** (max 363.8 ms), cap 8 s -> **9.13%** (max 730.3 ms). A ceiling of
+    about **9.3% of the cap**, flat across a cap that varies by 8x and a load that varies from idle
+    to four spinners per CPU. A tenth of a second is 5% of a 2 s cap and 0.1% of a day, so the old
+    rule sat below the ceiling at the one cap it was measured at: **quiet, 25 of 40 runs were
+    correct here**, and 31 of 40 with four spinners. Host load moves the distribution around inside
+    that band and was never the cause -- four spinners came out BETTER than idle.
+  * **The rule is a fraction**: `sig == SB_SIGKILL && us * 4 >= sb_time() * 3000000` -- a step that
+    spent three quarters of its CPU budget and then died of SIGKILL spent all of it, three quarters
+    being **2.7x** the worst shortfall ever measured. SIGXCPU stays proof on its own. The SIGKILL
+    gate is new and costs nothing (`RLIMIT_CPU` delivers no other signal here), and it buys one
+    thing: a segfault inside the last quarter of the budget now reads as a segfault where the
+    unconditional comparison would have called it a cap.
+    **Residual**: a step that kills ITSELF with SIGKILL that late reads as a cpu cap. A kill from
+    outside cannot reach the decision -- P's kills (the wall clock, a refusal) take J down with the
+    box through `zap_pid_ns_processes()`, and J is the only process that writes an `S` line.
+  * **Past eight spinners the wall clock wins, correctly**: with 16 spinners on 4 CPUs the program
+    gets ~4/17 of a CPU, so 2 CPU-seconds need ~8.5 s of wall and the default `--wall 5` fires
+    first (`killed: wall clock (5 s)`, exit 124). That is the right answer, which is why the
+    acceptance range is four to eight; with `--wall 30` the cpu verdict is **30/30 at 16 spinners**.
+  -- cost: **one code line** in `src/sandbox_box.mc` (+31/-5 by line count, the other 30 added lines
+  being the measurement written into the doc comment). Zero new globals; `check-limits` **17/17
+  under 90%**, unchanged. `make bundle` re-run BEFORE bootstrapping (101 files, raw 1476608 -> LZ
+  675947, blob 677198 B). Acceptance on the Lima oracle after the fix: `forever` **40/40 correct
+  with 4 spinners** and **40/40 with 8** (before: 7/12, and 25/40 quiet), `sleeper` and every
+  `refused:` case unchanged, `scripts/test-sandbox.sh` **73 ok, 0 failed, 1 skipped** as root AND
+  unprivileged, and `sh scripts/sandbox-trace.sh --check` green (the profile lists were not
+  touched; the sysctl was flipped to 0 for the unprivileged cell and restored to 1).
+  `make check` green end to end (**RC 0, zero FAIL**): `budget` 2848/3000, `check-obj` **32/32
+  identical to the frozen seed**, `check-bundle`, `bootstrap` at BOTH fixed points
+  (`mc2.o == mc3.o`, `mc2o.o == mc3o.o`) with the cross-road identity
+  (`build/mc2o src/mc.mc == build/mc2.o`) and **both `--dump-asm` diffs between `mc1` and `mc2`
+  empty** (plain and `--opt=1`), `check-surface` 32/32, `check-opt`, `test-exe` 32/32,
+  `check-standalone`, `check-parts`, `check-limits` 17/17 under 90%, `test-sandbox` 73 ok / 0
+  failed / 1 skipped, `check-site-linux` 21/21, `check-docs` (206 symbols, 49 flags, 35 TOML keys,
+  10 directives, 52 samples, 476 links).
+  `make check-linux-host` RC 0 over **all four cells** (aarch64 and x86_64 x musl and gnu), each
+  after its own `mc2l.o == mc3l.o` and with the cross proof (`mc2l --backend=macho src/mc.mc` byte
+  for byte the macOS `build/mc2.o`) green.
+  `scripts/check-inert.sh build/mc1.pre build/mc1` (pre = a `mc1` built from `origin/main`
+  075dbec): **33 objects identical on the plain road and 33 on `--opt=1`** (`tests/*.mc` and
+  `src/mc.mc`) plus byte-identical artefacts for `examples/api`, `lang`, `conc`, `desktop` and
+  `kernel` -- the sandbox emits nothing, so nothing the compiler writes could move.
+  **All ten goldens rewritten once**, each only after its own criterion -- the blob is what moved:
+  `mc2.sha256` `e965d181...f80682` ->
+  `75ddb416e234c30e8dd3694d392975d7392cb5be15dffd026ddc9995394ddadc`, `mc2-opt.sha256`
+  `d590a967cfeecb5f02798f23828fd6ebc0f7c5913f072374df4b8718a33f30ae`, both recorded by
+  `scripts/bootstrap.sh` after the two fixed-point comparisons and the two empty `--dump-asm`
+  diffs; the four Linux ones deleted and re-recorded by `make check-linux-host` --
+  `mc2-linux-arm64.sha256`
+  `94719d464d32f6f518a91698cbe7413735b248b049548f38388cadd1c19a1519`,
+  `mc2-linux-arm64-opt.sha256`
+  `9b247032a177b2751262aa9d0bf650ecd39bf4eb91e6471ddf23e4cff04fe7a3`,
+  `mc2-linux-x86_64.sha256`
+  `1ce8389b769aa0a2950639a2d2389ca413ce5b0c53d149c6023fff3500a6c684`,
+  `mc2-linux-x86_64-opt.sha256`
+  `14d7d64184bb127ab5134ec047fb39f05d7c4733f89ba0b125306f1a0bc94899`; the four Windows ones
+  cross-computed per `tests/golden/README.md` -- `mc2-windows-arm64.sha256`
+  `618935bce3def95d80b952d22235267be1c902bdb9ed14b8c57fd086853b1e73` (1585454 B),
+  `mc2-windows-arm64-opt.sha256`
+  `f03c952dd610afab3e737647e169a4c60b0601625528df0b9cc5e93019e9c884` (1527150 B),
+  `mc2-windows-x86_64.sha256`
+  `8f98e6baf86e21de8ebf0c0e4a1eea58e17e3333361dc4a32e2412a31de37c69` (1640198 B),
+  `mc2-windows-x86_64-opt.sha256`
+  `64cc3fe53c505e7cc02b4e9651e267ff08db0d2f13638d89dd1d38bc0dfea192` (1568754 B), all four also
+  written byte for byte by `build/mc2`.
 - Next: the **site + registry server, M47 S4-S6**, in
   `minicompiler/mc-registry`; then **M42 step 2** (PE `--exe`, CI-gated on the Windows runners).
   **M46** only on the owner's request; **M43 Layer 2** after 1.0.0. M13 and M18 stay in the backlog

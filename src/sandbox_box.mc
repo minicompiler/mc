@@ -520,16 +520,42 @@ i64 sb_run_step(i64 step) {
         // SOFT limit and it means nothing else, so it is proof on its own -- but
         // with soft = hard the kernel adds SIGKILL and that is the one that
         // arrives (measured: forever.mc dies of 9, not of 24). And the recorded
-        // time is a shade UNDER the limit when it does: a 2 s cap came back as
-        // 1.997 s of rusage, because the accounting tick that triggered the
-        // kill is not in the total. A tenth of a second of slack is what makes
-        // the comparison mean "it spent its whole budget".
+        // time is UNDER the limit when it does, because the accounting the kill
+        // was decided on is not the accounting wait4 reports.
+        //
+        // That shortfall is PROPORTIONAL TO THE CAP, not a fixed number of
+        // ticks, which is what a tenth of a second of slack got wrong -- it is
+        // 5% of a 2 s cap and 0.1% of a day, so it held on a quiet host at the
+        // one cap it was measured at and nowhere else. Measured on the Lima
+        // oracle (Ubuntu 26.04, kernel 7.0.0-30, aarch64, glibc, 4 CPUs), as
+        // the shortfall cap - rusage over the worst of 220 runs:
+        //
+        //   cap    quiet      4 spinners   8 spinners   16 spinners
+        //   1 s               9.34%
+        //   2 s    9.14%      7.70%        9.23%        9.14%
+        //   4 s               9.10%
+        //   8 s               9.13%
+        //
+        // A ceiling of ~9.3% of the cap, flat across a cap that varies by 8x
+        // and across a load that varies from idle to four spinners per CPU. So
+        // the rule is a FRACTION: a step that spent three quarters of its CPU
+        // budget and then died of SIGKILL spent it all. Three quarters is 2.7x
+        // the worst shortfall ever measured. The SIGKILL is what keeps the rule
+        // narrow, and it costs nothing: RLIMIT_CPU delivers no other signal
+        // here, so the only thing the gate turns away is another signal
+        // arriving that late -- a segfault inside the last quarter of the
+        // budget now reads as a segfault instead of as a cap.
+        //
+        // Residual: a step that kills ITSELF with SIGKILL after spending three
+        // quarters of its budget reads as a cpu cap. A kill from OUTSIDE cannot
+        // reach here -- P's kills (the wall clock, a refusal) take J down with
+        // the box, so an S line is only ever a kill from inside it.
         i64 sig = st & 0x7f;
         i64 us = ld64(sb_ru()) * 1000000 + ld64(sb_ru() + 8)
                + ld64(sb_ru() + 16) * 1000000 + ld64(sb_ru() + 24);
         i64 cpu = 0;
         if (sig == SB_SIGXCPU) cpu = 1;
-        if (us + 100000 >= sb_time() * 1000000) cpu = 1;
+        if (sig == SB_SIGKILL && us * 4 >= sb_time() * 3000000) cpu = 1;
         sb_say_box(tm_cat("S ", tm_cat(tm_num_str(step), tm_cat(" ",
                    tm_cat(tm_num_str(sig), tm_cat(" ",
                    tm_cat(tm_num_str(cpu), "\n")))))));

@@ -394,11 +394,20 @@ sandbox: cannot mount /: EACCES (apparmor restricts unprivileged user namespaces
 |---|---|
 | `compile: exit N` | the compile step ended on its own; always printed, including `exit 0`. When there is no run step it is the box's **terminal** status and `mc sandbox` exits with that same N |
 | `exit N` | the run step ended on its own. `mc sandbox` exits with that same N |
-| `killed: cpu limit (S s)` | a signal ended a step that had spent its whole `--time`. Exit **124** |
+| `killed: cpu limit (S s)` | SIGXCPU ended a step, or SIGKILL ended one that had spent at least three quarters of its `--time`. Exit **124** |
 | `killed: wall clock (S s)` | `--wall` expired and P killed the box. Exit **124** |
 | `killed: signal N (NAME)` | any other signal. Exit **128 + N** |
 | `refused: <what>` | the filter asked and the answer was no. Exit **125**; the five forms are in § The explain channel |
 | `cannot <site>: ERRNO` | the box could not be built. Exit **126** |
+
+Why three quarters, and not "its whole `--time`": with soft = hard the kernel's CPU cap arrives as
+SIGKILL, and the CPU time `wait4` then reports is *short* of the cap, because the accounting the
+kill was decided on is not the accounting `wait4` reports. That shortfall is proportional to the
+cap — measured at up to **9.3% of it** across caps from 1 s to 8 s and loads from idle to four
+spinners per CPU (`docs/specs/M43.md` § Implementation notes -- the cpu-verdict flake). Three
+quarters is 2.7x the worst shortfall measured. The residual is that a step killing *itself* with
+SIGKILL that late reads as a cap; a kill from outside the box cannot reach that decision, because
+P's own kills take down the process that reports it.
 
 `--report FILE` writes the same text to a file **as well as** to stderr (the design said "instead
 of"; both is what a script needs, so that it can compare two runs byte for byte and a person still
