@@ -254,8 +254,35 @@ machine:
   register and no `mov` is emitted. That is what makes `x = x * C + K` end in `add x19, x9, x10` and
   `i = i + 1` in `add x21, x21, x10`.
 
-Measured on `bench/mc/bench.mc`: the `mix` loop body goes from 50 instructions per iteration to 24,
-with no memory traffic at all, and the whole workload from 1.157 s to 0.749 s.
+Two more emission-time peepholes fuse a comparison and the branch that reads it. Neither is a slot
+and neither is a pass: the machine already sees the instruction it just emitted, and each pattern is
+"the instruction I am about to emit consumes the one just emitted and nothing else can". Both are
+guarded by `walk_opt() != 0` and by adjacency — an `I_LABEL` between would BE the last instruction
+and is not an `I_CSET`, so the guard fails and the plain lowering stands.
+
+* **P1 — the branch fusion.** `a64_jz`/`a64_jnz`: when the last instruction is a `cset rd, cc`
+  whose `rd` is the depth's own register, drop it (`I_NOP` generates no word) and branch on the
+  flags the preceding `cmp` left. `JNZ` (branch when the boolean is true) emits `b.cc`; `JZ`
+  (branch when it is false) emits `b.<cc ^ 1>` — the negation of every `C_*` pair (EQ/NE, GE/LT,
+  GT/LE) is exactly `cc ^ 1`, the same inversion the `cset` encoder itself applies. The `cset`'s
+  register is dead after a branch at every walker site (`gen_if` at depth 0, `gen_logic` overwrites
+  the depth on both paths), so no liveness beyond adjacency is needed.
+* **P2 — the LNOT flip.** `a64_un` for `MUN_LNOT`: when the last instruction is a `cset rd, cc` on
+  the depth's register, flip its condition in place (`cset rd, cc ^ 1`) and emit nothing — instead
+  of the plain `cmp #0; cset eq` a logical NOT would otherwise cost.
+
+`b.<cond>` (`I_BCOND`) is the **one instruction form the peephole adds to the sweep**; it was already
+encoded, dumped and in `lib/backend_arm64.mc` and simply had no emitter before. Together P1 and P2
+turn the prelude's five-instruction `while` condition — `cmp; cset lt; cmp #0; cset eq; cbz` — into
+`cmp; b.lt` plus the loop's own unconditional branch.
+
+Measured on `bench/mc/bench.mc` (Apple M4, `--exe --opt=1`, best of 7 interleaved with the
+reference): the `mix` loop body goes from 50 instructions per iteration to 24 and the whole
+workload from 0.78 s on the plain road to 0.55 s, against 0.42 s for `clang -O2`. The branch
+peephole's own share of that is at the edge of this host's 10 ms timer: `mix` 0.22 -> 0.21 s,
+`primes` 0.20 -> 0.19 s, `fib` 0.13 s unchanged. What it does move plainly is the instruction
+count -- `--dump-asm` of the workload goes from 330 lines to 312, and the `while` condition above
+from five instructions to two.
 
 The operator vocabulary the tasks speak:
 

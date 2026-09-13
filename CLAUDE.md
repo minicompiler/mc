@@ -5286,6 +5286,121 @@ agents (`.claude/agents/`): `stage0-dev` (C23), `mc-dev` (`.mc` code), `reviewer
   `hooks.md` (`host_getcwd`), `packages.md`, `diagnostics.md`. The M48 spec's `mclib`/LSP references are superseded
   (stdlib is M52; the LSP is M28).
 
+- M49 step B ✔ (`docs/specs/M49.md` § 6, § 10 row B): **the arm64 machine-private peephole
+  (P1 + P2)** -- `cmp; cset; JZ/JNZ` fuses to one `b.<cond>`, and a `cset` feeding a logical NOT
+  flips its condition in place. `stage0/` untouched (2848/3000, `git diff main -- stage0/` empty).
+  All in `src/machine_arm64.mc`, **39 added / 3 removed, 22 of the added lines neither comment nor
+  blank**; **zero globals added** -- the peephole holds no state, it reads `nins` and
+  `ins_at(nins - 1)` -- `build/mc1 limits src/mc.mc` reports `globals 446/512` on this branch and
+  **446 on `main`**, with `lowered` 1905 -> 1906, the one new function being `a64_fuse_branch`.
+  (§ 9.8 asks for "at or below 443/512"; 443 was the count at step A and `main` has been at 446
+  since -- step B moves it by 0.) The gated seed guard `check-limits` is **17/17 under 90%**, its
+  tightest row `globals 268/512 = 52%` on `src/mc_seed.mc`.
+  * **P1** (`a64_jz`/`a64_jnz`, through the shared `a64_fuse_branch`): when `walk_opt() != 0`, the
+    depth is unaliased and in a register, and the last emitted `Ins` is a `cset rd, cc` with
+    `rd == REG_BASE + d`, that `cset` becomes `I_NOP` (which generates no word) and a `b.<cond>`
+    branches on the flags the preceding `cmp` left -- `b.cc` for `JNZ` (branch when the boolean is
+    true), `b.<cc ^ 1>` for `JZ` (branch when it is false). The negation of every `C_*` pair
+    (EQ 0 / NE 1, GE 10 / LT 11, GT 12 / LE 13) is exactly `cc ^ 1`, the same inversion the `cset`
+    encoder already applies. Guarded by adjacency in `a64_reg_store`'s shape (`nins > ins_base`,
+    the opcode compared), so an `I_LABEL` between would BE the last `Ins` and fails the test.
+  * **P2** (`a64_un`, `MUN_LNOT`): when the last `Ins` is a `cset rd, cc` on the depth's own
+    register, `set_ins_imm(e, ins_imm(e) ^ 1)` flips it in place and the LNOT emits nothing --
+    instead of the `cmp #0; cset eq` the plain lowering costs.
+  * **One defect the step made observable, fixed with it**: `I_BCOND` was encoded, dumped and in
+    `lib/backend_arm64.mc` since M17, but no task had ever emitted it, so its dump line was dead
+    code -- and it went through `d_head`, which appends the mnemonic/operand space, so the first
+    `--dump-asm` of a fused branch read **`b. lt L4`**, which no assembler accepts and which
+    contradicts the `cmp; b.lt` this branch documents. One line (`out_str(1, "  b.")` instead of
+    `d_head("b.")`); it is the dump path only, and the proof is that the `--exe` binaries of the
+    three benchmark phases are **`cmp`-identical before and after it** (same basename: M11's
+    signature identifier).
+  * **The sweep** (§ 9.6), `build/mc1 --opt=1 src/mc.mc` against its own plain object, under
+    `llvm-mc`/`llvm-objdump -triple=arm64-apple-macos`: **2381 distinct non-pc-relative
+    instructions re-assemble byte for byte, 0 mismatches**; **25558 pc-relative displacements
+    decoded out of the raw word and checked against the target the disassembler printed, 0 wrong**
+    (3033 of them `b.<cond>`: ne 1415, lt 719, eq 449, ge 298, le 115, gt 37); the set of distinct
+    mnemonics goes **32 -> 38** and the difference is **exactly the six `b.<cond>` forms, with none
+    removed**; and each of the six, assembled to an object with `imm19 = 2`, is byte for byte the
+    encoder's own `0x54000000 | (imm19 << 5) | cc` (`b.eq` 0x54000040, `b.ne` 41, `b.ge` 4a,
+    `b.lt` 4b, `b.gt` 4c, `b.le` 4d).
+  * **The plain road does not move** -- the three proofs, since the goldens DO move (the compiler's
+    own source grew, so `src/bundle_data.mc` and therefore `build/mc2.o` move through the blob, the
+    M41 precedent): `check-obj` **32/32 objects identical to the frozen seed**;
+    `diff <(build/mc1 --dump-asm src/mc.mc) <(build/mc2 --dump-asm src/mc.mc)` **empty** (and the
+    same diff with `--opt=1` on both sides is empty too); and
+    `scripts/check-inert.sh <mc1 from main c7b8cfc> build/mc1` -- **33 objects identical**
+    (`tests/*.mc` and `src/mc.mc`) plus byte-identical artefacts for `examples/api`, `lang`,
+    `conc`, `desktop` and `kernel` through the taught compiler each side builds. On the OPTIMIZED
+    road the same script reports a difference for **19 of the 32 tests and for `src/mc.mc`** --
+    every program whose lowering contains a comparison feeding a branch, which is what this step
+    is for.
+  * **Fixed points and the cross-road identity** (`make bootstrap`, inside `make check`): plain
+    `mc2.o == mc3.o` (1532648 B), optimized `mc2o.o == mc3o.o` (1478504 B), and
+    **`build/mc2o src/mc.mc == build/mc2.o`** -- the optimized compiler computes exactly the
+    compiler the plain one computes. The optimizer's own cost (§ 9.3): `mc1 --opt=1 src/mc.mc`
+    1.119 s against the plain road's 0.954 s (**1.17x**, bound 1.3x), and the optimized compiler
+    compiles `src/mc.mc` plain in **0.855 s**, faster than `mc1`'s 0.954 s.
+  * **The workload** (this host, Apple M4, `build/mc1 --exe --opt=1`, wall clock, best of 7 for the
+    phases and 5 for the whole, each interleaved with its reference): `mix` **0.21 s** (gate
+    <= 0.28), `primes` **0.19 s** (gate <= 0.21), `fib` **0.13 s** (gate <= 0.18) -- all three met;
+    the whole workload **0.55 s** against the plain road's 0.78 s and `clang -O2`'s 0.42 s
+    (**1.31x**). Step B's OWN share, measured against a `mc1` built from `main` (allocator only,
+    same three sources, interleaved): `mix` 0.22 -> 0.21, `primes` 0.20 -> 0.19, `fib` 0.13
+    unchanged, the whole 0.56 -> 0.55 -- **1 to 5%, at the edge of a 10 ms timer**, which is
+    § 1.2's own prediction ("P1 + P2 alone, 0": the loops are latency-bound on the frame traffic
+    the allocator already removed). What the peephole moves plainly is the instruction count:
+    `--dump-asm` of `bench/mc/bench.mc` goes **370 (plain) -> 330 (allocator) -> 312**, and `_mix`'s
+    condition `cmp x21, x10; cset x9, lt; cmp x9, #0; cset x9, eq; cbz x9, L3` becomes
+    `cmp x21, x10; b.lt L4`. Step B does NOT close the milestone's 1.3x -- that is step C's gate.
+    Code size (§ 9.9): `__text` of `src/mc.mc` **478 944 B with `--opt=1` against 533 076 B plain**.
+  * `check-opt` **72/72** (every `tests/*.mc` and `tests/mc/*.mc` compiled, linked and run on both
+    roads with the same exit code and stdout; 18 `tests/float/*.mc` under `--opt=1`;
+    `examples/lang` and `conc` with the same stdout on both roads; `api` and `desktop` built both
+    ways), with the `--dump-asm` identity for candidate-free programs at **10 of 48** (001, 002,
+    003, 022, 023, 031, 033, 043, 056, 061) and 38 changed. `check-surface` 32/32 plus **150 ok**,
+    including the tenth ABI assertion with `--opt=1` (**1906 functions, 3435 allocated registers,
+    every one saved and restored, `x18` never named**) and `lib/machine_probe.mc` on both roads
+    (**66739 tasks, 0 v5 slot calls plain, 23619 with `--opt=1`, object identical to the bundled
+    machine's**). `examples/kernel`'s image (3304 B) and `examples/avr`'s ELF (15255 B) are
+    `cmp`-identical on both roads with no edit to either machine (the null-slot rule).
+  -- `make bundle` re-run BEFORE bootstrapping (101 files, raw 1453368 -> LZ 666436, blob
+  667687 B). `make check` green end to end (**RC 0, zero FAIL**, 11m55s): `budget` 2848/3000,
+  `test` 32/32, `check-lex` 177/177 (5 skipped), `check-ast` 178/178, `check-asm` 178/178,
+  `check-obj` **32/32 identical to the frozen seed** and 32/32 `arm64-surface` against `macho`,
+  `check-bundle`, `bootstrap` at both fixed points with the cross-road identity, `check-surface`
+  32/32, **`check-opt` 72/72**, `test-exe` 32/32, `check-mc` 21/21, `check-standalone`,
+  `check-parts`, `check-toml` 10/10, `check-build` 55/55, `check-pkg`, `check-tool`,
+  `check-sysroots` (13 rows), `check-stubs` 9/9, `check-limits` **17/17 under 90%**,
+  `check-minimal`, `test-linux` 46/46 and `test-linux-x86_64` 43/43, the four `--exe` cells 49/49
+  (aarch64 musl) + 49/49 (aarch64 gnu) + 46/46 (x86_64 musl) + 46/46 (x86_64 gnu),
+  `test-windows` 47/47 and `test-windows-x86_64` 44/44 objects cross-compiled, `test-windows-x86_64-exe`
+  24/24 PE tests, `check-examples`, `check-lang`, `check-conc`, `check-desktop`, `check-float`,
+  `check-wide`, `check-kernel`, `check-avr`, `test-sandbox` 73 ok / 0 failed / 1 skipped,
+  `check-docs` (206 symbols, 49 flags, 35 TOML keys, 10 directives, 52 samples, 475 links),
+  `site` + `check-site` + `check-site-linux`. `make check-linux-host` **RC 0 over all four cells**
+  (aarch64 musl: suite 46/46, `test-exe` 31/31; aarch64 gnu 47/47 native; x86_64 musl 43/43,
+  `test-exe` 29/29; x86_64 gnu 44/44 native), each after its own `mc2l.o == mc3l.o` and with the
+  cross proof (`mc2l --backend=macho src/mc.mc` byte for byte the macOS `build/mc2.o`) green.
+  **All six goldens rewritten once**, each only after its own criterion: `mc2.sha256`
+  `fbb80de1...54d3ad` -> `f140a7dc02c70543a2e8408970c7be42a9332681fbc13100f3da29e37fb5f131` and
+  `mc2-opt.sha256` `a9ce5e1b...92c710c` ->
+  `03a049d8548eae6688068a30a7397a8342ab8afac61fbdc3cadec786bc9a4bb6` (both recorded by
+  `make bootstrap`, after the empty `--dump-asm` diff and the two `cmp`s); the Linux pair deleted
+  and re-recorded by `make check-linux-host` -- `mc2-linux-arm64.sha256`
+  `159cf862a17abfc89319fa0e16782b32472c5e6a19f9effc40c22eb4f60cac4f`,
+  `mc2-linux-x86_64.sha256`
+  `78d3ba7baeb3ea5edd22e45d597441e694179e21cd4c5fecb4cf967cf2846cf7`, each recorded in its musl
+  cell and re-verified by the gnu cell of the same architecture; the Windows pair cross-computed
+  per `tests/golden/README.md` -- `mc2-windows-arm64.sha256`
+  `22afd188b8f50de7d2738af9cec244d3eed91aa1523223b42f211b3a26d40079` (1 566 900 B),
+  `mc2-windows-x86_64.sha256`
+  `47e7e9330a10a33c00add98c7936f3a6ecbc20101de46f850c29b1ef2d57652e` (1 620 348 B), both also
+  written byte for byte by `build/mc2`.
+  Docs: `docs/reference/machine.md` § What the arm64 allocator does (P1 and P2 beside P3/P4, the
+  "`b.<cond>` is the one new form" note and the measured paragraph), `docs/specs/M49.md` § 10 row B
+  marked LANDED with the real line count and the real numbers. `docs/comparison.md` and
+  `bench/RESULTS.md` stay for step C, which owns the milestone's headline ratio (§ 8).
 - Next: the **site + registry server, M47 S4-S6**, in
   `minicompiler/mc-registry`; then **M42 step 2** (PE `--exe`, CI-gated on the Windows runners).
   **M46** only on the owner's request; **M43 Layer 2** after 1.0.0. M13 and M18 stay in the backlog
