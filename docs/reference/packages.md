@@ -510,6 +510,18 @@ with the same layout is a registry too, read in place, which is what a private t
 `git clone` and one line of TOML. A URL registry is fetched one file at a time into
 `<libs>/index/<name>.toml`, the snapshot every later `mc pkg` in that project reads.
 
+**When the snapshot is refreshed.** It is a cache of a file that gains rows over time, so it is
+refreshed — at most once per package per command — by every `mc pkg` invocation that carries
+`--yes`, which is what says "you may download": `sync`, `add`, `mc update`, `mc install` and
+`mc upgrade`. Without `--yes` nothing is downloaded and the snapshot is read exactly as it is,
+which is the offline read it exists for; a version the snapshot does not have then comes out as
+the index-fetch **plan** (`fetch  index <name>` and
+`nothing was downloaded: re-run with --yes`, exit 0) rather than as a refusal, because a snapshot
+older than the registry cannot say that a version does not exist. With `--yes` the refusal
+`<name> <version>: no such version in the registry` is raised only after the refresh.
+`mc build` is not involved either way: it reads `mc.lock` and never reads the index at all, which
+is what makes a build reproducible and offline whatever the registry does afterwards.
+
 Publishing into that server is a website, a GitHub Release and a CI action, none of it in the
 compiler: [guide/27-publishing.md](../guide/27-publishing.md). An account there may hold API
 tokens (`/me` > Tokens, scope `poll` only) with which the CI action polls a repository as the

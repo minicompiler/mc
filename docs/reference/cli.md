@@ -354,7 +354,7 @@ from its `mc.lock` and its `deps/` tree.
 |---|---|
 | `--yes` | actually download, **and accept the permissions printed with the plan**. Without it, anything that would fetch prints the plan — source, expected tree hash, destination — says `nothing was downloaded: re-run with --yes` and exits 0. There is no prompt: `mc` has no `isatty`. When a package in the build list asks for a permission the current `mc.lock` does not already record as accepted, the plan carries the permission table too, the last line becomes `nothing was downloaded: re-run with --yes to fetch and to accept the permissions above`, and `sync` stops there even when there is nothing to download |
 | `--long` | `mc pkg list` only: under each row, the reason each permission was declared for, read out of the package's own tree |
-| `--registry URL\|DIR` | where the index lives, instead of `[registry].url` or the default `https://pkg.minicompiler.dev`. A directory is read in place; a URL is fetched into `<libs>/index/<name>.toml`, the offline snapshot |
+| `--registry URL\|DIR` | where the index lives, instead of `[registry].url` or the default `https://pkg.minicompiler.dev`. A directory is read in place; a URL is fetched into `<libs>/index/<name>.toml`, the offline snapshot — **refreshed once per package by any command carrying `--yes`**, and read as it is without one ([packages.md](packages.md) § 10) |
 | `--libs-dir DIR` | where installed packages live, instead of `~/.mc/libs`. `mc build` takes it too, so no CI job depends on `HOME` |
 | `--config FILE` | the project file, instead of `DIR/mc.toml` |
 
