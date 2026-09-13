@@ -1,6 +1,6 @@
 # ci.md — the GitHub Actions workflows
 
-Five workflows live in `.github/workflows/`. Two constraints shape them.
+Seven workflows live in `.github/workflows/`. Two constraints shape them.
 
 **The C seed is macOS-first, and only the seed.** `stage0/*.c` emits Mach-O and only Mach-O, so
 everything that compares the `.mc` compiler against that frozen oracle has to run on `macos-15`.
@@ -22,9 +22,12 @@ the release. The contributor-facing half of that is
 | `tag.yml` | manual | `ubuntu-24.04` | the escape hatch: validates `X.Y.Z` against the newest tag, pushes the tag and starts `release.yml` |
 | `release.yml` | dispatched by `autotag.yml`/`tag.yml`, tag `v*`, or manual | `macos-15` + `ubuntu-24.04-arm` + `ubuntu-latest` | builds `mc` for macOS, cross-compiles the two Linux objects, links and bootstraps each on its own architecture, packages all three, publishes the GitHub Release, then announces the tag to the mc package registry |
 | `site.yml` | push to `main` touching `site/**` or `docs/**`, or manual | `macos-15` + `ubuntu-24.04` | renders `docs/` with `mcsite` and deploys it to GitHub Pages (<https://minicompiler.dev>) |
+| `bench-soak.yml` | manual, weekly (Sunday 03:00 UTC) | `ubuntu-latest`, one runner per server | the 60-minute HTTP soak: every minimal server of `bench/http`/`bench/http2` at a fixed request rate for the same hour |
+| `bench-cell.yml` | manual, weekly (Sunday 06:00 UTC) | `macos-15` + `ubuntu-24.04-arm` + `ubuntu-latest`, one runner per (cell, toolchain) | the reproducible bench cell: the integer workload of `bench/` timed against a `clang -O2` reference built and timed in the same job |
 
-All five set `concurrency` groups and per-job `timeout-minutes`, and each declares the narrowest
-`permissions` it needs.
+All seven set `concurrency` groups and per-job `timeout-minutes`, and each declares the narrowest
+`permissions` it needs. The two `bench-*` workflows measure and never gate: neither is a required
+check and neither runs on a push, a pull request or a tag.
 
 ## Who touches what
 
@@ -760,6 +763,60 @@ then `bench/soak/build.sh`, and `bench/soak/soak.py` with the server under `task
 `concurrency: group: bench-soak` without `cancel-in-progress`: a second dispatch queues behind
 the first instead of sharing the hour. It is not a required check and never will be: it measures,
 it does not gate.
+
+---
+
+## `bench-cell.yml`
+
+The reproducible bench cell of [`specs/M50.md`](specs/M50.md): the integer workload of `bench/`
+timed on three cells, **one job per toolchain**, with `clang -O2` of `bench/c/bench.c` built and
+timed *inside every job* as the reference. `workflow_dispatch` (inputs `cells` `all` or a comma
+list, `reps` 7, `mc-version` a release tag, `ref` a commit to build `mc` from) and a weekly
+`schedule` at **Sunday 06:00 UTC**, three hours after the soak's hour so the two never queue
+against each other. Never on a push, a pull request or a tag, and not in `make check`: the numbers
+depend on the host's CPU, its load and the installed toolchain versions, which `make check` must
+not.
+
+Three jobs.
+
+`plan` (`ubuntu-latest`, 5 min) turns the `cells` input into a JSON list of (cell, toolchain)
+pairs with `bench/cell/cell.py --plan`, so an unknown cell name fails **there**, before eighteen
+runners are spent, and the cell-to-release-target map lives in one place —
+`bench/cell/cell.py`'s `CELLS`, which `make bench-cell` reads too.
+
+`cell` is a matrix over that list, `fail-fast: false`, `runs-on: ${{ matrix.job.runner }}`,
+`timeout-minutes: 30`. The unit is a **toolchain** and not a row, because a job's cost is its
+toolchain install (seconds of timing against minutes of `setup-*`) and the reference has to be
+measured in the same job, on the same core, in the same minute as the rows it is compared against.
+Each job reads the five pins it needs out of `bench/cell/versions.env`
+(`CLANG_APT`, `GO_VERSION`, `ZIG_VERSION`, `RUST_VERSION`, `DOTNET_VERSION` — the repetition
+schedule and the two thresholds are read from the same file by `cell.py` itself, so the workflow
+never carries a second copy), installs `clang-18` by version on Linux and records Apple's as it
+prints itself on macOS, installs **only** its own toolchain
+(`actions/setup-go@v5` with an exact `go-version`, `mlugg/setup-zig@v2`,
+`dtolnay/rust-toolchain@stable` with `toolchain:`, `actions/setup-dotnet@v4`), and for the `mc`
+job downloads `mc-<ver>-<target>.tar.gz` plus its `.sha256` from the newest release and verifies
+the checksum **before unpacking** — the soak's step, and what closes
+[`comparison.md`](comparison.md) § Conditions' second caveat for good. With `ref` set, `macos-15`
+builds `mc` from that commit with `make mc1` instead and records the commit; the two Linux cells
+print that the tree road is deferred (it needs `ci.yml`'s two-stage cross-compile-and-link dance)
+and measure a release. Then `cell.py` runs, and each job uploads
+`bench-cell-<cell>-<toolchain>-<run id>` with 90-day retention.
+
+`report` (`needs: cell`, `if: always()`) downloads every artifact and runs
+`cell.py --merge`, which writes **one `results.json` and one `RESULTS.md` per cell**: a row keeps
+the ratio its own job measured, gains a column naming that job, and the per-job reference medians
+are listed rather than averaged into a number no run produced. It uploads
+`bench-cell-report-<run id>` and appends every cell's page to the run summary with the one
+`gh run download` command that fetches it into `bench/results/<date>-<run id>/`.
+
+**Nothing is committed.** `permissions: contents: read`, like the soak: a human opens the
+docs-only pull request, which is the merge discipline the repository already has, and a workflow
+that pushed to `main` would make `autotag.yml` cut a version for a benchmark run.
+
+The price is a number, not a guess: every job records its own wall clock into `minutes.txt` and
+the merged report carries the per-job breakdown and the total, which is what makes the weekly
+cron's cost auditable.
 
 ---
 

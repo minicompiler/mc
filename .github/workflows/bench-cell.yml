@@ -1,0 +1,299 @@
+# bench-cell.yml -- the reproducible bench cell: the integer workload of
+# bench/ timed on three cells, ONE JOB PER TOOLCHAIN, with `clang -O2` of
+# bench/c/bench.c built and timed INSIDE every job as the reference
+# (docs/specs/M50.md, bench/cell/README.md).
+#
+# Why a job per toolchain and not per row: a job's cost is its toolchain
+# install -- seconds of timing against minutes of `setup-*` -- and the reference
+# has to be measured in the same job as the rows it is compared against, on the
+# same core, in the same minute. The verdict is that ratio; absolute seconds are
+# recorded and NEVER gated, because the same unchanged `clang -O2` binary of
+# this program has timed 0.420 s, 0.49 s and 0.52-0.56 s in three sessions on
+# one Mac (docs/specs/M50.md section 1.1).
+#
+# Never on a push, a pull request or a tag: it costs runner minutes and measures
+# nothing a commit can break. Dispatched by hand
+# (`gh workflow run bench-cell.yml -f cells=ubuntu-latest`) or by the weekly
+# schedule, which runs after bench-soak's 03:00 hour so the two never queue
+# against each other.
+#
+# Shape: `plan` turns the `cells` input into a (cell, toolchain) matrix with
+# `bench/cell/cell.py --plan` (an unknown cell fails THERE, before eighteen
+# runners are spent); `cell` is one job per pair, installing ONLY that
+# toolchain at the version pinned in bench/cell/versions.env; `report`
+# collects every job's artifact and merges it into one results.json and one
+# RESULTS.md PER CELL. Nothing is committed: the workflow keeps
+# `contents: read` and prints the command that fetches the artefact
+# (docs/specs/M50.md D8).
+name: bench-cell
+
+on:
+  workflow_dispatch:
+    inputs:
+      cells:
+        description: "all, or a comma list of macos-15, ubuntu-24.04-arm, ubuntu-latest"
+        default: "all"
+        type: string
+      reps:
+        description: "repetitions per row (the first is always dropped)"
+        default: "7"
+        type: string
+      mc-version:
+        description: "mc release tag to measure (empty: the latest release)"
+        default: ""
+        type: string
+      ref:
+        description: "build mc from this commit instead of a release (macos-15 only; the Linux tree road is deferred)"
+        default: ""
+        type: string
+  schedule:
+    - cron: "0 6 * * 0"   # Sunday 06:00 UTC, after bench-soak's 03:00 hour
+
+permissions:
+  contents: read
+
+# two dispatches queue: they never share a runner's worth of results
+concurrency:
+  group: bench-cell
+  cancel-in-progress: false
+
+env:
+  # the schedule carries no inputs: every empty value is the dispatch default
+  CELLS: ${{ inputs.cells || 'all' }}
+  REPS: ${{ inputs.reps || '7' }}
+  MC_VERSION: ${{ inputs.mc-version }}
+  TREE_REF: ${{ inputs.ref }}
+
+jobs:
+  plan:
+    name: plan the matrix
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      jobs: ${{ steps.pick.outputs.jobs }}
+      cells: ${{ steps.pick.outputs.cells }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Pick the (cell, toolchain) pairs
+        id: pick
+        run: python3 bench/cell/cell.py --plan "$CELLS" | tee -a "$GITHUB_OUTPUT"
+
+  cell:
+    name: ${{ matrix.job.cell }} / ${{ matrix.job.toolchain }}
+    needs: plan
+    runs-on: ${{ matrix.job.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        job: ${{ fromJSON(needs.plan.outputs.jobs) }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      OUT: bench/cell/out/${{ matrix.job.cell }}-${{ matrix.job.toolchain }}
+    steps:
+      # acceptance 9: the cron's price is a number, per job and per run
+      - name: Start the clock
+        run: echo "JOB_T0=$(date +%s)" >> "$GITHUB_ENV"
+
+      - name: Check out
+        uses: actions/checkout@v4
+
+      # The five names a `setup-*` action needs, and only those: `REPS` and the
+      # thresholds are read by cell.py from the same file, so exporting them
+      # here would be a second copy racing this workflow's own `env:` block.
+      # (`cat` of the whole file would also fail: it carries comments.)
+      - name: Read the pins from bench/cell/versions.env
+        run: |
+          grep -E '^(CLANG_APT|GO_VERSION|ZIG_VERSION|RUST_VERSION|DOTNET_VERSION)=' \
+            bench/cell/versions.env | tee -a "$GITHUB_ENV"
+
+      - name: Runner facts
+        run: |
+          uname -a
+          echo "ImageOS=$ImageOS ImageVersion=$ImageVersion"
+          python3 --version
+          if [ "$RUNNER_OS" = Linux ]; then
+            nproc; grep -m1 'model name' /proc/cpuinfo || true; free -m
+            cat /etc/os-release; taskset --version
+          else
+            sysctl -n machdep.cpu.brand_string hw.ncpu hw.memsize; sw_vers
+          fi
+
+      # --- the reference, in EVERY job: clang needs no install anywhere -------
+      - name: Install ${{ env.CLANG_APT }} (the reference compiler)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends "$CLANG_APT"
+          echo "CC=$CLANG_APT" >> "$GITHUB_ENV"
+          "$CLANG_APT" --version | head -1
+
+      - name: Apple clang, recorded and not pinned (a macOS runner has no other)
+        if: runner.os == 'macOS'
+        run: clang --version | head -1
+
+      # --- mc: a release with its .sha256 verified BEFORE unpacking ----------
+      - name: Install mc (release, checksum verified)
+        if: matrix.job.toolchain == 'mc' && (env.TREE_REF == '' || runner.os == 'Linux')
+        run: |
+          if [ -n "$TREE_REF" ]; then
+            echo "note: the tree road is deferred on Linux (docs/specs/M50.md section 3.2);"
+            echo "note: measuring a release instead."
+          fi
+          tag="$MC_VERSION"
+          [ -n "$tag" ] || tag=$(gh release view -R "$GITHUB_REPOSITORY" --json tagName -q .tagName)
+          ver=${tag#v}
+          asset="mc-$ver-${{ matrix.job.target }}.tar.gz"
+          gh release download "$tag" -R "$GITHUB_REPOSITORY" -p "$asset" -p "$asset.sha256" -D dl
+          cd dl
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum -c "$asset.sha256"
+            sum=$(sha256sum "$asset" | awk '{print $1}')
+          else
+            shasum -a 256 -c "$asset.sha256"
+            sum=$(shasum -a 256 "$asset" | awk '{print $1}')
+          fi
+          tar xzf "$asset"
+          sudo mkdir -p /usr/local/bin
+          sudo install -m 755 "mc-$ver-${{ matrix.job.target }}/mc" /usr/local/bin/mc
+          cd ..
+          {
+            echo "MC_ROAD=release"
+            echo "MC_TAG=$tag"
+            echo "MC_ASSET=$asset"
+            echo "MC_ASSET_SHA256=$sum"
+            echo "MC=/usr/local/bin/mc"
+          } >> "$GITHUB_ENV"
+          mc --version
+          mc --host
+
+      # D6's second road. Only macos-15: on the Linux cells building mc from a
+      # tree needs ci.yml's two-stage dance (cross-compile the ELF object on
+      # macOS, link it on the runner), which this milestone defers.
+      - name: Build mc from ${{ env.TREE_REF }} (tree road, macOS)
+        if: matrix.job.toolchain == 'mc' && env.TREE_REF != '' && runner.os == 'macOS'
+        run: |
+          git fetch --depth 1 origin "$TREE_REF"
+          git checkout FETCH_HEAD -- .
+          make mc1
+          {
+            echo "MC_ROAD=tree"
+            echo "MC_COMMIT=$(git rev-parse FETCH_HEAD)"
+            echo "MC=$PWD/build/mc1"
+          } >> "$GITHUB_ENV"
+          ./build/mc1 --version
+
+      # --- ONE toolchain per job, at the version versions.env pins -----------
+      - name: Set up Go ${{ env.GO_VERSION }}
+        if: matrix.job.toolchain == 'go'
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+
+      - name: Set up Zig ${{ env.ZIG_VERSION }}
+        if: matrix.job.toolchain == 'zig'
+        uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+
+      - name: Set up Rust ${{ env.RUST_VERSION }}
+        if: matrix.job.toolchain == 'rust'
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+
+      - name: Set up .NET ${{ env.DOTNET_VERSION }}
+        if: matrix.job.toolchain == 'cs'
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: NativeAOT needs zlib (Linux)
+        if: matrix.job.toolchain == 'cs' && runner.os == 'Linux'
+        run: sudo apt-get install -y --no-install-recommends zlib1g-dev
+
+      # NativeAOT links libssl and libbrotli, which macOS does not ship;
+      # bench/cell/build.sh names Homebrew's paths. Without them the row is
+      # SKIPPED with the linker's own message, which is never faked.
+      - name: NativeAOT needs openssl and brotli (macOS)
+        if: matrix.job.toolchain == 'cs' && runner.os == 'macOS'
+        run: brew list openssl@3 brotli >/dev/null 2>&1 || brew install openssl@3 brotli
+
+      # --- measure -----------------------------------------------------------
+      - name: Time the ${{ matrix.job.toolchain }} rows against the reference
+        run: |
+          python3 bench/cell/cell.py \
+            --toolchain "${{ matrix.job.toolchain }}" \
+            --reps "$REPS" \
+            --runner "${{ matrix.job.runner }}" \
+            --out "$OUT"
+
+      - name: Record this job's wall clock
+        if: always()
+        run: |
+          mkdir -p "$OUT"
+          echo $(( $(date +%s) - JOB_T0 )) > "$OUT/minutes.txt"
+          echo "job seconds: $(cat "$OUT/minutes.txt")"
+
+      - name: Show what was measured
+        if: always()
+        run: |
+          cat "$OUT/RESULTS.md" || true
+          echo "--- facts"; cat "$OUT/facts.json" || true
+
+      - name: Upload bench-cell-${{ matrix.job.cell }}-${{ matrix.job.toolchain }}-${{ github.run_id }}
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-cell-${{ matrix.job.cell }}-${{ matrix.job.toolchain }}-${{ github.run_id }}
+          path: ${{ env.OUT }}
+          if-no-files-found: warn
+          retention-days: 90
+
+  report:
+    name: report
+    needs: cell
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Download every job's artifact
+        uses: actions/download-artifact@v4
+        with:
+          pattern: bench-cell-*-${{ github.run_id }}
+          path: bench/cell/out
+
+      # One results.json and one RESULTS.md per CELL. A row keeps the ratio its
+      # own job measured -- the reference is timed once per job and the per-job
+      # medians are listed, never averaged into a number no run produced.
+      - name: Merge into one report per cell
+        run: |
+          ls -R bench/cell/out | head -40
+          python3 bench/cell/cell.py --merge bench/cell/out --out bench/cell/report
+
+      - name: Upload bench-cell-report-${{ github.run_id }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-cell-report-${{ github.run_id }}
+          path: bench/cell/report
+          retention-days: 90
+
+      - name: Summary
+        run: |
+          {
+            for f in bench/cell/report/*/RESULTS.md; do
+              [ -f "$f" ] || continue
+              cat "$f"
+              echo
+            done
+            echo "To commit a run (docs/specs/M50.md section 5.3, a human opens the pull request):"
+            echo '```sh'
+            echo "gh run download ${{ github.run_id }} -n bench-cell-report-${{ github.run_id }} -D bench/results/\$(date -u +%Y-%m-%d)-${{ github.run_id }}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
