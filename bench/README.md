@@ -283,8 +283,9 @@ pinned-toolchain job per row, everything observable recorded, results as dated J
 can read — with the load generator replaced by seven repetitions of a binary.
 
 ```sh
-make bench-cell                                  # every row whose toolchain is installed
+make bench-cell                                  # every row whose toolchain is installed, then the gate
 make bench-cell CELLFLAGS='--rows mc-plain,mc-opt,c-O2 --phases all'
+gh workflow run bench-cell.yml                   # the three cells, on GitHub's runners
 ```
 
 Two mechanisms and nothing else:
@@ -309,5 +310,14 @@ that is absent, or a row whose build fails, SKIPPED with its reason printed and 
 than faked. The teeth are `mc --opt=0` against `mc --opt=1`, both already on `main`: on the `mix`
 phase that ratio is 2.24–2.38 across six runs against a floor of 1.5, and it collapses towards 1.0
 the moment the allocator stops allocating.
+
+**A run becomes history when a human commits it** into
+[`results/<date>-<run id>/<cell id>/`](results) — the soak's dated shape, so `git blame` over
+`results.json` is the regression history the milestone asked for. `cell/gate.py` compares a fresh run
+against the newest committed run of the same cell id and **gates the teeth and nothing else**: that
+ratio is measured inside one job of one run and drifts 0.13–5.1% between runs, while a row's
+`ratio_to_reference` carries its own job's reference noise (a per-job reference median moved 31.8%
+between two consecutive runs) and is therefore a report with the reference's own absolute median
+beside it. `cell/README.md` § The committed history has the numbers.
 
 Like everything else under `bench/`, **not in `make check`** and not on a pull request.

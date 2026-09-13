@@ -5951,6 +5951,86 @@ agents (`.claude/agents/`): `stage0-dev` (C23), `mc-dev` (`.mc` code), `reviewer
   `docs/specs/M50.md` § 9 row 2 LANDED with the real line counts + nine implementation notes.
   Step C (`gate.py`, the first committed `bench/results/` directories, `docs/comparison.md`
   § Conditions) is what remains to close M50.
+- M50 step C ✔ (`docs/specs/M50.md` § 9 row 3 + its § Implementation notes -- step C): **the gate,
+  the committed history, and `docs/comparison.md` without its two caveats** -- the step that CLOSES
+  M50. Nothing in `src/`, `stage0/`, `lib/` or `tests/` -- `git diff main -- src/ stage0/ lib/
+  tests/` is empty, no golden moves, `bench/` is bundled nowhere.
+  * **`bench/cell/gate.py` (273 lines, 171 of them code)** reads a fresh `results.json` (or a
+    directory of them -- what `cell.py --merge` writes) and the **newest COMMITTED run of the same
+    cell id** under `bench/results/`, and answers in three registers. What it GATES is exactly what
+    the measurements support, which is the one design decision step B sent it: **the teeth**
+    (`median(mc-plain) / median(mc-opt)` on `REGRESS_PHASE`, against the per-architecture
+    `REGRESS_MIN`) and a row that printed the wrong answer. Both medians of the tooth come from the
+    SAME job of the SAME run, which is why a cross-run comparison of it holds -- measured again
+    here, between the committed run and this step's own: **0.25% (`linux-arm64` 3.650 -> 3.641),
+    1.6% (`linux-x86_64` 1.193 -> 1.212), 4.4% (`macos-arm64` 2.422 -> 2.315)**, reproducing step
+    B's 0.13 / 1.6 / 5.1%.
+    Every row's `ratio_to_reference` drift against the committed run is a **REPORT** with
+    `TOLERANCE` as the band, the worst five printed and the count beside them -- not a gate, because
+    the reference is timed once per JOB and step B measured a job's own reference median moving
+    +31.81% between two runs, so a 5% band held on `linux-arm64` alone. The reference's own absolute
+    median is a **NOTE** at 10% (D15), beside a changed CPU model or runner image (risk 2). A cell
+    id with nothing committed says `baseline recorded` and exits 0 (§ 4.5, risk 6). The thresholds
+    come from `versions.env` and never from the run being gated -- a gate that took its floor out of
+    its own artefact would pass whatever the artefact claimed. Under `GITHUB_ACTIONS` every report
+    and note is a `::notice::` annotation and every failure a `::error::`.
+  * **Wired into both roads.** `make bench-cell` runs `cell.py` then `gate.py` (which with no
+    argument gates the newest directory under `build/bench-cell`); the workflow's `report` job runs
+    it LAST, after the summary, so a failure never hides the numbers that produced it, with
+    `set -o pipefail` and an explicit `exit $rc` because a `run:` step's default shell is `bash -e`
+    and not `-o pipefail`. **It blocks no merge and no release either way** (D12): this workflow runs
+    on neither a pull request nor a tag, so the only thing it can fail is its own run -- and it DOES
+    fail that run on the teeth, which is § 8 item 2's "a deliberately regressed `mc` build fails the
+    cell".
+  * **Acceptance 2, proved end to end by two real dispatches** (the workflow is on the default
+    branch now, so `gh workflow run bench-cell.yml --ref m50-step-c` reaches it; step B had to add a
+    `push:` trigger for the same thing). The regression is the spec's own one-flag form --
+    `bench/cell/build.sh`'s `opt="-O"` set to `opt="--opt=0"`, in a temporary commit dropped before
+    the merge, because `--opt=0` IS the default and the two mc rows become the same binary.
+    **Run [`34785520475`](https://github.com/minicompiler/mc/actions/runs/34785520475): FAILURE.**
+    All three `mc` jobs fail inside `cell.py` and the `report` job's gate fails again with the same
+    three lines, one per architecture: `tooth 1.001 below 1.50 on phase mix` (`linux-arm64`),
+    `tooth 0.981 below 1.50` (`macos-arm64`), `tooth 1.006 below 1.10` (`linux-x86_64`). The drift
+    REPORT named it too, from the other side -- `mc-opt/mix ratio 1.805 -> 6.574 (+264.2%)` -- which
+    is what a per-cell history buys even where the band is not gated.
+    **Run [`34785739260`](https://github.com/minicompiler/mc/actions/runs/34785739260): SUCCESS**,
+    18 jobs, `ok 3 cell run(s) gated, no failures`, teeth 3.641 / 1.212 / 2.315 with 143% / 10% /
+    54% of margin over their floors.
+  * **The first committed history**: `bench/results/2026-09-13-34783020976/<cell id>/{results.json,
+    RESULTS.md}` for the three cells of step B's green run, fetched with `gh run download` and
+    committed by a human (D8 -- the workflow keeps `contents: read`; a workflow that pushed to
+    `main` would make `autotag.yml` cut a version for a benchmark). `git blame` over
+    `results.json` is the regression history the plan row asks for. **Deviation, on record**:
+    § 5.1's third file, `facts.json`, is NOT in the committed directory -- `cell.py --merge` writes
+    `results.json` + `RESULTS.md` per cell and the per-job `facts.json` stays in the 90-day
+    artifacts; the identity that matters (cpu model, kernel, image, pinned cpus, every toolchain
+    string as its tool printed it, the mc digests) is inside `results.json` itself. Also on record:
+    only ONE run is committed, the one the task named -- the weekly cron adds the second, and this
+    step's own green run is the one gate.py was measured against rather than a second row of history.
+  * **Acceptance 3**: `docs/comparison.md` § Conditions lost **both** caveats -- "one host, shared
+    with other work" and the stale `e5a1643` tree label -- for a **cell-of-record** block naming the
+    run, its committed directory, and per cell the machine and image, the `mc` tag and asset, the
+    **verified asset SHA-256**, the **timed binary's SHA-256 and byte count**, and the reference's
+    absolute median (0.719 / 0.381 / 0.569 s), with the pins and the two thresholds beside them. It
+    says plainly what no machine can fix and what the cell does instead. The workload table gained
+    its second block -- the three cells' in-job ratios for `mc -O` and `mc` plain against
+    `clang -O2`, per phase, with the tooth, hand-copied from the committed JSON (D9: no generator
+    writes into `docs/`) -- and § Where to improve item 1 now carries the x86-64 number (five
+    registers, **19-21%** against 130-265% on AArch64, `mc -O` at 1.45x `clang -O2` on `mix`) in
+    place of its stale "the six slots are still empty" sentence, while item 2 is marked done with
+    the reason the VPS road was refused. The HTTP tables keep their own ~20% caveat, unchanged and
+    correctly scoped: those rows are deliberately out of the cell (0.9-228.5% recorded spread).
+  -- cost: **273 lines of new python** (171 code) + 12 added lines across `cell.py` (the
+  `RESULTS.md` link made depth-independent), the `Makefile` and the workflow + ~200 in docs.
+  `make check` green end to end (**RC 0, zero FAIL**), `make check-docs` green (the new relative
+  links into `bench/results/...` and `bench/cell/versions.env` all resolve), `site` + `check-site`
+  green (comparison.md renders, 0 link problems). `git diff main -- src/ stage0/ lib/ tests/`
+  **empty**; no golden rewritten.
+  Docs: `docs/comparison.md` (§ Conditions, the workload table's second block, § Where to improve
+  items 1 and 2), `bench/cell/README.md` § The committed history and `gate.py`, `bench/README.md`
+  § D, `docs/ci.md` § `bench-cell.yml` (what the gate step can fail and what it cannot),
+  `docs/plan.md`'s M50 row marked done with the numbers, `docs/specs/M50.md` § 9 row 3 LANDED with
+  the real line count + its § Implementation notes -- step C.
 - Next: the **site + registry server, M47 S4-S6**, in
   `minicompiler/mc-registry`; then **M42 step 2** (PE `--exe`, CI-gated on the Windows runners).
   **M46** only on the owner's request; **M43 Layer 2** after 1.0.0. M13 and M18 stay in the backlog
@@ -5959,12 +6039,13 @@ agents (`.claude/agents/`): `stage0-dev` (C23), `mc-dev` (`.mc` code), `reviewer
   2026-09-06 benchmark (`docs/comparison.md`): **M49 is CLOSED** (steps A, D1, B, C and D2 --
   the register allocator, the peephole and hoisting on all five machines `mc` ships; 1.30x of
   `clang -O2` on the workload, measured on AArch64; step E, inlining and constant propagation,
-  stays deferred to its own spec), and what is left of that batch is
-  **M50** (a reproducible Docker bench cell replacing this host's one-off numbers -- and the only
-  way to measure the x86-64 allocator's speed at all) and **M51**
-  (a bundled `<http>` library carrying the `mc-forkka` fork-per-connection-keep-alive shape) —
+  stays deferred to its own spec) and **M50 is CLOSED** (steps A, B and C -- the reproducible cell
+  on three GitHub Actions cells, the gate, and the committed dated JSON that replaced
+  `docs/comparison.md`'s two caveats; it gave M49 D2's x86-64 allocator its first timing, 19-21%
+  on `mix`). What is left of that batch is **M51** (a bundled `<http>` library carrying the
+  `mc-forkka` fork-per-connection-keep-alive shape) and **M52** (the standard library) --
   the registry server's own move off fork-per-request is `minicompiler/mc-registry`'s work, not
-  this repository's.
+  this repository's; both are in lockstep with teko.
   Update this section when each milestone closes.
 - i18n done (2026-09-03): the repository is fully in English — diagnostics, program/script
   output, identifiers, comments, and docs (`docs/*.md`, `docs/specs/*.md`, `CLAUDE.md`,

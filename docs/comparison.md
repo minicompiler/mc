@@ -37,31 +37,49 @@ toolchain versions for that run.
 
 The HTTP tables below merge two measurement sets on the same host, back to back: the first (mc, C, Go, Zig, Rust threads, C#) ran to completion before the second (Node single/cluster, Rust axum, Python, Ruby, PHP) was started, so neither harness's load competed with the other's for the ten cores. Every command and number for the second set is in [`../bench/http2/RESULTS.md`](../bench/http2/RESULTS.md).
 
-**Read this with two things in mind.**
+### The cell of record
 
-1. **One host, shared with other work.** The load generator and the server run on the same ten
-   cores over loopback, and `make check` runs were competing for the machine while some of this
-   was measured. `../bench/http/RESULTS.md` § Notes 13 names three runs whose numbers swing
-   ~20% run-to-run with nothing in the logs to explain it beyond that contention (`c-serial` on
-   the serial no-keep-alive configuration, `mc-forkka` and `go-nethttp` on one of their three
-   keep-alive runs). Best of 3 is reported everywhere; the spread is in the raw results.
-2. **The `mc` binary that ran the workload benchmark reports the tree it was built from as
-   `e5a1643`.** That commit is real (an M24-era point, before the M31–M47 work this repository has
-   since landed) but it is NOT what produced the measured binary: rebuilding `build/mc1` from
-   `e5a1643` gives a 755,840-byte executable, while the workload table's own numbers
-   (33,461-byte output, 1,181,184-byte compiler) match a build from the CURRENT `main`
-   (`0648e1a` / `v0.15.13`) exactly. The tree label in the raw file is stale — most likely copied
-   from an older session's context — and this page cites the verified commit instead. It does not
-   change any number: `mc`'s codegen for plain integer/array/function code has been byte-identical
-   across that range on purpose (the M17 walker/machine split's acceptance test is exactly "arm64
-   objects unchanged byte for byte after the refactor," and every milestone since has its own
-   inertness proof for programs that do not use what it adds — [`../CLAUDE.md`](../CLAUDE.md) § State
-   records each one). The HTTP benchmark's servers were built the same afternoon, after `0648e1a`
-   landed, with no tree annotation to double-check.
-3. **The reproducible cell — a fixed VPS, one Docker container per row, pinned toolchain
-   versions, `--cpus 1 --memory 512m` — is on the roadmap** (see § Where to improve) and will
-   replace these numbers as the reference measurement. Until then, treat this page as one host's
-   honest snapshot, not a controlled benchmark suite.
+The table above is **one developer's Mac**, and it is labelled as one. The reference measurement is
+the reproducible cell of [`specs/M50.md`](specs/M50.md) — one GitHub Actions job per toolchain on
+three cells, `clang -O2` of the same program built and timed *inside every job* as the reference, a
+release tarball whose `.sha256` the job verifies before unpacking, and every binary recorded by
+SHA-256. Its runs are committed as dated JSON, so a regression is a `git blame` and not a chat log.
+
+**Run [`34783020976`](https://github.com/minicompiler/mc/actions/runs/34783020976), 2026-09-13,
+committed at `bench/results/2026-09-13-34783020976/`:**
+
+| cell | machine | `mc` | asset SHA-256 | binary SHA-256, bytes | reference `clang -O2`, whole workload |
+|---|---|---|---|---|---|
+| `macos-arm64-macos-15` | Apple M1 (Virtual), image `macos15 20260907.0337.1`, Apple clang 17.0.0, nothing pinned | `mc 0.15.34` (`v0.15.34`, `mc-0.15.34-macos-arm64.tar.gz`) | `7dedb269…1e64b864` | `5980c681…70d6dbc8`, 1,400,287 | **0.719 s** |
+| `linux-arm64-ubuntu-24.04-arm` | arm64 Linux, image `ubuntu24-arm64 20260907.118.1`, Ubuntu clang 18.1.3, `taskset -c 0` (no CPU model: arm64 `/proc/cpuinfo` has none) | `mc 0.15.34` (`v0.15.34`, `mc-0.15.34-linux-arm64.tar.gz`) | `aa6f2078…bb51ffce` | `41fab98c…0e5f3621`, 1,432,768 | **0.381 s** |
+| `linux-x86_64-ubuntu-latest` | AMD EPYC 7763, image `ubuntu24 20260907.300.1`, Ubuntu clang 18.1.3, `taskset -c 0` | `mc 0.15.34` (`v0.15.34`, `mc-0.15.34-linux-x86_64.tar.gz`) | `2134e496…f1acc840` | `804135cf…3da1f0d858`, 1,446,104 | **0.569 s** |
+
+Pins for that run, from [`../bench/cell/versions.env`](../bench/cell/versions.env): `clang-18` on
+Linux, go1.26.7, zig 0.16.0, rustc 1.96.0, .NET SDK 10.0.400 — each recorded as the tool itself
+printed it, never as the pin claimed. Seven repetitions per row, interleaved, the first dropped;
+`TOLERANCE = 0.05` on a row's ratio and the teeth (`mc --opt=0` against `mc --opt=1` on the `mix`
+phase) floored at 1.5 on AArch64 and 1.10 on x86-64. 17.2 minutes of runner time for all three
+cells.
+
+**What the cell fixed, and what no machine can fix.** The two caveats this block used to carry are
+gone. The stale tree label — the workload binary reporting `e5a1643`, a real commit that is not the
+one that produced it — is structurally impossible now: the cell records the SHA-256 of the tarball
+it verified and of the binary it timed, and a digest cannot go stale. The **shared host** is not
+cured by any machine this project can reach, and the cell does not pretend otherwise; what it does
+instead is compare only numbers taken in the same run, on the same core, in the same minute, and
+report the reference's own absolute median as the machine's health indicator. Between two runs of
+that cell twenty minutes apart, `ubuntu-latest` came up as an AMD EPYC 7763 and then as an Intel
+Xeon 8573C, and `macos-15`'s reference median moved by up to 31.8% between jobs — both visible in
+the committed JSON, neither hidden. So absolute seconds on this page are a snapshot of one machine
+on one day, and only the ratios are comparable across runs.
+
+The HTTP tables keep their own caveat and it is unchanged: one host, the load generator sharing the
+cores it measures. `../bench/http/RESULTS.md` § Notes 13 names three runs whose numbers swing ~20%
+run-to-run with nothing in the logs to explain it beyond that contention (`c-serial` on the serial
+no-keep-alive configuration, `mc-forkka` and `go-nethttp` on one of their three keep-alive runs);
+best of 3 is reported everywhere and the spread is in the raw results. The HTTP rows are
+deliberately **out** of the cell — their recorded spread is 0.9% to 228.5%, against the workload's
+2–8% — and the hour-long soak below is the right protocol for them.
 
 ## Where mc stands
 
@@ -83,6 +101,38 @@ The HTTP tables below merge two measurement sets on the same host, back to back:
 | C# JIT | 0.54 s (`dotnet build`) | 5,120 + 78 MB shared runtime | n/a (IL) | 0.59 s | 94.6 MB | 58 |
 
 (Full table with every variant, every failure and the exact build command: `../bench/RESULTS.md` § A.)
+
+#### The same workload in the cell, as ratios
+
+The table above is the developer's Apple M4 and its absolute seconds are that machine's. The cell's
+verdict is a **ratio to a `clang -O2` built and timed in the same job**, which is the only number
+that survives a change of machine — and it changes the picture, because `mc -O`'s register allocator
+has ten registers on AArch64 and five on x86-64. Run
+[`34783020976`](https://github.com/minicompiler/mc/actions/runs/34783020976), medians of six kept
+repetitions, hand-copied from the three committed `results.json` under
+`bench/results/2026-09-13-34783020976/` (nothing generates this page):
+
+| cell | phase | `mc -O` | `mc` plain | the tooth (plain / `-O`) |
+|---|---|---|---|---|
+| `macos-arm64-macos-15` | whole workload | **1.453x** | 2.530x | 1.741 |
+| | `mix` | **1.420x** | 3.439x | **2.422** |
+| | `primes` | 1.437x | 2.405x | 1.674 |
+| | `fib` | 1.684x | 1.669x | 0.991 |
+| `linux-arm64-ubuntu-24.04-arm` | whole workload | 1.736x | 4.299x | 2.476 |
+| | `mix` | 1.805x | 6.587x | **3.650** |
+| | `primes` | 1.406x | 3.062x | 2.178 |
+| | `fib` | 2.043x | 2.587x | 1.266 |
+| `linux-x86_64-ubuntu-latest` | whole workload | 1.690x | 2.196x | 1.299 |
+| | `mix` | 1.447x | 1.727x | **1.193** |
+| | `primes` | 1.692x | 2.737x | 1.618 |
+| | `fib` | 2.321x | 2.647x | 1.140 |
+
+Three things worth reading off it. The **arithmetic phase is where the optimizer lives**: `mix` is
+1.42x `clang -O2` on the macOS cell against the plain road's 3.44x. **`fib` is not**, anywhere — the
+gap there is clang's recursion-to-loop rewrite, which `-O` does not do, and on the macOS cell `-O` is
+a hair *slower* than plain on that phase (1.684 against 1.669, inside the noise). And the **x86-64
+allocator buys 19–21% where AArch64's buys 130–265%**, which is the first timing that side has ever
+had (M49 step D2 shipped with an instruction count and nothing else).
 
 ### Toolchain footprint
 
@@ -455,14 +505,22 @@ links to the milestone that would carry it in [`plan.md`](plan.md).
    "estimated target: within 1.3x" this item used to carry as a guess. What is still open and still
    an estimate: **inlining and constant propagation** as `pass()`-level AST rewrites (deferred by
    M49 § 10 with its own spec and its own measurement first, and worth 0 on this workload —
-   `fib`'s gap is clang's recursion-to-loop rewrite, which inlining does not reach), and the SAME
-   allocator for the **x86-64** machines, where the six slots are still empty so `--opt=1` is
-   accepted and does nothing. See `plan.md` § M49 and
-   [`guide/15-optimizing.md`](guide/15-optimizing.md).
-2. **A reproducible bench cell.** A `bench/Dockerfile` with every toolchain pinned to an exact
-   version, run on a fixed VPS with `--cpus 1 --memory 512m` per container, results committed as
-   dated JSON so a regression shows up in `git blame` instead of a chat log. Removes both
-   caveats in the § Conditions block above. See `plan.md` § M50.
+   `fib`'s gap is clang's recursion-to-loop rewrite, which inlining does not reach).
+   The **x86-64** machines have the same allocator since M49 step D2, and M50's cell gave it its
+   first timing: **19–21% on the `mix` phase**, against 130–265% on AArch64, because it allocates
+   **five** registers there (`rbx`, `r12..r15`) against AArch64's ten — so `mc -O` is 1.45x
+   `clang -O2` on that phase on `ubuntu-latest` (§ "The same workload in the cell"). Whether the two
+   registers Win64 makes callee-saved (`rdi`, `rsi`) are worth adding is now a question with a
+   measurement in front of it, which is what M49 § 12 risk 11 was waiting for. See `plan.md` § M49
+   and [`guide/15-optimizing.md`](guide/15-optimizing.md).
+2. **A reproducible bench cell — done** (M50). One GitHub Actions job per toolchain on three cells,
+   every version pinned in one file, a release tarball whose `.sha256` is verified before unpacking,
+   the SHA-256 of every binary timed, and each run committed as dated JSON under
+   `bench/results/` so a regression is a `git blame`. It replaced both
+   caveats the § Conditions block used to carry. The plan row's `bench/Dockerfile`-on-a-fixed-VPS
+   shape was measured against and refused — the VPS is production and is itself a shared VM, and
+   Actions is the only road with both architectures — and is kept priced as an option for a road off
+   GitHub. See `plan.md` § M50 and [`specs/M50.md`](specs/M50.md).
 3. **A bundled `<http>` library with the fork-per-connection-with-keep-alive shape** (`mc-forkka`
    above) as an `#include <http>` away, with an event-loop shape to follow once one exists, so a
    program gets the 120k-req/s band by including a library instead of hand-rolling sockets — and
