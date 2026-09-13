@@ -276,13 +276,53 @@ encoded, dumped and in `lib/backend_arm64.mc` and simply had no emitter before. 
 turn the prelude's five-instruction `while` condition — `cmp; cset lt; cmp #0; cset eq; cbz` — into
 `cmp; b.lt` plus the loop's own unconditional branch.
 
-Measured on `bench/mc/bench.mc` (Apple M4, `--exe --opt=1`, best of 7 interleaved with the
-reference): the `mix` loop body goes from 50 instructions per iteration to 24 and the whole
-workload from 0.78 s on the plain road to 0.55 s, against 0.42 s for `clang -O2`. The branch
-peephole's own share of that is at the edge of this host's 10 ms timer: `mix` 0.22 -> 0.21 s,
-`primes` 0.20 -> 0.19 s, `fib` 0.13 s unchanged. What it does move plainly is the instruction
-count -- `--dump-asm` of the workload goes from 330 lines to 312, and the `while` condition above
-from five instructions to two.
+**Loop-invariant values are allocated the same way, as pseudo-locals.** A register a taken local
+did not want goes to a value that a loop rebuilds every iteration, and there are two kinds: an
+`N_INT` whose immediate costs two or more instructions (any 16-bit part above the low one non-zero
+-- one `movz` plus up to three `movk`) **and whose type is an integer of the word width or less**,
+and the address of a GLOBAL, which is an `adrp` + `add` pair.
+
+That type condition is `TK_INT` or `TK_SINT` with `type_width <= 8` — exactly what the walker asks
+of a local, and for exactly the same reason. A taught literal is an `N_INT` too: `<float>`'s `f64`
+literal is an `N_INT` whose type is `TK_FLOAT` and whose `val` is the IEEE bit pattern, and that
+value belongs in a float register, so putting it in `x19..x28` and handing the depth an integer
+alias makes a derived machine read a register that never held it (measured: `0.0 + 2.5` three times
+came out `0x56e6e8cc4576e6a1` instead of `0x401e000000000000` before the condition existed;
+`tests/float/028-lit-in-loop.mc` is the gate). A GLOBAL's address needs no such condition: an
+array's decay is a `uptr` whatever its elements are. The walker records each DISTINCT value once, in first-occurrence order -- constants by value,
+globals by their index in the global table -- scores it with the same `8^depth` weight and the same
+threshold of 3, and takes what the locals left. A taken one is materialised ONCE, at function entry,
+right after the parameters (`MTASK_CONST` or `MTASK_SYM_ADDR` at depth 0, then
+`MTASK_REG_STORE(TY_I64, 0, r)`), and every use of that value anywhere in the function -- inside the
+loop and outside it -- becomes an `MTASK_REG_LOAD`, which is to say an alias-table entry and no
+instruction at all.
+
+Entry materialisation runs **even when the loop is never entered**. Two to four instructions cannot
+fault: a symbol address is a relocation, not a load, and a constant is an immediate.
+
+A machine sees nothing new: the tasks are the ones it already fills, at the depth it already
+handles, and a machine that answers 0 to `MTASK_REG_COUNT` never reaches the code. On the plain
+road the candidate list is empty and the three loops that walk it have zero iterations.
+
+Not hoisted, on record: a STRING literal's address and a FUNCTION's address. Both would have to be
+keyed by a symbol index and both CREATE their symbol on first use (`str_sym` also appends to
+`__cstring`), so hoisting one would move symbol creation and literal placement inside a function for
+a gain the measurement below never needed. A global's symbol already exists -- `gen_globals` runs
+before the first `gen_func`.
+
+Measured on `bench/mc/bench.mc` (Apple M4, `--exe --opt=1`, best of 11 interleaved with the
+reference): the whole workload is **0.54 s against 0.79 s on the plain road and 0.42 s for
+`clang -O2`** — 1.30x. Per phase, `mix` 0.45 -> 0.22 s, `primes` 0.21 -> 0.19 s, `fib` 0.13 s
+unchanged (its cost is the call count, which nothing here touches). `--dump-asm` of the workload
+goes from 370 lines on the plain road to 319, and the `mix` loop body from 50 instructions per
+iteration to 18 — no memory traffic, and no constant costing more than the single `movz` a shift
+count is worth. The last two steps' own
+shares are each at the edge of this host's 10 ms timer -- the branch peephole moved `mix` 0.22 ->
+0.21 and `primes` 0.20 -> 0.19, hoisting moved `mix` 0.22 -> 0.216, `primes` 0.206 -> 0.198 and the
+whole workload 0.551 -> 0.542 -- because these loops are latency-bound on the dependent
+`mul`/`add` chain once the frame round trip the allocator removed is gone. `src/mc.mc`'s own
+`__text` is **480 420 B with `--opt=1` against 535 720 B plain, -10.3%**: two instructions per
+allocated register buy back more than they cost.
 
 The operator vocabulary the tasks speak:
 

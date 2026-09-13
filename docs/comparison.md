@@ -323,19 +323,32 @@ linker involved, and a 1.2 MB single-file toolchain against Rust's 1.7 GB or cla
 `.dll`/`.so` to find at run time, no SDK to install, no linker to configure — `build/mc1` alone
 compiles and signs a working macOS executable.
 
-**Generated code is at `clang -O0` level, and 2.2x behind the optimized compilers, on this
-workload.** `mc`'s run time (1.09 s) sits between `clang -O0` (1.02 s) and `clang -O2` (0.49 s);
-Zig, Rust and Go's optimized builds land in the same 0.47–0.55 s band as `clang -O2`. This is the
-one structural gap the numbers show, and it has a name: `mc` does constant folding and nothing
-else ([`reference/machine.md`](reference/machine.md), [`core-language.md`](core-language.md)).
-There is no register allocator — expression depths 0–6 map to fixed registers `x9`–`x15` and a
-7th-deep value spills to the frame immediately, whether or not a register is free elsewhere
-([`reference/objects.md`](reference/objects.md) § 4) — and no peephole, inlining or dead-code
-elimination ([`surface.md`](surface.md)). The M17 walker/machine split
-([`reference/machine.md`](reference/machine.md)) is exactly where a register allocator would live:
-it already separates the target-independent walker (which knows liveness per expression, since it
-assigns and frees depths) from the machine that encodes instructions, so an allocator would be a
-new consumer of information the walker already computes, not a rewrite of the pipeline.
+**The default road is at `clang -O0` level; `-O` closes most of the gap and is now MEASURED, not
+estimated.** The numbers in the table above are the DEFAULT road, where `mc` does constant folding
+and nothing else: 1.09 s, between `clang -O0` (1.02 s) and `clang -O2` (0.49 s). Since M49 the same
+compiler takes `-O`, and on the same workload and the same host that road measures **0.548 s
+against `clang -O2`'s 0.420 s — 1.30x** (wall clock, best of nine, the binaries interleaved; three
+runs at growing repetition counts gave 1.29x, 1.31x and 1.29x, so the host's own 2% spread
+straddles the figure). Per phase: the arithmetic loop reaches **parity** (0.216 s against clang's
+0.215), the sieve is 0.202 against 0.138 — the remaining gap is `clang -O2`'s NEON vectorisation of
+the counting loop — and `fib(38)` is 0.132 against 0.073, a gap that is the number of CALLS and not
+the quality of the code between them (`clang -O2` turns one of the two recursive calls into a loop).
+The compiler's own `__text` is 10% SMALLER with `-O` than without.
+
+What `-O` is: the callee-saved registers (`x19..x28`) allocated to locals and parameters by weighted
+use count, two emission-time peepholes that fuse a comparison into the branch reading it, and a
+loop's invariant constants and global addresses materialised once at function entry
+([`guide/15-optimizing.md`](guide/15-optimizing.md),
+[`reference/machine.md`](reference/machine.md) § 5). What it is not: there is still no inlining, no
+constant propagation, no unrolling and no vectorisation ([`surface.md`](surface.md)), and the
+x86-64 machines have not been taught the allocator yet, so `--opt=1` on a Linux or Windows x86-64
+target is accepted and does nothing. The default stays 0 — the plain road is the determinism
+reference and the seed for every foreign bootstrap chain — so a project opts in with one flag or
+one `[project].opt` line.
+
+Both roads are self-hosting and they agree on the compiler: an `mc` built with `-O` compiles
+`src/mc.mc` to byte for byte the object the plain one writes
+([`bootstrap.md`](bootstrap.md) § The optimized chain).
 
 **In the HTTP benchmark, the concurrency MODEL decides more than the language does.** `mc-forkka`
 (fork per connection, the process kept alive across a connection's requests) is in the same band
@@ -430,18 +443,22 @@ the summary).
 
 ## Where to improve
 
-Ranked by what it buys, with every number here labelled as an ESTIMATE — none of this is
-implemented, and each links to the milestone that would carry it in
-[`plan.md`](plan.md).
+Ranked by what it buys. Item 1 is now MEASURED and largely DONE; the rest are estimates, and each
+links to the milestone that would carry it in [`plan.md`](plan.md).
 
-1. **A register allocator, a peephole and small-function inlining.** The single biggest lever on
-   the one gap this page shows: `mc` at `clang -O0` level today, 2.2x behind `clang -O2` on this
-   workload. Estimated shape: allocate the callee-saved registers to locals and live-across-call
-   values (the walker already tracks per-block liveness through its depth stack, since it must
-   know when a depth is free), a peephole over the `Ins` buffer for store-then-immediately-load and
-   redundant register moves, and constant propagation plus inlining of small leaf functions as
-   `pass()`-level AST rewrites before `gen_walk`. **Estimated target: within 1.3x of `clang -O2` on
-   this workload** — a guess pending real measurement, not a promise. See `plan.md` § M49.
+1. **A register allocator, a peephole and loop-invariant hoisting — done, measured, 1.30x.** This
+   was the single biggest lever on the one gap this page shows, and M49 took it: `mc -O` allocates
+   `x19..x28` to locals and parameters by weighted use count, fuses `cmp`/`cset`/branch into one
+   `b.<cond>`, and materialises a loop's invariant constants and global addresses once at function
+   entry. **Measured on this workload and this host: 0.548 s against `clang -O2`'s 0.420 s, 1.30x**,
+   with the arithmetic phase at parity — against the 2.2x the default road shows and against the
+   "estimated target: within 1.3x" this item used to carry as a guess. What is still open and still
+   an estimate: **inlining and constant propagation** as `pass()`-level AST rewrites (deferred by
+   M49 § 10 with its own spec and its own measurement first, and worth 0 on this workload —
+   `fib`'s gap is clang's recursion-to-loop rewrite, which inlining does not reach), and the SAME
+   allocator for the **x86-64** machines, where the six slots are still empty so `--opt=1` is
+   accepted and does nothing. See `plan.md` § M49 and
+   [`guide/15-optimizing.md`](guide/15-optimizing.md).
 2. **A reproducible bench cell.** A `bench/Dockerfile` with every toolchain pinned to an exact
    version, run on a fixed VPS with `--cpus 1 --memory 512m` per container, results committed as
    dated JSON so a regression shows up in `git blame` instead of a chat log. Removes both

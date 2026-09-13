@@ -59,6 +59,38 @@ Mach-O itself; `codesign -dvvv`: `flags=0x2(adhoc)`); Go **no** (`go build -x` r
 (`--print link-args`: `"cc"`); C **yes** (clang -> Apple ld); C# JIT **no**, NativeAOT **yes**
 (clang -> ld, plus OpenSSL/brotli libraries).
 
+### A1. `mc -O` (added 2026-09-13, M49 step C)
+
+The run-time column above is the DEFAULT road. `mc` has taken `-O` since M49, and this block is a
+SEPARATE measurement of it: same sources, same host, a different day and a different timer, so it
+must not be read across into the rows above. Method: wall clock from one `python3` process
+(`time.perf_counter` around `subprocess.run`), best of nine, the three binaries **interleaved** so a
+thermal drift hits all of them; the whole workload also measured best of eleven and best of fifteen.
+The three phases are the same file with the other two `main()` lines removed, on both sides.
+
+| Phase | `mc` plain | `mc -O` | `clang -O2` | `-O` / `clang -O2` |
+|---|---|---|---|---|
+| whole workload | 0.793 s | **0.548 s** | 0.420 s | **1.30x** |
+| (1) `mix`, 200M LCG + xorshift | 0.445 s | **0.216 s** | 0.215 s | 1.00x |
+| (2) `primes`, sieve + count over 50M | 0.215 s | **0.202 s** | 0.138 s | 1.46x |
+| (3) `fib(38)` | 0.133 s | 0.132 s | 0.073 s | 1.81x |
+
+The whole-workload ratio is **at** 1.30 and not under it: three runs at growing repetition counts
+gave 1.297x (best of 11, 542/418), 1.305x (best of 9, 548/420) and 1.291x (best of 15, 545/422),
+so this host's own spread of about 2% straddles the figure.
+
+Phase (1) reaches parity with `clang -O2`, which is the measurement that says the default road's
+gap there was the frame round trip and nothing else. Phase (2) keeps a 0.06 s gap that is `clang
+-O2`'s NEON vectorisation of the counting loop, and phase (3) a 0.06 s gap that is the number of
+CALLS -- `clang -O2` turns one of the two recursive calls into a loop. Neither is in M49's scope
+(`docs/specs/M49.md` § 1.2).
+
+Code, same three binaries: `--dump-asm mc/bench.mc` is **370** instruction lines plain and **319**
+with `-O` (the entry materialisation of the hoisted values costs a few lines per function while the
+`mix` loop body falls from 50 instructions per iteration to 18); `__text` of the `--exe` binary is
+**1 480 B plain, 1 276 B with `-O`, 1 320 B for `clang -O2`**, and the whole binary 33 464 / 33 462
+/ 33 464 B.
+
 ## B. Toolchain facts
 
 | Toolchain | Version | Root measured (`du -sh`) | Size | Files | System linker for a native exe | Self-hosting |
@@ -76,6 +108,9 @@ Mach-O itself; `codesign -dvvv`: `flags=0x2(adhoc)`); Go **no** (`go build -x` r
 |---|---|
 | `build/mc1 src/mc.mc -o x.o` (self-compile to object, best of 3) | **0.88 s** [0.90 0.93 0.88], RSS 59.9 MB, object 1 285 176 B |
 | `build/mc1 --exe src/mc.mc -o mcx` (self-compile to executable) | 0.93 s, **1 170 736 B**, `codesign --verify` OK |
+| `build/mc1 --opt=1 src/mc.mc -o x.o` (2026-09-13, best of 5 interleaved with the plain road) | **0.807 s** against the plain road's 0.814 s -- the optimizer costs nothing measurable (M49 § 9.3 bounds it at 1.3x) |
+| the `-O`-built compiler compiling `src/mc.mc` plain (same run) | **0.744 s**, 9% faster than the plain-built one |
+| `src/mc.mc`'s `__text`, plain vs `--opt=1` (2026-09-13) | 535 720 B vs **480 420 B, -10.3%**; the objects are 1 538 120 vs 1 480 680 B |
 | `src/*.mc` lines excluding `src/bundle_data.mc` | **24 726** (62 files; `bundle_data.mc` alone is 11 815 lines / 1 349 348 B, generated) |
 | `stage0/*.c` lines (`make budget`) | **2 848 / 3000** (`stage0: 2848 / 3000 lines`; +216 for `mc.h` = 3 064) |
 | `build/mc1 --dump-asm mc/bench.mc` instruction lines | **370** (410 lines, 40 labels); per function: strlen 26, puts 22, putnum 46, putu64 46, mix 68, primes 91, fib 32, main 39 -- workload only (mix+primes+fib+main) **230** |
