@@ -71,6 +71,31 @@ ROWS = [
     ("cs-jit", "dotnet", "dotnet publish (JIT, shared runtime)"),
 ]
 
+# The unit of a JOB is a toolchain, not a row (docs/specs/M50.md § 2, D1): a
+# job's cost is its toolchain install, seconds of timing against minutes of
+# `setup-*`. The reference is appended to every one of them because the ratio
+# must be against a reference timed inside the SAME job, and clang needs no
+# install on any runner image, which is what makes it free everywhere.
+TOOLCHAINS = {
+    "mc": ["mc-plain", "mc-opt"],
+    "c": ["c-O2", "c-O0"],
+    "go": ["go"],
+    "zig": ["zig-fast", "zig-debug"],
+    "rust": ["rust-O3", "rust-O0"],
+    "cs": ["cs-aot", "cs-jit"],
+}
+
+# The three cells of D1: the runner label, and the mc release target whose
+# tarball that runner takes. `macos-15` is the only cell where `mc --exe` writes
+# Mach-O and where Apple clang is the reference, which is the pair
+# docs/comparison.md measured; `ubuntu-latest` is the first x86-64 timing M49
+# step D2's allocator has ever had.
+CELLS = {
+    "macos-15": {"target": "macos-arm64", "arch": "arm64", "os": "macos"},
+    "ubuntu-24.04-arm": {"target": "linux-arm64", "arch": "arm64", "os": "linux"},
+    "ubuntu-latest": {"target": "linux-x86_64", "arch": "x86_64", "os": "linux"},
+}
+
 
 def read_env(path):
     """KEY=value lines, '#' comments, no quoting and no substitution."""
@@ -201,11 +226,14 @@ def build_row(row, bindir, env):
     }
 
 
+def cell_arch():
+    a = platform.machine()
+    return {"x86_64": "x86_64", "aarch64": "arm64", "arm64": "arm64"}.get(a, a)
+
+
 def cell_id(runner):
     osname = {"darwin": "macos", "linux": "linux"}.get(sys.platform, sys.platform)
-    arch = platform.machine()
-    arch = {"x86_64": "x86_64", "aarch64": "arm64", "arm64": "arm64"}.get(arch, arch)
-    return "%s-%s-%s" % (osname, arch, runner)
+    return "%s-%s-%s" % (osname, cell_arch(), runner)
 
 
 def host_facts(mc):
@@ -259,8 +287,121 @@ def mem_kb(facts):
     return n // 1024 if sys.platform == "darwin" else n
 
 
+def plan(cells_arg):
+    """`--plan CELLS` -> the (cell, toolchain) matrix, as GITHUB_OUTPUT lines.
+
+    An unknown cell name fails HERE, in a five-minute job, instead of after
+    eighteen runners have been spent -- the soak's `soak.py --plan` shape.
+    """
+    want = [c.strip() for c in (cells_arg or "all").split(",") if c.strip()]
+    if want == ["all"]:
+        want = list(CELLS)
+    for c in want:
+        if c not in CELLS:
+            sys.exit("cell: unknown cell %s (known: %s)" % (c, ", ".join(CELLS)))
+    jobs = [{"cell": c, "runner": c, "target": CELLS[c]["target"], "toolchain": t}
+            for c in want for t in TOOLCHAINS]
+    print("jobs=" + json.dumps(jobs, separators=(",", ":")))
+    print("cells=" + json.dumps(want, separators=(",", ":")))
+    return 0
+
+
+def merge(indir, outdir):
+    """Gather every job's results.json into ONE per cell id.
+
+    Each toolchain job timed its own reference, so a merged row keeps the ratio
+    its own job measured and gains a `toolchain` column saying which job that
+    was; the per-job reference medians are kept under `jobs` rather than
+    averaged into a number no run produced.
+    """
+    found = []
+    for dirpath, _, names in os.walk(indir):
+        if "results.json" in names:
+            with open(os.path.join(dirpath, "results.json")) as f:
+                r = json.load(f)
+            if "jobs" in r:
+                continue      # already a merged report, not a job's own run
+            mins = os.path.join(dirpath, "minutes.txt")
+            if os.path.exists(mins):
+                try:
+                    r["job_minutes"] = round(float(open(mins).read().strip()) / 60.0, 2)
+                except ValueError:
+                    pass
+            found.append(r)
+    if not found:
+        sys.exit("cell: no results.json under %s" % indir)
+    by_cell = {}
+    for r in found:
+        by_cell.setdefault(r["cell"]["id"], []).append(r)
+    for cid in sorted(by_cell):
+        runs = sorted(by_cell[cid], key=lambda r: r.get("toolchain") or "")
+        rows, skipped, tools, mins = [], [], {}, []
+        for r in runs:
+            tc = r.get("toolchain") or "?"
+            for row in r["rows"]:
+                if row["row"] == r["reference"] and tc != "c":
+                    continue          # the reference is reported by its own job
+                rows.append(dict(row, toolchain=tc))
+            skipped += [dict(s, toolchain=tc) for s in r["skipped"]]
+            # ONLY from the job that owns the toolchain, plus clang, which every
+            # job uses as the reference. A runner ships Go and Rust preinstalled,
+            # so a blind update() let the five jobs that did NOT install them
+            # overwrite the pinned strings with the image's -- reporting
+            # go1.24.13 and rustc 1.98.1 where the `go` and `rust` jobs had in
+            # fact installed 1.26.7 and 1.96.0 (measured, run 34782461342).
+            for k, v in r["toolchains"].items():
+                if k == "clang" or k == tc or (tc == "cs" and k == "dotnet") \
+                        or (tc == "rust" and k == "rustc"):
+                    tools[k] = v
+            if r.get("job_minutes") is not None:
+                mins.append((tc, r["job_minutes"]))
+        # The `mc` job is the authoritative base: it is the one whose mc block
+        # carries the road, the tag and the asset digest, and the only one whose
+        # tooth means anything. Every job records the same mc, so on the
+        # workflow's road this is a tie-break and not a correction.
+        base = next((r for r in runs if r.get("toolchain") == "mc"), runs[0])
+        phases = []
+        for row in rows:
+            if row["phase"] not in phases:
+                phases.append(row["phase"])
+        out = dict(base)
+        out["rows"] = rows
+        out["skipped"] = skipped
+        out["toolchains"] = tools
+        out["toolchain"] = ",".join(sorted(r.get("toolchain") or "?" for r in runs))
+        out["jobs"] = [{"toolchain": r.get("toolchain"),
+                        "reference_absolute_median":
+                            r["verdict"]["reference_absolute_median"],
+                        "status": r["verdict"]["status"],
+                        "failures": r["verdict"]["failures"],
+                        "tooth": r["verdict"]["tooth"],
+                        "job_minutes": r.get("job_minutes")} for r in runs]
+        out["job_minutes"] = dict(mins) or None
+        out["total_job_minutes"] = round(sum(m for _, m in mins), 2) if mins else None
+        v = dict(base["verdict"])
+        v["failures"] = [f for r in runs for f in r["verdict"]["failures"]]
+        v["status"] = "fail" if v["failures"] else "ok"
+        v["tooth"] = next((r["verdict"]["tooth"] for r in runs
+                           if r.get("toolchain") == "mc"), None)
+        out["verdict"] = v
+        d = os.path.join(outdir, cid)
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, "results.json"), "w") as f:
+            json.dump(out, f, indent=1, sort_keys=False)
+            f.write("\n")
+        write_report(os.path.join(d, "RESULTS.md"), out, phases)
+        print("%s: %d rows over %d jobs, %s, %s min"
+              % (cid, len(rows), len(runs), v["status"], out["total_job_minutes"]))
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser(description="run one bench cell")
+    ap.add_argument("--plan", metavar="CELLS",
+                    help="print the (cell, toolchain) matrix for CELLS (all, or a comma list)")
+    ap.add_argument("--merge", metavar="DIR",
+                    help="merge every results.json under DIR into one per cell id")
+    ap.add_argument("--toolchain", help="a toolchain name: %s" % ", ".join(TOOLCHAINS))
     ap.add_argument("--out", help="results directory (default build/bench-cell/<date>-<id>)")
     ap.add_argument("--reps", type=int, help="repetitions (default REPS in versions.env)")
     ap.add_argument("--rows", help="comma-separated subset of the row names")
@@ -272,18 +413,38 @@ def main():
     ap.add_argument("--mc", help="the mc binary to measure (default build/mc1, then PATH)")
     args = ap.parse_args()
 
+    if args.plan is not None:
+        return plan(args.plan)
+    if args.merge:
+        return merge(args.merge, args.out or os.path.join(ROOT, "build", "bench-cell", "report"))
+
     env = read_env(os.path.join(HERE, "versions.env"))
     reps = args.reps or int(env.get("REPS", "7"))
     drop = int(env.get("DROP", "1"))
     tol = float(env.get("TOLERANCE", "0.05"))
-    regress_min = float(env.get("REGRESS_MIN", "1.5"))
+    # The floor is a property of the ARCHITECTURE, because what it measures is
+    # how much M49's register allocator buys, and that machine has ten
+    # allocatable registers on AArch64 and five on x86-64 (M49 step D2). The
+    # global value was calibrated on AArch64 alone; a cell whose architecture has
+    # its own calibrated floor names it as REGRESS_MIN_<ARCH>.
+    regress_min = float(env.get("REGRESS_MIN_" + cell_arch().upper(),
+                                env.get("REGRESS_MIN", "1.5")))
     regress_phase = env.get("REGRESS_PHASE", "all")
     reference = env.get("REFERENCE", "c-O2")
     phases = (args.phases or env.get("PHASES", "all")).split(",")
     for ph in phases:
         if ph not in EXPECT:
             sys.exit("cell: unknown phase %s (known: %s)" % (ph, ", ".join(EXPECT)))
-    want = args.rows.split(",") if args.rows else [r[0] for r in ROWS]
+    if args.toolchain:
+        if args.toolchain not in TOOLCHAINS:
+            sys.exit("cell: unknown toolchain %s (known: %s)"
+                     % (args.toolchain, ", ".join(TOOLCHAINS)))
+        # the reference is timed in EVERY job, by construction (D2)
+        want = TOOLCHAINS[args.toolchain] + [reference]
+    elif args.rows:
+        want = args.rows.split(",")
+    else:
+        want = [r[0] for r in ROWS]
     rows = [r for r in ROWS if r[0] in want]
     if not rows:
         sys.exit("cell: no such row")
@@ -296,6 +457,12 @@ def main():
     cid = cell_id(args.runner)
     outdir = args.out or os.path.join(ROOT, "build", "bench-cell",
                                       "%s-%s" % (date[:10], run_id))
+    # ABSOLUTE, always: build.sh `cd`s into the language's own directory for the
+    # go, zig and cs rows, so a relative --out made `-o <out>/go` resolve against
+    # the wrong directory and those five rows were SKIPPED with "build.sh named a
+    # missing artefact" (measured on all three cells, run 34782461342 -- the
+    # local road never saw it because its default --out is already absolute).
+    outdir = os.path.abspath(outdir)
     bindir = os.path.join(outdir, "bin")
     os.makedirs(bindir, exist_ok=True)
     pin = pin_prefix()
@@ -332,14 +499,14 @@ def main():
                  "every verdict is a ratio to it" % reference)
 
     # --- time: seven repetitions, the rows interleaved inside each ------------
-    plan = [(b, ph) for ph in phases for b in built]
+    sched = [(b, ph) for ph in phases for b in built]
     samples = {}
     bad = []
     print("\ntiming %d rows x %d phases x %d repetitions"
           % (len(built), len(phases), reps))
     for rep in range(1, reps + 1):
         line = []
-        for b, ph in plan:
+        for b, ph in sched:
             key = (b["row"], ph)
             cmd = pin + b["run_cmd"] + ([] if ph == "all" else [ph])
             outfile = os.path.join(outdir, "stdout.tmp")
@@ -458,13 +625,29 @@ def main():
             "date": date,
             "run_id": run_id,
             "workflow_ref": os.environ.get("GITHUB_REF_NAME"),
+            # a GitHub runner sets these itself; nothing needs to pass them in.
+            # An image rotation changes the CPU model between weekly runs and
+            # this is where that is visible (docs/specs/M50.md risk 2).
+            "image": (("%s %s" % (os.environ.get("ImageOS"),
+                                  os.environ.get("ImageVersion")))
+                      if os.environ.get("ImageOS") else None),
         },
+        "toolchain": args.toolchain,
         "mc": {
-            "road": "tree" if os.path.abspath(mc).startswith(os.path.join(ROOT, "build")) else "path",
+            # MC_ROAD is what the workflow says it did: `release` (a tarball
+            # whose .sha256 it verified before unpacking) or `tree` (built from
+            # a ref). Locally there is no workflow, so the path decides.
+            "road": os.environ.get("MC_ROAD") or
+                    ("tree" if os.path.abspath(mc).startswith(os.path.join(ROOT, "build"))
+                     else "path"),
             "path": mc,
             "version": facts.get("mc --version"),
             # `mc --host` prints three lines; one field, so they are joined.
             "host": "; ".join((facts.get("mc --host") or "").split("\n")) or None,
+            "tag": os.environ.get("MC_TAG") or None,
+            "asset": os.environ.get("MC_ASSET") or None,
+            "asset_sha256": os.environ.get("MC_ASSET_SHA256") or None,
+            "commit": os.environ.get("MC_COMMIT") or None,
             "binary_sha256": sha256_of(mc) if os.access(mc, os.R_OK) else None,
             "binary_bytes": os.path.getsize(mc) if os.access(mc, os.R_OK) else None,
         },
@@ -551,9 +734,22 @@ def write_report(path, res, phases):
     L.append("| nproc / mem | %s / %s kB |" % (c["nproc"], c["mem_kb"]))
     L.append("| kernel | `%s` |" % (c["kernel"] or "?"))
     L.append("| pinned cpus | %s |" % (c["pinned_cpus"] or "none (not Linux)"))
+    if c.get("image"):
+        L.append("| image | `%s` |" % c["image"])
     L.append("| mc | `%s`, `%s` |" % (mc["version"], mc["host"]))
+    L.append("| mc road | %s%s |"
+             % (mc.get("road"),
+                (", asset `%s`" % mc["asset"]) if mc.get("asset") else
+                ((", commit `%s`" % mc["commit"]) if mc.get("commit") else "")))
+    if mc.get("asset_sha256"):
+        L.append("| asset sha256 | `%s` (verified before unpacking) |" % mc["asset_sha256"])
     L.append("| mc sha256 | `%s` (%s B) |" % (mc["binary_sha256"], mc["binary_bytes"]))
     L.append("| reps | %d, first %d dropped |" % (res["reps"], res["dropped"]))
+    if res.get("total_job_minutes") is not None:
+        L.append("| runner cost | %s min over %d jobs (%s) |"
+                 % (res["total_job_minutes"], len(res.get("jobs") or []),
+                    ", ".join("%s %s" % kv for kv in
+                              sorted((res.get("job_minutes") or {}).items()))))
     L.append("| tolerance / floor | %s / %s on `%s`%s |"
              % (res["tolerance"], res["regress_min"], res["regress_phase"],
                 "" if res["regress_gated"] else " (not gated: that phase was not run)"))
@@ -563,16 +759,31 @@ def write_report(path, res, phases):
     for k, v in sorted(res["toolchains"].items()):
         L.append("* `%s`: %s" % (k, v))
     L.append("")
+    # A merged run carries one job per toolchain, each with its OWN reference
+    # timed inside it: the ratio of a row is against that job's reference and
+    # never against another job's, so the column says which job it came from and
+    # the per-job reference medians are listed instead of averaged.
+    jobs = res.get("jobs")
+    tc_col = any("toolchain" in r for r in res["rows"])
     for ph in phases:
-        ref = res["verdict"]["reference_absolute_median"][ph]
-        L.append("## Phase `%s` (reference median %.3f s)\n" % (ph, ref))
-        L.append("| row | variant | median s | best s | max s | ratio | run RSS | compile s | binary B | `__text` B |")
-        L.append("|---|---|---|---|---|---|---|---|---|---|")
+        if jobs:
+            refs = ", ".join("%s %.3f s" % (j["toolchain"],
+                                            j["reference_absolute_median"][ph])
+                             for j in jobs if ph in j["reference_absolute_median"])
+            L.append("## Phase `%s` (the reference, timed once per job: %s)\n" % (ph, refs))
+        else:
+            L.append("## Phase `%s` (reference median %.3f s)\n"
+                     % (ph, res["verdict"]["reference_absolute_median"][ph]))
+        L.append("| row |%s variant | median s | best s | max s | ratio | run RSS | compile s | binary B | `__text` B |"
+                 % (" job |" if tc_col else ""))
+        L.append("|---|%s---|---|---|---|---|---|---|---|---|" % ("---|" if tc_col else ""))
         for r in res["rows"]:
             if r["phase"] != ph:
                 continue
-            L.append("| `%s` | %s | %.3f | %.3f | %.3f | %.3f | %d | %.3f | %d | %s |"
-                     % (r["row"], r["label"], r["median"], r["best"], r["max"],
+            L.append("| `%s` |%s %s | %.3f | %.3f | %.3f | %.3f | %d | %.3f | %d | %s |"
+                     % (r["row"],
+                        (" `%s` |" % r.get("toolchain", "?")) if tc_col else "",
+                        r["label"], r["median"], r["best"], r["max"],
                         r["ratio_to_reference"], r["rss_bytes"], r["compile_s"],
                         r["binary_bytes"],
                         r["text_bytes"] if r["text_bytes"] is not None else "-"))
@@ -585,10 +796,15 @@ def write_report(path, res, phases):
                 "reported, not gated: the floor is calibrated for phase `%s`"
                 % res["regress_phase"]))
     r1 = v["rep1_over_kept_best"]
-    L.append("* repetition 1 against the best of the kept: %sx to %sx, median %sx -- which is why it is dropped"
-             % (r1["min"], r1["max"], r1["median"]))
+    L.append("* repetition 1 against the best of the kept%s: %sx to %sx, median %sx -- which is why it is dropped"
+             % (" (the `%s` job's)" % res.get("toolchain") if jobs else "",
+                r1["min"], r1["max"], r1["median"]))
     for ph in phases:
-        s = v["rep1_over_kept_best_by_phase"][ph]
+        # a merged run takes this breakdown from ONE job, so a phase another job
+        # ran and that one did not has no entry -- report the gap, never crash.
+        s = v["rep1_over_kept_best_by_phase"].get(ph)
+        if not s:
+            continue
         L.append("  * phase `%s`: %sx to %sx, median %sx%s"
                  % (ph, s["min"], s["max"], s["median"],
                     " (run first in each repetition, so it pays the cold pages)"
@@ -599,7 +815,10 @@ def write_report(path, res, phases):
         L.append("")
         L.append("Skipped rows (never faked):\n")
         for s in res["skipped"]:
-            L.append("* `%s`: %s" % (s["row"], s["reason"]))
+            L.append("* `%s`%s: %s"
+                     % (s["row"],
+                        (" (job `%s`)" % s["toolchain"]) if s.get("toolchain") else "",
+                        s["reason"]))
     for f in v["failures"]:
         L.append("")
         L.append("**FAIL**: %s" % f)

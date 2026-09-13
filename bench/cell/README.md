@@ -13,10 +13,47 @@ unverifiable tree label — with two mechanisms:
   gated: the same unchanged `clang -O2` binary of this program has timed 0.420 s, 0.49 s and
   0.52–0.56 s in three sessions on one Mac, a 33% span with nothing changed.
 
-This is **step A**: the runner, the schema and the phase argument. The workflow that runs it on three
-cells (step B) and the committed history with its gate (step C) are not here yet.
+This is **step A + step B**: the runner, the schema, the phase argument and the workflow that runs it
+on three cells. The committed history with its gate (step C) is not here yet.
 
-## Running it
+## Running it on the three cells
+
+```sh
+gh workflow run bench-cell.yml                           # all three cells, 7 repetitions
+gh workflow run bench-cell.yml -f cells=ubuntu-latest    # one cell
+gh workflow run bench-cell.yml -f reps=11
+gh workflow run bench-cell.yml -f mc-version=v0.15.34    # a named release instead of the newest
+gh workflow run bench-cell.yml -f ref=m52-inlining       # build mc from a commit (macos-15 only)
+gh run watch                                             # and then
+gh run download <id> -n bench-cell-report-<id> -D /tmp/cell
+```
+
+It also runs itself every **Sunday at 06:00 UTC**, three hours after the soak's hour. It is not a
+required check, it never runs on a push or a pull request, and it commits nothing: the workflow
+keeps `contents: read` and prints the `gh run download` line that puts a run into
+`bench/results/<date>-<run id>/`, where a human commits it in a docs-only pull request.
+
+The cells are `macos-15` (arm64, Apple clang, `mc --exe` writing Mach-O), `ubuntu-24.04-arm`
+(aarch64, `taskset -c 0`) and `ubuntu-latest` (x86_64, `taskset -c 0`). **None of them is an Apple
+M4**, so none of them reproduces the numbers [`../../docs/comparison.md`](../../docs/comparison.md)
+and [`../../docs/specs/M49.md`](../../docs/specs/M49.md) record on this project's own host: each
+cell records its own reference and is compared only with itself.
+
+### How to read a run
+
+One `RESULTS.md` and one `results.json` **per cell**, each merged from that cell's six toolchain
+jobs. The header table names the machine, the image, the `mc` road (`release` with its asset and
+the checksum that was verified, or `tree` with its commit) and the SHA-256 of the binary that was
+actually timed. Then one table per phase, with a `job` column: **a row's `ratio` is against the
+reference its own job timed**, which is why the reference appears once per job in the phase heading
+instead of once per cell. Absolute seconds are there to be read and never gated — the reference
+row's own median is the machine's health indicator.
+
+Two consecutive runs of the same cell are what the tolerance is about: every row's
+`ratio_to_reference` should agree within `TOLERANCE`, and on the measurements below that holds for
+the `all` phase and not for the three short ones.
+
+## Running it here
 
 ```sh
 make bench-cell                                  # every row whose toolchain is installed
@@ -50,9 +87,11 @@ One row per `build.sh` invocation, the shape [`../soak/build.sh`](../soak/build.
 `cell.py` never needs to know that the C# JIT row is launched through the `dotnet` host while every
 other row is a plain binary.
 
-Every threshold and pin lives in [`versions.env`](versions.env) — one file, read by the workflow
-(`cat bench/cell/versions.env >> "$GITHUB_ENV"`), by the local road (`. bench/cell/versions.env`)
-and by `cell.py`. Two pins in this repository have already resolved to two different compilers in
+Every threshold and pin lives in [`versions.env`](versions.env) — one file, read by `cell.py`, by
+the local road (`. bench/cell/versions.env`) and by the workflow, which exports the five names a
+`setup-*` action needs (`grep -E '^(CLANG_APT|GO_VERSION|ZIG_VERSION|RUST_VERSION|DOTNET_VERSION)='
+… >> "$GITHUB_ENV"`) and leaves the repetition schedule and the two thresholds to `cell.py`, so
+there is never a second copy of them. Two pins in this repository have already resolved to two different compilers in
 two recorded runs (`go 1.26` → go1.26.4 and go1.26.7; `10.0.x` → SDK 10.0.301 and 10.0.400), which is
 why they are exact and why `facts.json` records what every tool actually printed.
 
@@ -70,7 +109,7 @@ repository could re-measure those: M49 got them by trimming `main` in a scratchp
 
 Six full runs, three consecutive PAIRS, on this project's own Mac (Apple M4, Darwin 25.6.0,
 macOS 26.6.2) with nothing pinned — macOS has no `taskset`, so this is the noisiest of the three
-cells step B will add. 11 rows × 4 phases × 7 repetitions each.
+cells the workflow drives. 11 rows × 4 phases × 7 repetitions each.
 
 **Two consecutive runs agree, per row, within** (worst row of that phase; how many rows exceeded 5%):
 
@@ -100,6 +139,37 @@ six, worst row 1.79x — the 1.25–1.62x band `bench/results.json`'s own three-
 later phases of the same repetition find the pages warm and sit at 1.01–1.12x median, so the cell
 reports the gap per phase instead of one diluted number.
 
+## What the three cells measured
+
+Two consecutive complete runs of the workflow (`34782812594`, `34783020976`). The machines, as the
+cell recorded them: `macos-15` is an **Apple M1 (Virtual)**, `ubuntu-24.04-arm` a Neoverse guest that
+publishes no `model name`, and `ubuntu-latest` was an **AMD EPYC 7763** in one run and an **Intel
+Xeon 8573C** twenty minutes later — the CPU model changing between two runs, which is why absolute
+seconds are recorded and never gated.
+
+| cell | `mc -O` / `clang -O2`, `mix` | `mc` plain / `mc -O`, `mix` | `all` worst row drift | rows over 5% |
+|---|---|---|---|---|
+| `linux-arm64` | 1.803 / 1.805 | 3.645 / 3.650 | **4.80%** | **0** |
+| `macos-arm64` | 1.465 / 1.420 | 2.305 / 2.422 | 12.24% | 2 |
+| `linux-x86_64` | 1.500 / 1.447 | 1.213 / 1.193 | 22.60% | 1 |
+
+Read three things out of it.
+
+**The x86-64 optimizer buys 19–21% where the AArch64 one buys 130–265%** — the first timing M49 step
+D2's allocator has ever had, and the reason the tooth's floor is per architecture
+(`REGRESS_MIN_X86_64`, below). It allocates five registers against AArch64's ten.
+
+**`TOLERANCE = 0.05` on `all` holds on one cell of three.** What moves is the reference itself: a
+job's own reference median drifted by up to **+31.81%** between the two runs, and inside a single
+run the six per-job references of `macos-arm64` spanned 0.556 to 0.719 s for the same `clang -O2`
+binary. A row's ratio carries the noise of the job that timed its reference, so comparing that ratio
+across two runs adds two samples of runner load instead of cancelling them.
+
+**What survives is a ratio taken inside one job.** The tooth — two rows of the same job — drifts
+0.13%, 1.6% and 5.1% across the same pair of runs, and the `mix` median drift is 0.05–2.82%
+everywhere. That is the finding step C's gate should be built on, and
+[`docs/specs/M50.md`](../../docs/specs/M50.md) § Implementation notes — step B carries the rest.
+
 ## The teeth
 
 `mc --opt=0` against `mc --opt=1` is a deliberately regressed compiler that is already on `main`, so
@@ -121,6 +191,14 @@ is a weighted average that lands just above the floor — and on the quieter hos
 `all` was 0.793 / 0.548 = **1.45**, which a 1.5 floor would have failed. `mix` carries the same floor
 with half again of margin and is the phase the optimizer is actually about.
 
+**The floor is per architecture**, and x86-64 needed its own: it measures 1.18–1.21 on `mix`, so the
+first two runs of the workflow FAILED on `ubuntu-latest` with `tooth 1.181 below 1.50` — the gate
+doing its job on a number nobody had measured when 1.5 was written. `REGRESS_MIN_X86_64=1.10` sits
+7–9% below both measurements and 10% above the 1.00 the ratio collapses to when the allocator stops
+allocating, so a deliberately regressed compiler still fails it. `REGRESS_PHASE` needs no per-cell
+value: on `ubuntu-latest` the tooth's run-to-run spread is 2.6% on `mix` against 28.7% on `all`,
+69.3% on `primes` and 8.5% on `fib`.
+
 ## The files this writes
 
 `results.json` — one object per cell run: the cell's identity (id, CPU model, nproc, memory, kernel,
@@ -141,7 +219,7 @@ skipped rows with their reasons.
 ## An optimizer milestone's use of this
 
 ```sh
-gh workflow run bench-cell.yml -f ref=<the branch>     # once step B exists
+gh workflow run bench-cell.yml -f ref=<the branch>     # on the three cells
 make bench-cell                                        # or locally, before and after
 ```
 

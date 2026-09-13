@@ -5890,6 +5890,67 @@ agents (`.claude/agents/`): `stage0-dev` (C23), `mc-dev` (`.mc` code), `reviewer
   Not in this step and named in § Implementation notes 10: `bench/cell/gate.py` and the first
   committed `bench/results/` directories (step C), `.github/workflows/bench-cell.yml` and the
   three cells (step B), any Dockerfile (D13, deferred).
+- M50 step B ✔ (`docs/specs/M50.md` § 9 row 2 + its new § Implementation notes -- step B):
+  **the bench-cell workflow, three cells, and the first x86-64 timing of M49 D2's allocator.**
+  Nothing in `src/`, `stage0/`, `lib/` or `tests/` -- `git diff main -- src/ stage0/ lib/ tests/` is
+  empty, no golden moves. `.github/workflows/bench-cell.yml` (299 lines): a `plan` job turning the
+  `cells` input into a (cell, toolchain) matrix with `cell.py --plan` (an unknown cell fails THERE,
+  before eighteen runners are spent), **one job per TOOLCHAIN** on `macos-15` /
+  `ubuntu-24.04-arm` / `ubuntu-latest` with only that toolchain installed at the version
+  `bench/cell/versions.env` pins and `clang -O2` of `bench/c/bench.c` built and timed INSIDE every
+  one of them as the reference, and a `report` job merging every artifact into one `results.json`
+  and one `RESULTS.md` **per cell**. Dispatch inputs `ref`/`cells`/`reps`/`mc-version` plus the
+  Sunday 06:00 UTC cron; never on a push, a pull request or a tag; `permissions: contents: read`, so
+  nothing is committed and the run summary prints the `gh run download` line a human uses. `cell.py`
+  +222/-14 (180 code): `--plan`, `--toolchain`, `--merge`, the runner's own `ImageOS`/`ImageVersion`
+  and the `MC_ROAD`/`MC_TAG`/`MC_ASSET`/`MC_ASSET_SHA256`/`MC_COMMIT` the workflow fills. **No
+  `facts.py`** (the spec priced ~60 python for it): `cell.py` already owned `host_facts` and the
+  report writer.
+  **Three dispatches of the real workflow**, 18 jobs each, 21:00-21:13 UTC 2026-09-13 --
+  `34782461342`, `34782812594`, `34783020976`. `workflow_dispatch` cannot reach a workflow that is
+  not on the default branch (`HTTP 404`), so the runs were triggered by a `push:` trigger added in
+  its own commit and **deleted before the merge**.
+  * **Acceptance 4, the number M49 step D2 deferred to this cell**: on `ubuntu-latest`, `mc -O` is
+    **1.500 / 1.447x `clang -O2`** on `mix` and the tooth (`mc` plain / `mc -O`) is
+    **1.213 / 1.193** -- the x86-64 allocator buys **19-21%** where AArch64's buys **130-265%**
+    (`linux-arm64` tooth 3.645 / 3.650, `macos-arm64` 2.305 / 2.422). Five allocatable registers
+    against ten. Until this run that side had only an instruction count (-11.6%).
+  * **The floor became per-architecture**, the step's one design change: 1.5 was calibrated on
+    AArch64, so runs 1 and 2 correctly FAILED with `tooth 1.181 below 1.50`.
+    `REGRESS_MIN_X86_64=1.10` (7-9% below both measurements, 10% above the 1.00 a dead allocator
+    gives); `REGRESS_PHASE` needs no per-cell value -- on `ubuntu-latest` the tooth's run-to-run
+    spread is 2.6% on `mix` against 28.7% / 69.3% / 8.5% on `all` / `primes` / `fib`. Run 3 green on
+    all three cells.
+  * **Acceptance 1 is met on ONE cell of three, and that refutes step A's recommendation.** Worst
+    per-row `all` drift between two complete runs: `linux-arm64` **4.80%, 0 rows over 5%**;
+    `macos-arm64` 12.24%, 2 over; `linux-x86_64` 22.60%, 1 over. The mechanism is measured: a job's
+    own reference median moved **+31.81%** between the runs, and inside ONE run the six per-job
+    references of `macos-arm64` spanned 0.556-0.719 s for the same `clang -O2` binary. A row's ratio
+    carries its own job's noise. What holds is an IN-JOB ratio: the tooth drifts 0.13% / 1.6% /
+    5.1%. Recommended to step C, which owns `gate.py`: gate in-job, report cross-run (0.25 would
+    cover everything measured).
+  * **Two step-A defects the first run found, both invisible locally**: a RELATIVE `--out` made
+    `build.sh`'s `cd` resolve `-o <out>/go` wrongly and **five of eleven rows were SKIPPED on every
+    cell** (`cell.py` now makes the directory absolute; runs 2 and 3 have all eleven rows and no
+    skips anywhere), and the merge's blind `update()` let the five jobs that do NOT install Go and
+    Rust overwrite the pinned strings with the image's preinstalled ones -- the first report claimed
+    go1.24.13 and rustc 1.98.1 where the owning jobs had installed **1.26.7** and **1.96.0**. After
+    the fix every cell reports exactly what is pinned.
+  * **The runners are not the reference machines and the cell says so**: `macos-15` is an **Apple M1
+    (Virtual)**, `ubuntu-24.04-arm` publishes no `model name`, and `ubuntu-latest` was an **AMD EPYC
+    7763** in run 1 and an **Intel Xeon 8573C** in run 2 -- risk 2 happening twenty minutes apart,
+    on the first day. M49's 1.30x stays an Apple M4 number no cell reproduces (D14).
+  * **Acceptance 9**: 35 s to 1m31s per job, 4.12-6.18 min per cell, **17.2 min of runner time for a
+    full three-cell run** in 2m25s-3m1s of wall clock -- about a third of the spec's ~1 runner-hour
+    estimate, because the timing is ~21 s and the toolchain install dominates.
+  -- `make check` **RC 0, zero FAIL** (`test-sandbox` 73 ok / 0 failed / 1 skipped as its last
+  line), `make check-docs` green (206 symbols, 49 flags, 35 TOML keys, 10 directives, 52 samples,
+  484 links). Docs: `docs/ci.md` (a `bench-cell.yml` section, and the table gained rows for BOTH
+  bench workflows -- the count sentence said five and the file count was already six),
+  `bench/cell/README.md` (how to dispatch, how to read a run, what the three cells measured),
+  `docs/specs/M50.md` § 9 row 2 LANDED with the real line counts + nine implementation notes.
+  Step C (`gate.py`, the first committed `bench/results/` directories, `docs/comparison.md`
+  § Conditions) is what remains to close M50.
 - Next: the **site + registry server, M47 S4-S6**, in
   `minicompiler/mc-registry`; then **M42 step 2** (PE `--exe`, CI-gated on the Windows runners).
   **M46** only on the owner's request; **M43 Layer 2** after 1.0.0. M13 and M18 stay in the backlog
