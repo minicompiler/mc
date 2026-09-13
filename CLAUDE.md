@@ -5368,7 +5368,8 @@ agents (`.claude/agents/`): `stage0-dev` (C23), `mc-dev` (`.mc` code), `reviewer
   667687 B). `make check` green end to end (**RC 0, zero FAIL**, 11m55s): `budget` 2848/3000,
   `test` 32/32, `check-lex` 177/177 (5 skipped), `check-ast` 178/178, `check-asm` 178/178,
   `check-obj` **32/32 identical to the frozen seed** and 32/32 `arm64-surface` against `macho`,
-  `check-bundle`, `bootstrap` at both fixed points with the cross-road identity, `check-surface`
+  `check-bundle`, `bootstrap` at both fixed points (plain `mc2.o` 1538944 B, optimized `mc2o.o`
+  1481488 B) with the cross-road identity, `check-surface`
   32/32, **`check-opt` 72/72**, `test-exe` 32/32, `check-mc` 21/21, `check-standalone`,
   `check-parts`, `check-toml` 10/10, `check-build` 55/55, `check-pkg`, `check-tool`,
   `check-sysroots` (13 rows), `check-stubs` 9/9, `check-limits` **17/17 under 90%**,
@@ -5401,6 +5402,167 @@ agents (`.claude/agents/`): `stage0-dev` (C23), `mc-dev` (`.mc` code), `reviewer
   "`b.<cond>` is the one new form" note and the measured paragraph), `docs/specs/M49.md` § 10 row B
   marked LANDED with the real line count and the real numbers. `docs/comparison.md` and
   `bench/RESULTS.md` stay for step C, which owns the milestone's headline ratio (§ 8).
+- M49 step C ✔ (`docs/specs/M49.md` § 4.8, § 10 row C, + its new § Implementation notes -- step C):
+  **loop-invariant hoisting** -- a constant that costs two or more instructions and the address of a
+  global, taken once at function entry instead of on every iteration. All in `src/gen_walk.mc`; no
+  machine was edited, and `stage0/` is untouched (2848/3000, `git diff main -- stage0/` empty).
+  * **What a candidate is.** Inside a loop (nesting depth >= 1) two node kinds re-materialise the
+    same bits every iteration: an `N_INT` whose immediate needs a `movz` plus at least one `movk`
+    (`(((u64) v) >> 16) != 0` -- unsigned, so a negative `i64` counts), and an `adrp`+`add` of a
+    GLOBAL, which is a global array's decay or `&global`. Each DISTINCT value is recorded once, in
+    first-occurrence order -- constants by VALUE, globals by their INDEX in the global table, so
+    nothing is hashed and no pointer is compared -- scored with D1's own `8^depth` capped at `8^3`,
+    and selected with D1's own loop: highest score not yet taken, first occurrence on a tie,
+    threshold 3. They take the registers the LOCALS left (§ 4.8's order), so a local never loses one
+    to a constant.
+  * **Only an INTEGER literal may take a register, and that is the one defect this step had.**
+    A taught literal is an `N_INT` too: `<float>`'s `f64` literal is an `N_INT` whose type is
+    `TK_FLOAT` and whose `val` is the IEEE bit pattern. The first implementation keyed on the
+    IMMEDIATE alone and hoisted one into `x19..x28`, handing the float machine an integer alias for
+    a value that lives in `v16..v23` -- reproduced with a three-line probe through
+    `build/mc-float`: `0.0 + 2.5` three times came out **`0x56e6e8cc4576e6a1` with `--opt=1` where
+    the plain road says `0x401e000000000000`**. The guard is `opt_lit_hoistable(n)` -- `type_kind`
+    is `TK_INT` or `TK_SINT` and `type_width <= 8`, exactly what `opt_eligible` asks of a local,
+    which also excludes a 16-byte `TK_WIDE` literal -- and it is ONE predicate read by the pre-pass
+    AND by the use site, so the two cannot disagree about which literals a register stands for.
+    `tests/float/028-lit-in-loop.mc` (three shapes: the original repro, two literals in one loop
+    with one also read after it, and a literal two loops deep where the score is `8^2`) is the
+    gate, on both roads and on all five legs through `check-float` and `check-opt`. The GLOBAL half
+    has no such hazard and it was probed rather than assumed: an `f64 tab[8]` indexed inside a loop
+    gives `0x4030000000000000` on both roads, because an array's decay is typed `uptr` whatever its
+    elements are.
+  * **The one place a use is rewritten is the use site**, three of them: `lower_expr`'s `N_INT` arm,
+    `gen_ident`'s global-array arm and `gen_addr`'s `RK_GLOBAL` arm each ask `opt_hreg(kind, key)`
+    and issue `MTASK_REG_LOAD` instead when the answer is a register. Every use in the function is
+    rewritten, not only the ones inside the loop: the register holds exactly that value for the
+    whole function, which `mixed()` in the test asserts. Entry materialisation is
+    `set_walk_depth_type(0, TY_I64)` + `MTASK_CONST`/`MTASK_SYM_ADDR` at depth 0 +
+    `MTASK_REG_STORE(TY_I64, 0, r)`, emitted AFTER the parameters -- the mirror of D1's
+    saves-before-parameters deviation, and for the same reason: the parameters must leave `x0..x7`
+    before anything else writes a depth register. It runs **even when the loop is never entered**,
+    which cannot fault (a symbol address is a relocation, a constant is an immediate) and which
+    `never()` in the test asserts.
+  * **Deviation from § 4.8, on record**: a STRING literal's address and a FUNCTION's address are NOT
+    hoisted. Both must be keyed by a symbol index and both CREATE their symbol on first use
+    (`str_sym` also appends the bytes to `__cstring`), so hoisting one moves symbol creation and
+    literal placement from mid-function to entry -- deterministic, but bytes moved for a gain § 1.2
+    never measured. A global's symbol already exists when `gen_func` runs (`gen_globals` is earlier
+    in `gen_lower`) and `glb_sym` is a plain read. Also on record: the test is
+    `tests/mc/101-opt-hoist.mc`, since D1 had taken 097-100.
+  * **Cost: 173 added / 8 removed lines in `src/`, 107 of the added lines neither comment nor
+    blank**, all in `src/gen_walk.mc` (the spec priced ~80). **Zero new globals** -- the candidate list is
+    four more columns of the existing `opt` arena record (`OPT_HMAX 32`, a capacity in D1's sense:
+    past it a value is not considered and the function still compiles) -- so
+    `build/mc1 limits src/mc.mc` reports `globals 446/512` **before and after**, and `lowered` goes
+    1906 -> 1913, the seven being `opt_big_imm`, `opt_hoist_use`, `opt_hreg` and four readers.
+  * **The plain road does not move** (the three proofs; the goldens DO move, because
+    `src/gen_walk.mc` is bundled and `src/bundle_data.mc` is part of `src/mc.mc`):
+    `check-obj` **32/32 objects identical to the frozen seed**;
+    `diff <(build/mc1 --dump-asm src/mc.mc) <(build/mc2 --dump-asm src/mc.mc)` **empty** (and empty
+    with `--opt=1` on both sides); and `scripts/check-inert.sh build/mc1.pre build/mc1`
+    (pre = a `mc1` built from `main` e789f84) -- **33 objects identical** (`tests/*.mc` and
+    `src/mc.mc`) plus byte-identical artefacts for `examples/api`, `lang`, `conc`, `desktop` and
+    `kernel` through the taught compiler each side builds. On the OPTIMIZED road the same script
+    reports a difference for exactly **three** of the 33 -- `020-globals`, `025-linecount` and
+    `src/mc.mc` -- the only corpus programs with a hoistable value in a loop.
+  * **Both fixed points and the cross-road identity** (`make bootstrap`): plain
+    `mc2.o == mc3.o` (1538120 B), optimized `mc2o.o == mc3o.o` (1480680 B), and
+    **`build/mc2o src/mc.mc == build/mc2.o`** -- the `-O`-built compiler computes byte for byte the
+    compiler the plain one computes.
+  * **The sweep** (§ 9.6), `build/mc2o.o` under `llvm-objdump`/`llvm-mc -triple=arm64-apple-macos`:
+    **2413 distinct non-pc-relative instructions re-assemble byte for byte, 0 mismatches** (25520
+    pc-relative instructions counted and not re-assembled). **0 new instruction forms**, measured
+    twice: the optimized object's mnemonic set is 39 against the plain object's 33 and the
+    difference is exactly step B's six `b.<cond>`, and against the STEP-B optimized object
+    (`build/mc1.pre --opt=1`) step C adds **nothing** and removes nothing.
+  * **The milestone's number** (§ 9.2), this host (Apple M4, macOS 26.6.2), wall clock from one
+    `python3` process, best of nine with the binaries interleaved: the whole workload **0.548 s
+    against `clang -O2`'s 0.420 s = 1.30x**, from the plain road's 0.793 s. It is **at** the gate
+    rather than under it -- three runs at growing repetition counts gave 1.297x (best of 11),
+    1.305x (best of 9) and 1.291x (best of 15), so the host's own ~2% spread straddles it. All three
+    PER-PHASE figures are met with margin: `mix` **0.216 s** (ceiling 0.28) -- **parity with
+    `clang -O2`'s 0.215** -- `primes` **0.202 s** (ceiling 0.21) and `fib` **0.132 s**
+    (ceiling 0.18). Step C's OWN share, measured against a `mc1` built from `main` e789f84 with the
+    same sources interleaved: whole 0.551 -> 0.548, `mix` 0.220 -> 0.216, `primes` 0.205 -> 0.202,
+    `fib` unchanged -- 1 to 2%, at the edge of a 10 ms timer, which is what § 1.2 predicted for
+    everything after the allocator (these loops are latency-bound on the dependent `mul`/`add`
+    chain). What moves plainly is the loop body: `mix` 50 on the plain road and 24 after
+    step B -> **18 instructions per iteration**, with no memory traffic and no constant costing more
+    than the one `movz` a shift count is worth, `_primes`' sieve inner loop 7, and the
+    `--dump-asm` of the workload 312 -> 319 lines (the entry cost). Code size: `src/mc.mc`'s
+    `__text` **535 720 B plain -> 480 420 B with `--opt=1`, -10.3%**; the workload binary's `__text`
+    1 480 -> 1 276 B against `clang -O2`'s 1 320.
+    The optimizer's own cost (§ 9.3): `mc1 --opt=1 src/mc.mc` **0.807 s against the plain road's
+    0.814 s** (bound 1.3x), and the `-O`-built compiler does the same plain work in **0.744 s**.
+  * **Proofs.** `tests/mc/101-opt-hoist.mc` (a constant needing four `movz/movk` and a global
+    array's address both hoisted in one loop; a loop that is NEVER entered, whose entry code still
+    runs; and a constant read inside the loop AND after it), portable to all five targets and picked
+    up by the `tests/mc/1*.mc` globs of `test-linux.sh`/`test-windows.sh` and by `check-mc`.
+    `scripts/check-opt.sh` **75/75** -- the differential run on both roads for every corpus program,
+    19 `tests/float/*.mc` under `--opt=1` (028 among them), `examples/lang` and `conc` with the same stdout on both
+    roads, `api`/`desktop` built both ways, the null-slot proof (`examples/kernel`'s image 3304 B
+    and `examples/avr`'s ELF 15255 B `cmp`-identical on both roads, no machine edited), plus the new
+    **hoist assertion**: `hot`'s loop has `adrp 2 movk 5` on the plain road and **`adrp 0 movk 0`**
+    with `--opt=1`, with the values built once at entry (`adrp 1, movk 4`). Proved to have teeth by
+    running the same script with the step-B compiler: `FAIL hoist: loop plain adrp 2 movk 5, opt
+    adrp 2 movk 5`, 74/75. `--dump-asm` identity for candidate-free programs: **10 of 48**.
+    `check-surface` 32/32 plus the tenth ABI assertion with `--opt=1` (**1913 functions, 3532
+    allocated registers, every one saved and restored, `x18` never named**; `x18..x28` never appear
+    in 144356 lines of the plain lowering) and `lib/machine_probe.mc` on both roads (**67144 tasks /
+    0 v5 slot calls plain, 67302 / 24217 with `--opt=1`, object identical to the bundled
+    machine's**).
+  -- `make bundle` re-run BEFORE bootstrapping (101 files, raw 1460054 -> LZ 668738, blob 669989 B).
+  `make check` green end to end (**RC 0, zero FAIL**), measured on this tree: `budget` 2848/3000,
+  `test` 32/32, `check-lex` 177/177 (5 skipped), `check-ast`/`check-asm` 178/178, `check-obj`
+  **32/32 objects identical to the frozen seed**, 32/32 `mc1` vs `mc2` and 32/32 `arm64-surface`
+  against `macho`, `check-bundle`, `bootstrap` at both fixed points with the cross-road identity,
+  `check-surface` 32/32, **`check-opt` 75/75**, `test-exe` 32/32 via `--exe`, `check-mc` 22/22,
+  `check-standalone`, `check-parts`, `check-toml` 10/10, `check-build` 55/55, `check-pkg` 177/177,
+  `check-tool` 27/27, `check-sysroots` (13 rows), `check-stubs` 9/9, `check-limits`
+  **17/17 under 90%** (the seed guard on `src/mc_seed.mc`; the tightest row is `globals`
+  268/512 = 52%, and `build/mc1 limits src/mc.mc` reports `globals 446/512` unchanged),
+  `check-minimal`, `test-linux` 47/47 on linux/aarch64 and 44/44 on linux/x86_64, the four `--exe`
+  cells 50/50 (aarch64 musl) + 50/50 (aarch64 gnu) + 47/47 (x86_64 musl) + 47/47 (x86_64 gnu),
+  `test-windows` 48/48 and `test-windows-x86_64` 45/45 objects cross-compiled with
+  `test-windows-x86_64-exe` 24/24 PE tests, `check-examples`, `check-lang`, `check-conc`,
+  `check-desktop`, `check-float` (16/16 objects linked per Windows leg), `check-wide`,
+  `check-kernel`, `check-avr`, `test-sandbox` 73 ok / 0 failed / 1 skipped, `check-docs`
+  (206 symbols, 49 flags, 35 TOML keys, 10 directives, 52 samples, 475 links before this step's
+  doc edits), `site` 97 pages + `check-site` (0 link problems) + `check-site-linux` 21/21.
+  The two macOS goldens rewritten twice in this step -- once for the hoisting and once for the
+  float guard -- final values `mc2.sha256`
+  `f140a7dc...5f131` -> `bac73c5cc766cb4466061849de5a6609d9c92b6a7e7265b11f2a22e25a32e3fe` and
+  `mc2-opt.sha256` `03a049d8...a4bb6` ->
+  `41bc8f64d9c3c46b86b3beeabb5456175c7cda7616fe20e5f0ca78ef9b0fa752`, each recorded by
+  `make bootstrap` after the two empty `--dump-asm` diffs, `cmp build/mc2.o build/mc3.o`,
+  `cmp build/mc2o.o build/mc3o.o` and the cross-road identity. The four FOREIGN goldens rewritten
+  with them: the Linux pair deleted and re-recorded by `make check-linux-host` (RC 0 over all four
+  cells -- aarch64 musl and gnu, x86_64 musl and gnu -- each after its own `mc2l.o == mc3l.o`
+  (1928880 B on aarch64, 1817384 B on x86_64) and with the cross proof `mc2l --backend=macho
+  src/mc.mc` byte for byte the macOS `build/mc2.o` green in all four) --
+  `mc2-linux-arm64.sha256` `a6ee33003e3dbbdab5b4cc843785223dd5ebbd4eaa540a4217a4abb780987e75`,
+  `mc2-linux-x86_64.sha256` `7c6f0a5044a5f05b3596553d6a3f981006e9f3072fd968edacfd8ca2228fbffb`,
+  each recorded in its musl cell and re-verified by the gnu cell of the same architecture; the
+  Windows pair cross-computed per `tests/golden/README.md` --
+  `mc2-windows-arm64.sha256` `827dc98c42841ed3310784425695f628f2cda4d8d2155546e134cdee2c4c6984`
+  (1573289 B), `mc2-windows-x86_64.sha256`
+  `5294811c13acb6b7966502ef2153e7275a8280bf3c12363812fdece9a64d456a` (1627309 B).
+  One flake on record and NOT step C's: the first of the two full `make check` runs after the float
+  guard failed on `test-sandbox`'s `forever` case (`killed: signal 9 (SIGKILL)` where the report
+  wants `killed: cpu limit (2 s)`, exit 137 against 124) -- the 100 ms of rusage slack the M43 step B
+  entry documents, inside the Lima VM. The case is green on the re-run and on the final `make check`
+  (73 ok, 0 failed), and step C cannot reach it: the sandbox compiles on the PLAIN road, which
+  `check-inert` proves byte-identical.
+  Docs: `docs/reference/machine.md` § What the arm64 allocator does (the hoisted pseudo-locals, what
+  is not hoisted and why, and the measured paragraph rewritten),
+  `docs/guide/15-optimizing.md` (§ What it does gained the invariant half; § What it costs is now a
+  three-column table with `clang -O2` beside both roads), `docs/specs/M49.md` (§ 10 row C marked
+  LANDED with the real line count, plus § Implementation notes -- step C, seven notes),
+  `docs/comparison.md` § Reading the numbers and § Where to improve item 1 (both rewritten from
+  ESTIMATE to MEASUREMENT: "estimated target: within 1.3x" is now "measured: 1.30x"),
+  `bench/RESULTS.md` § A1 (new, the `-O` block with its own method) and § C (three rows).
+  Not in this step, and named: **D2**, the same allocator for the x86-64 and Win64 machines, where
+  the six v5 slots are still null and `--opt=1` is accepted and does nothing.
 - Next: the **site + registry server, M47 S4-S6**, in
   `minicompiler/mc-registry`; then **M42 step 2** (PE `--exe`, CI-gated on the Windows runners).
   **M46** only on the owner's request; **M43 Layer 2** after 1.0.0. M13 and M18 stay in the backlog

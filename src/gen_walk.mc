@@ -719,7 +719,19 @@ i64 bin_op(i64 op, i64 sgn) {
 #define OPT_NODE 1064                 // OPT_STACK + OPT_MAX * 8
 #define OPT_SCORE 2088                // OPT_NODE  + OPT_MAX * 8
 #define OPT_SAVE  3112                // OPT_SCORE + OPT_MAX * 8; 16 frame slots
-#define OPT_SIZE  3240
+// M49 step C: the hoist list. A candidate here is a VALUE, not a declaration, so
+// it needs its own four columns; OPT_HMAX is 32 because a function can never
+// take more than MTASK_REG_COUNT of them and 32 is already three times that.
+#define OPT_HMAX     32
+#define OPT_HN     3240               // hoist candidates found
+#define OPT_HKIND  3248               // OPTH_CONST or OPTH_GLOBAL
+#define OPT_HKEY   3504               // the constant's value, or the global's index
+#define OPT_HSCORE 3760
+#define OPT_HREG   4016               // -1 = not allocated, else the register index
+#define OPT_SIZE   4272
+
+#define OPTH_CONST   0                // an N_INT that costs two or more instructions
+#define OPTH_GLOBAL  1                // adrp+add of a global's address
 
 uptr opt_state = 0;                   // the one global the optimizer costs
 
@@ -774,6 +786,95 @@ void opt_use(i64 li) {
     st64(r + OPT_SCORE + k * 8, ld64(r + OPT_SCORE + k * 8) + opt_weight());
 }
 
+// ---- M49 step C: loop-invariant values --------------------------------------
+// Inside a loop, two kinds of node re-materialise the same bits on every
+// iteration: a constant whose immediate needs more than one instruction, and the
+// address of a global (adrp + add). Both are candidates for a callee-saved
+// register of their own, materialised ONCE at function entry -- which is safe
+// even when the loop is never entered, because a few instructions at entry can
+// never fault (a symbol address is a relocation, not a load).
+//
+// DEVIATION from docs/specs/M49.md § 4.8, on record: a string literal's address
+// and a function's address are NOT hoisted. Both would have to be keyed by a
+// symbol index, and both CREATE their symbol on first use (`str_sym` also
+// appends to __cstring), so hoisting one moves symbol creation and literal
+// placement inside a function for a gain § 1.2 never measured -- the benchmark's
+// invariants are the two LCG constants, ITERS, N and `sieve`'s address. A
+// global's symbol already exists: gen_globals runs before the first gen_func and
+// glb_sym is a plain read.
+
+// 1 when gen_imm would need two or more instructions, i.e. when any 16-bit part
+// above the low one is non-zero. The shift is unsigned: a negative i64 has its
+// high parts set and is exactly the case worth hoisting.
+i64 opt_big_imm(i64 v) { return (((u64) v) >> 16) != 0; }
+
+// ...and 1 when THIS literal may live in an allocatable register: an integer of
+// the word width or less, exactly the rule opt_eligible applies to a local, and
+// for exactly the same reason.
+//
+// A taught literal is an N_INT too. <float>'s f64 literal is an N_INT whose type
+// is TK_FLOAT and whose val is the IEEE bit pattern, and a float value lives in
+// a float register -- so hoisting one into x19..x28 and handing the depth an
+// INTEGER alias makes the float machine read a register that never held the
+// value. Measured before this guard existed: 2.5 added three times came out
+// 0x56e6e8cc4576e6a1 where the plain road says 0x401e000000000000
+// (tests/float/028-lit-in-loop.mc). The width test covers a 16-byte TK_WIDE
+// literal the same way.
+//
+// ONE predicate, read by the pre-pass AND by the use site, so the two cannot
+// disagree about which literals a register stands for.
+i64 opt_lit_hoistable(i64 n) {
+    i64 t = res_type(n);
+    i64 k = type_kind(t);
+    if (k != TK_INT && k != TK_SINT) return 0;
+    if (type_width(t) > 8) return 0;
+    return opt_big_imm(nd_val(n));
+}
+
+// one use of a hoistable value, weighted by the loop depth it sits in. Only
+// inside a loop: a value materialised once in straight-line code costs nothing
+// where it stands.
+void opt_hoist_use(i64 kind, i64 key) {
+    uptr r = opt_rec();
+    if (ld64(r + OPT_DEPTH) <= 0) return;
+    i64 n = ld64(r + OPT_HN);
+    i64 i = 0;
+    loop {                                       // first-occurrence order, linear
+        if (i >= n) break;
+        if (ld64(r + OPT_HKIND + i * 8) == kind && ld64(r + OPT_HKEY + i * 8) == key) {
+            st64(r + OPT_HSCORE + i * 8, ld64(r + OPT_HSCORE + i * 8) + opt_weight());
+            return;
+        }
+        i = i + 1;
+    }
+    if (n >= OPT_HMAX) return;                   // capacity, not correctness
+    st64(r + OPT_HKIND + n * 8, kind);
+    st64(r + OPT_HKEY + n * 8, key);
+    st64(r + OPT_HSCORE + n * 8, opt_weight());
+    st64(r + OPT_HREG + n * 8, 0 - 1);
+    st64(r + OPT_HN, n + 1);
+}
+
+// the register this value was hoisted into, -1 when it was not. With nothing
+// hoisted -- every plain-road function, and every function with no loop -- the
+// loop below has zero iterations.
+i64 opt_hreg(i64 kind, i64 key) {
+    uptr r = opt_rec();
+    i64 i = 0;
+    loop {
+        if (i >= ld64(r + OPT_HN)) break;
+        if (ld64(r + OPT_HKIND + i * 8) == kind && ld64(r + OPT_HKEY + i * 8) == key)
+            return ld64(r + OPT_HREG + i * 8);
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+i64 opt_hn()             { return ld64(opt_rec() + OPT_HN); }
+i64 opt_hkind_at(i64 i)  { return ld64(opt_rec() + OPT_HKIND + i * 8); }
+i64 opt_hkey_at(i64 i)   { return ld64(opt_rec() + OPT_HKEY + i * 8); }
+i64 opt_hreg_at(i64 i)   { return ld64(opt_rec() + OPT_HREG + i * 8); }
+
 // declares `nd` at the next local index, replaying exactly the push/pop
 // res_func and gen_func do, and considers it as a candidate
 void opt_decl(i64 nd, i64 ty, i64 nelem, i64 init) {
@@ -796,7 +897,21 @@ void opt_expr(i64 n) {
     if (n == 0) return;
     i64 k = nd_kind(n);
     if (k == N_IDENT) {
-        if (res_kind(n) == RK_LOCAL) opt_use(res_decl(n));
+        if (res_kind(n) == RK_LOCAL) { opt_use(res_decl(n)); return; }
+        // a global ARRAY decays to its address, which is invariant; a global
+        // scalar is a load of a value that changes and is not a candidate
+        if (res_kind(n) == RK_GLOBAL && glb_nelem(glb_at(res_decl(n))))
+            opt_hoist_use(OPTH_GLOBAL, res_decl(n));
+        return;
+    }
+    if (k == N_INT) {
+        if (opt_lit_hoistable(n)) opt_hoist_use(OPTH_CONST, nd_val(n));
+        return;
+    }
+    if (k == N_ADDR) {
+        // gen_addr reads res_kind/res_decl off the N_ADDR node itself; `&local`
+        // is excluded by res_addr_taken and names no candidate here
+        if (res_kind(n) == RK_GLOBAL) opt_hoist_use(OPTH_GLOBAL, res_decl(n));
         return;
     }
     if (k == N_BINARY) { opt_expr(nd_a(n)); opt_expr(nd_b(n)); return; }
@@ -821,8 +936,8 @@ void opt_expr(i64 n) {
         }
         return;
     }
-    // N_INT, N_STR and N_ADDR count nothing: a literal has no declaration and
-    // the operand of an `&` is excluded by res_addr_taken before it gets here
+    // N_STR counts nothing: a string literal's address is not hoisted (the
+    // deviation above), and no literal names a declaration
 }
 
 void opt_stmt(i64 n) {
@@ -879,6 +994,7 @@ void opt_scan(i64 f) {
     st64(r + OPT_BAD, 0);
     st64(r + OPT_DEPTH, 0);
     st64(r + OPT_NLOC, 0);
+    st64(r + OPT_HN, 0);
     i64 nr = walk_reg_count();
     if (nr <= 0) return;
     if (nr > 16) nr = 16;                        // the width of the save table
@@ -893,7 +1009,7 @@ void opt_scan(i64 f) {
         p = nd_next(p);
     }
     opt_stmt(nd_b(f));
-    if (ld64(r + OPT_BAD)) return;
+    if (ld64(r + OPT_BAD)) { st64(r + OPT_HN, 0); return; }
     i64 taken = 0;
     loop {
         if (taken >= nr) break;
@@ -909,6 +1025,25 @@ void opt_scan(i64 f) {
         if (best < 0) break;
         st64(r + OPT_SCORE + best * 8, 0 - 1);   // taken
         set_res_reg(ld64(r + OPT_NODE + best * 8), taken + 1);
+        taken = taken + 1;
+    }
+    // M49 step C: the loop-invariant values take the registers the locals left,
+    // in the same shape -- highest score not yet taken, first occurrence on a
+    // tie, the same threshold of 3.
+    loop {
+        if (taken >= nr) break;
+        i64 hb = 0 - 1;
+        i64 hs = 2;
+        i64 j = 0;
+        loop {
+            if (j >= ld64(r + OPT_HN)) break;
+            i64 sc = ld64(r + OPT_HSCORE + j * 8);
+            if (sc > hs) { hs = sc; hb = j; }
+            j = j + 1;
+        }
+        if (hb < 0) break;
+        st64(r + OPT_HSCORE + hb * 8, 0 - 1);    // taken
+        st64(r + OPT_HREG + hb * 8, taken);
         taken = taken + 1;
     }
     st64(r + OPT_NREG, taken);
@@ -976,7 +1111,13 @@ void gen_ident(i64 n, i64 depth) {
         return;
     }
     uptr g = glb_at(res_decl(n));
-    if (glb_nelem(g)) callp(mach(MTASK_SYM_ADDR), depth, glb_sym(g));
+    if (glb_nelem(g)) {
+        // M49 step C: the address is loop-invariant; opt_hreg is -1 unless this
+        // function hoisted it, and then the adrp+add happened at entry
+        i64 hr = opt_hreg(OPTH_GLOBAL, res_decl(n));
+        if (hr >= 0) callp(mach(MTASK_REG_LOAD), depth, hr);
+        else         callp(mach(MTASK_SYM_ADDR), depth, glb_sym(g));
+    }
     else              callp(mach(MTASK_GLOBAL_LOAD), glb_type(g), depth, glb_sym(g));
 }
 
@@ -989,7 +1130,9 @@ void gen_addr(i64 n, i64 depth) {
         return;
     }
     if (k == RK_GLOBAL) {
-        callp(mach(MTASK_SYM_ADDR), depth, glb_sym(glb_at(res_decl(n))));
+        i64 hr = opt_hreg(OPTH_GLOBAL, res_decl(n));   // M49 step C
+        if (hr >= 0) callp(mach(MTASK_REG_LOAD), depth, hr);
+        else         callp(mach(MTASK_SYM_ADDR), depth, glb_sym(glb_at(res_decl(n))));
         return;
     }
     callp(mach(MTASK_SYM_ADDR), depth, sym_ref(usym(fs_name(fs_at(res_decl(n))))));
@@ -1156,7 +1299,10 @@ void gen_expr(i64 n, i64 depth) {
 void lower_expr(i64 n, i64 depth) {
     i64 k = nd_kind(n);
     if (k == N_INT) {
-        callp(mach(MTASK_CONST), depth, nd_val(n));
+        i64 hr = 0 - 1;                                // M49 step C
+        if (opt_lit_hoistable(n)) hr = opt_hreg(OPTH_CONST, nd_val(n));
+        if (hr >= 0) callp(mach(MTASK_REG_LOAD), depth, hr);
+        else         callp(mach(MTASK_CONST), depth, nd_val(n));
         return;
     }
     if (k == N_UNARY)  { gen_unary(n, depth);  return; }
@@ -1446,6 +1592,25 @@ void gen_func(i64 f, i64 text) {
         callp(mach(MTASK_PARAM), nd_type(p), i, off);
         i = i + 1;
         p = nd_next(p);
+    }
+    // M49 step C: the loop-invariant values, materialised once, AFTER the
+    // parameters -- MTASK_CONST/SYM_ADDR use depth 0, and the parameters must
+    // have left x0..x7 before anything else writes a depth register. It runs
+    // even when the loop is never entered: two to four instructions that cannot
+    // fault, since a symbol address is a relocation and not a load.
+    i64 h = 0;
+    loop {
+        if (h >= opt_hn()) break;
+        i64 hr = opt_hreg_at(h);
+        if (hr >= 0) {
+            set_walk_depth_type(0, TY_I64);      // M24: what depth 0 now holds
+            if (opt_hkind_at(h) == OPTH_CONST)
+                callp(mach(MTASK_CONST), 0, opt_hkey_at(h));
+            else
+                callp(mach(MTASK_SYM_ADDR), 0, glb_sym(glb_at(opt_hkey_at(h))));
+            callp(mach(MTASK_REG_STORE), TY_I64, 0, hr);
+        }
+        h = h + 1;
     }
     gen_stmt(nd_b(f), lepi);
     if (pend_type() >= 0) err_node(pend_node(), "reloc without an immediately following emit");

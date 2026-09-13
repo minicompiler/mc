@@ -220,5 +220,44 @@ if [ "$(uname -s)" = "Darwin" ]; then
     null_slot examples/avr    build/avr.elf
 fi
 
+# ---- 5. hoisting: a loop-invariant value is materialised ONCE, at entry -----
+# M49 § 4.8. tests/mc/101-opt-hoist.mc puts a constant needing four movz/movk
+# and a global array's address inside a loop. The values are proved by section 1
+# (both roads run and are compared); what is asserted here is WHERE the work
+# happens: with --opt=1 the loop body of `hot` names no `adrp` and no `movk` at
+# all, and the entry does. The plain half is what gives the assertion teeth --
+# there the same loop rebuilds both every iteration.
+hoist_case() {
+    f=tests/mc/101-opt-hoist.mc
+    total=$((total + 1))
+    [ -f "$f" ] || { echo "FAIL hoist ($f missing)"; fails=$((fails + 1)); return 0; }
+    for road in plain opt; do
+        flag=""
+        [ "$road" = opt ] && flag="--opt=1"
+        # shellcheck disable=SC2086
+        if ! "$mc" --dump-asm $flag "$f" > "$d/hd-$road" 2> "$d/e"; then
+            echo "FAIL hoist ($road dump)"; sed -n 1,3p "$d/e"
+            fails=$((fails + 1)); return 0
+        fi
+        # the body of `hot`, then the part of it at or after the loop's head
+        awk '/^_hot:/, /^_never:/' "$d/hd-$road" > "$d/h-$road"
+        awk 'seen { print } /^L2:/ { seen = 1 }' "$d/h-$road" > "$d/hl-$road"
+    done
+    pa=$(grep -c 'adrp' "$d/hl-plain"); pm=$(grep -c 'movk' "$d/hl-plain")
+    oa=$(grep -c 'adrp' "$d/hl-opt");   om=$(grep -c 'movk' "$d/hl-opt")
+    ea=$(grep -c 'adrp' "$d/h-opt");    em=$(grep -c 'movk' "$d/h-opt")
+    if [ "$oa" = 0 ] && [ "$om" = 0 ] && [ "$ea" -ge 1 ] && [ "$em" -ge 1 ] \
+       && [ "$pa" -ge 1 ] && [ "$pm" -ge 1 ]; then
+        echo "ok hoist: hot's loop plain adrp $pa movk $pm -> opt 0 0," \
+             "materialised once at entry (adrp $ea, movk $em)"
+    else
+        echo "FAIL hoist: loop plain adrp $pa movk $pm, opt adrp $oa movk $om," \
+             "entry adrp $ea movk $em"
+        fails=$((fails + 1))
+    fi
+}
+
+hoist_case
+
 echo "$((total - fails))/$total check-opt cases passed"
 [ "$fails" -eq 0 ]
