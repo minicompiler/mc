@@ -5804,6 +5804,92 @@ agents (`.claude/agents/`): `stage0-dev` (C23), `mc-dev` (`.mc` code), `reviewer
   `mc2-windows-x86_64-opt.sha256`
   `64cc3fe53c505e7cc02b4e9651e267ff08db0d2f13638d89dd1d38bc0dfea192` (1568754 B), all four also
   written byte for byte by `build/mc2`.
+- M50 step A ✔ (`docs/specs/M50.md` § 9 row 1 + its new § Implementation notes -- step A):
+  **the bench cell's runner, its schema and the phase argument.** Nothing in `src/`, `stage0/`,
+  `lib/` or `tests/` -- `git diff origin/main -- src/ stage0/ lib/ tests/` is empty, no golden moves,
+  `bench/` is bundled nowhere. The milestone's whole point is that the two caveats
+  `docs/comparison.md` § Conditions records have DIFFERENT cures and only one of them is hardware:
+  the stale tree label is cured by a DIGEST, and the shared host is cured by a REFERENCE TIMED IN
+  THE SAME RUN, not by a machine this project can reach.
+  * **`bench/cell/cell.py` (593 lines)** is one cell run: build every row whose toolchain is here,
+    then **seven repetitions with the rows interleaved inside each one** in a fixed order, one
+    process at a time, `taskset -c 0` on Linux and nothing on macOS; repetition 1 recorded and
+    excluded from every statistic; **every repetition of every row asserts the workload's own
+    recorded answer** for its phase, so a wrong number is a failed row and not a fast one; then
+    per-row best/median/max of the kept six and `median(row) / median(clang -O2 built and timed in
+    this same run)`. `results.json` per § 5.1 (the cell's identity, the `mc` block with its
+    SHA-256, every toolchain string as its tool PRINTED it, the pins, every build and run command
+    verbatim, all seven seconds per row, RSS, `stdout_ok`, the ratio, the verdict), plus
+    `facts.json` and a `RESULTS.md`. Python 3 stdlib only. A toolchain that is absent, or a row
+    whose build fails, is **SKIPPED with its reason printed and recorded** -- never faked.
+  * **`bench/cell/build.sh` (78)** builds ONE row, `bench/soak/build.sh`'s shape, `MC`/`CC`/`LIBC`
+    overrides, and its last line of stdout is `run: <command>` -- which is how `cell.py` never
+    learns that `cs-jit` is launched through the `dotnet` muxer while every other row is a binary.
+  * **`bench/cell/versions.env` (91)** is the one file the workflow, the local road and `cell.py`
+    all read: `GO_VERSION=1.26.7`, `DOTNET_VERSION=10.0.400`, `ZIG_VERSION=0.16.0`,
+    `RUST_VERSION=1.96.0`, `CLANG_APT=clang-18`, `REPS=7`, `DROP=1`, `TOLERANCE=0.05`,
+    `REGRESS_MIN=1.5` -- with the MEASURED basis of the last two written into it beside the value,
+    which is what step A owed.
+  * **The phase argument** in all six sources (D11, **78 added / 25 removed**): `mix`, `primes`,
+    `fib` by the argument's FIRST BYTE, no string comparison anywhere, and **no argument (or a
+    mistyped one) runs all three in the recorded order**. Default stdout is byte for byte what it
+    was on every one of the six -- md5 `c369e8b4679ca95f45fa46bbff03b7b7`, which is
+    `bench/results.json`'s own `output_md5_all_variants` -- so `bench/run.sh`'s contract and every
+    recorded number stay comparable (`make bench` green). The mc BINARY does move (`i64 main()`
+    became `i64 main(i64 argc, uptr argv)`); nothing gates a `bench/` binary's bytes and risk 7's
+    contract is the stdout. Zig 0.16 was the awkward one: `std.process.args()` is gone and the
+    iterator is `std.process.Args.Iterator.initAllocator(init.minimal.args, init.gpa)`, probed
+    against the installed standard library before the file was edited.
+  * `make bench-cell` (`CELLFLAGS=` for a subset), **not in `make check`** (D12) and never will be.
+    Results go to `build/bench-cell/<date>-<id>/`, which is untracked, so a local run stages
+    nothing; `--out bench/results/<date>-<run-id>` is the directory step C commits.
+  **Measured here** (Apple M4, Darwin 25.6.0, nothing pinned -- macOS has no `taskset`, so this is
+  the noisiest of the three cells step B will add): **all eleven rows ran**, Apple clang 21.0.0,
+  go1.26.4, zig 0.16.0, rustc 1.96.0, .NET SDK 10.0.301. The two version mismatches against the
+  pins are exactly the drift D5 exists for and they are **visible in `facts.json`** rather than
+  hidden. `cs-aot` had to be un-skipped: NativeAOT links libssl and libbrotli, which macOS does not
+  ship (`ld: library 'ssl' not found`, the wart `bench/RESULTS.md` § A already records), so
+  `build.sh` sets `LIBRARY_PATH` on Darwin as that page did -- where the libraries are absent the
+  row skips with the linker's own message.
+  **SIX full runs, three consecutive PAIRS**, 11 rows x 4 phases x 7 repetitions each.
+  Worst per-row RATIO drift inside a pair, and rows of that phase over 5%: `all` 2.44 / 4.54 /
+  4.76% with **0, 0, 0** over; `mix` 4.18 / 4.97 / 6.49% with 0, 0, 1; `primes` 3.56 / 5.85 /
+  8.36% with 0, 1, **4**; `fib` 3.25 / 6.84 / 4.98% with 0, 1, 0 (median row 1.10-3.43%
+  everywhere). The same runs' ABSOLUTE medians moved by up to **15.77%** and the reference row
+  alone by **-9.34%** between two runs started back to back -- the ratios held while the machine
+  underneath did not, which is the shape § 1.2 describes and § 4.4's health indicator is for; § 1.2's
+  own 0.7% was one pair of FOUR rows, and the worst of 44 is necessarily larger. **So
+  `TOLERANCE = 0.05` is right for the `all` phase (0 violations in three pairs, ~5% of margin) and
+  wrong for the three short ones (7 of 99 rows over it)**: under 0.25 s both medians in the quotient
+  are dominated by scheduler noise and their errors ADD instead of cancelling -- § 1.3 item 3's
+  finding one level down, and in pair 3 the machine barely moved (reference -1.04%) while the worst
+  ratio drift was still 8.36%. Recommended to step C, measured and not guessed: gate the band on
+  `all`, report the per-phase ratios beside it, re-measure on the two pinned Linux cells.
+  **Repetition 1 earns its drop on the phase that runs FIRST**: over every row of a run the median
+  gap is only 1.03-1.10x, but `all` alone -- where the binary's pages and the 50 MB `__bss` sieve
+  are first touched -- is **1.28x, 1.33x, 1.56x, 1.34x** median with a worst row of **1.79x**, the
+  1.25-1.62x band `bench/results.json`'s own three-run rows show, and the three later phases of the
+  same repetition sit at 1.01-1.12x. `results.json` therefore records the gap PER PHASE.
+  **The teeth, and the one deviation from the spec**: § 4.3 puts the floor on the whole source, and
+  the tooth per phase over the six runs is `all` 1.554-1.619, `mix` **2.243-2.379**, `primes`
+  1.049-1.093, `fib` 0.996-1.037 -- M49 moves `mix` by 2.3x, `primes` by 5% and `fib` by nothing
+  (its cost is its call count), so `all` is a weighted average landing 4-8% above the floor, and on
+  the quieter host M49 step C measured it was 0.793 / 0.548 = **1.45**, which a 1.5 floor would have
+  FAILED. `versions.env` carries `REGRESS_MIN=1.5` with **`REGRESS_PHASE=mix`**: the same floor, on
+  the phase the optimizer is about, with half again of margin. Every run reports and gates it.
+  The `mc` row measured, as the cell recorded it: `build/mc1`, `mc 0.0.0-dev`, `macos/aarch64`,
+  SHA-256 `171025cc475abcd77591915172e9ebda4a382bf4835448792fcdb2179a95afc3`, 1 408 400 B -- a
+  digest, so `bench/results.json:234`'s `"tree at commit e5a1643"` failure mode is structurally
+  impossible after this.
+  -- `make check` green end to end (RC 0, zero FAIL), `make check-docs` green (206 symbols, 49
+  flags, 35 TOML keys, 10 directives, 52 samples, 482 links -- the new pages are under `bench/`,
+  which `scripts/check-docs.sh` does not walk, and no fenced ` ```mc ` block was added), `make
+  bench` green. `git diff origin/main -- src/ stage0/ lib/ tests/` **empty**; the `Makefile` diff is the
+  new `bench-cell` target and its `.PHONY` entry; **no golden rewritten** -- nothing the compiler
+  emits could move.
+  Not in this step and named in § Implementation notes 10: `bench/cell/gate.py` and the first
+  committed `bench/results/` directories (step C), `.github/workflows/bench-cell.yml` and the
+  three cells (step B), any Dockerfile (D13, deferred).
 - Next: the **site + registry server, M47 S4-S6**, in
   `minicompiler/mc-registry`; then **M42 step 2** (PE `--exe`, CI-gated on the Windows runners).
   **M46** only on the owner's request; **M43 Layer 2** after 1.0.0. M13 and M18 stay in the backlog

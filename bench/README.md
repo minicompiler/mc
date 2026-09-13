@@ -22,6 +22,13 @@ compilers and runtimes can be compared on the same code:
 Every variant prints the same three numbers (`8128903901837660708 / 3001134 / 39088169`) — the
 cross-check that every implementation actually computed the same thing.
 
+All six take one optional argument and dispatch on its first byte: `mix`, `primes` or `fib` runs
+that one phase and prints its one number, and **no argument runs all three in the recorded order
+with byte-for-byte the output above** (md5 `c369e8b4679ca95f45fa46bbff03b7b7` on all six), so the
+contract `bench/run.sh` asserts and every number recorded in `RESULTS.md` stay comparable. The
+per-phase road is what [`cell/`](cell/) needs: M49's acceptance is stated per phase and nothing here
+could re-measure those numbers before — M49 got them by trimming `main` in a scratchpad.
+
 ### Build and run, per language
 
 Run these from the repository root (or adjust `../../build/mc1` for `mc` if you `cd bench`).
@@ -266,3 +273,41 @@ records what CAN be seen -- the image, the kernel, the CPU model line, the memor
 servers within ONE run (same day, same image, one runner each); compare runs with care. The
 `bench/Dockerfile`-on-a-fixed-VPS cell of `docs/comparison.md` § "Where to improve" is the
 answer to that caveat; this workflow is the protocol that cell would run.
+
+## D. The cell (`cell/`)
+
+The reproducible measurement that answers both caveats of the workload benchmark, specified in
+[`../docs/specs/M50.md`](../docs/specs/M50.md) and documented in full in
+[`cell/README.md`](cell/README.md). It is the soak's shape applied to the workload — one
+pinned-toolchain job per row, everything observable recorded, results as dated JSON a `git blame`
+can read — with the load generator replaced by seven repetitions of a binary.
+
+```sh
+make bench-cell                                  # every row whose toolchain is installed
+make bench-cell CELLFLAGS='--rows mc-plain,mc-opt,c-O2 --phases all'
+```
+
+Two mechanisms and nothing else:
+
+* **a digest instead of a label.** Every binary timed is recorded by SHA-256 and size, `mc`'s
+  included, beside what `mc --version` and `mc --host` print. `results.json:234`'s
+  `"tree at commit e5a1643"` — a real commit that is not the one that produced the binary — is
+  structurally impossible after that.
+* **a reference timed beside every row.** `clang -O2` of `c/bench.c` is built and timed inside the
+  same run, and the verdict is the ratio of per-row medians to it. Absolute seconds are recorded
+  and never gated, because on one Mac the same unchanged `clang -O2` binary of this program has
+  timed 0.420 s, 0.49 s and 0.52–0.56 s in three sessions. Measured on this host over three
+  consecutive pairs of runs: the ratio of the whole workload agrees to **4.76% worst row, 1.16%
+  median**, while the absolute medians of the same runs moved by up to **15.77%** and the reference
+  alone by −9.34%.
+
+Seven repetitions, the rows interleaved inside each one, the first recorded and dropped (it is
+1.28–1.56x the best on the phase that runs first — cold pages and the 50 MB `__bss` sieve's first
+touch); `taskset -c 0` on Linux and nothing on macOS; every repetition of every row asserting the
+workload's recorded answer, so a wrong number is a failed row and not a fast one; and a toolchain
+that is absent, or a row whose build fails, SKIPPED with its reason printed and recorded rather
+than faked. The teeth are `mc --opt=0` against `mc --opt=1`, both already on `main`: on the `mix`
+phase that ratio is 2.24–2.38 across six runs against a floor of 1.5, and it collapses towards 1.0
+the moment the allocator stops allocating.
+
+Like everything else under `bench/`, **not in `make check`** and not on a pull request.

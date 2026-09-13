@@ -65,12 +65,17 @@ i64 fib(i64 n) {
     return fib(n - 1) + fib(n - 2);
 }
 
-i64 main() {
-    putu64(mix());
-    puts("\n");
-    putnum(primes());
-    puts("\n");
-    putnum(fib(38));
-    puts("\n");
+// No argument runs all three phases in this order, which is the recorded
+// cross-check (8128903901837660708 / 3001134 / 39088169) and the contract
+// bench/run.sh asserts. One argument selects ONE phase by its first byte --
+// mix, primes, fib -- which is what bench/cell needs for M49's per-phase
+// numbers; anything else falls back to all three.
+i64 main(i64 argc, uptr argv) {
+    i64 p = 'a';
+    if (argc > 1) p = ld8(ld64(argv + 8));
+    if (p != 'm' && p != 'p' && p != 'f') p = 'a';
+    if (p == 'm' || p == 'a') { putu64(mix()); puts("\n"); }
+    if (p == 'p' || p == 'a') { putnum(primes()); puts("\n"); }
+    if (p == 'f' || p == 'a') { putnum(fib(38)); puts("\n"); }
     return 0;
 }

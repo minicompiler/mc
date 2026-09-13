@@ -52,8 +52,21 @@ fn fib(n: i64) -> i64 {
     fib(n - 1) + fib(n - 2)
 }
 
+// No argument runs all three phases in this order (the recorded cross-check);
+// one argument selects one phase by its first byte -- mix, primes, fib.
 fn main() {
-    println!("{}", mix());
-    println!("{}", primes());
-    println!("{}", fib(38));
+    let arg = std::env::args().nth(1).unwrap_or_default();
+    let mut p = arg.bytes().next().unwrap_or(b'a');
+    if p != b'm' && p != b'p' && p != b'f' {
+        p = b'a';
+    }
+    if p == b'm' || p == b'a' {
+        println!("{}", mix());
+    }
+    if p == b'p' || p == b'a' {
+        println!("{}", primes());
+    }
+    if p == b'f' || p == b'a' {
+        println!("{}", fib(38));
+    }
 }

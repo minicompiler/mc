@@ -42,9 +42,13 @@ static int64_t fib(int64_t n) {
     return fib(n - 1) + fib(n - 2);
 }
 
-int main(void) {
-    printf("%llu\n", (unsigned long long) mix());
-    printf("%lld\n", (long long) primes());
-    printf("%lld\n", (long long) fib(38));
+// No argument runs all three phases in this order (the recorded cross-check);
+// one argument selects one phase by its first byte -- mix, primes, fib.
+int main(int argc, char **argv) {
+    char p = (argc > 1 && argv[1][0]) ? argv[1][0] : 'a';
+    if (p != 'm' && p != 'p' && p != 'f') p = 'a';
+    if (p == 'm' || p == 'a') printf("%llu\n", (unsigned long long) mix());
+    if (p == 'p' || p == 'a') printf("%lld\n", (long long) primes());
+    if (p == 'f' || p == 'a') printf("%lld\n", (long long) fib(38));
     return 0;
 }
