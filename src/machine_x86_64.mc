@@ -32,6 +32,7 @@
 #define XR_RAX 0
 #define XR_RCX 1
 #define XR_RDX 2
+#define XR_RBX 3
 #define XR_RSP 4
 #define XR_RBP 5
 #define XR_RSI 6
@@ -45,6 +46,13 @@
 
 #define XC_E   4                      // condition codes: the low nibble of setcc/jcc
 #define XC_NE  5
+
+// M49 (contract version 5): the five registers the System V AND the Win64 ABI
+// both leave to the callee -- rbx, r12, r13, r14, r15. rdi and rsi are
+// callee-saved on Win64 and argument registers 1 and 2 on System V, so a count
+// that depended on which prologue last ran would be stale for the first function
+// of a unit; two registers are not worth a second code path (D11).
+#define XREG_NALLOC 5
 
 // The relocation kinds this machine produces, R_X86_PC32 and R_X86_PLT32, are
 // in src/objmodel.mc with the others since M41: the machine emits them and
@@ -189,7 +197,14 @@ uptr x86_name[] = { "", "nop", "push", "push", "leave", "ret", "mov", "mov32",
 uptr m_x86_64[MTASK_COUNT];           // the task table the walker drives
 uptr m_x86_64_win[MTASK_COUNT];       // the same thirty-one entries, Win64 prologue
 u8   x86_tmp[BUF_SIZE];               // scratch the size task encodes into
-i64  xdslot[MAXDEPTH];                // frame slot of a depth: 0 = not asked for yet
+// M49: TWO per-depth vectors in ONE array, as src/machine_arm64.mc does it and
+// for the same reason (the frozen seed's MAXGLOBALS is the tight row of
+// scripts/check-limits.sh): [0, MAXDEPTH) is the frame slot of a depth and
+// [MAXDEPTH, 2*MAXDEPTH) is its ALIAS -- the allocatable register that already
+// holds this depth's value, or -1. An alias is set by MTASK_REG_LOAD, which then
+// emits nothing at all, and is cleared by every task that produces a new value
+// at that depth.
+i64  xdslot[MAXDEPTH * 2];            // frame slot of a depth: 0 = not asked for yet
 i64  x86_isub = 0;                    // the prologue's `sub rsp, N`, patched last
 
 // M20: the two calling conventions, and the three things that tell them apart.
@@ -218,6 +233,31 @@ uptr x86_name_at(i64 i)   { return ld64(x86_name + i * 8); }
 i64  x86_d(i64 op, i64 c) { return ld64(x86_desc + (op * XD_N + c) * 8); }
 i64  xdslot_at(i64 i)     { return ld64(xdslot + i * 8); }
 void set_xdslot_at(i64 i, i64 v) { st64(xdslot + i * 8, v); }
+i64  xalias_at(i64 i)     { return ld64(xdslot + (MAXDEPTH + i) * 8); }
+void set_xalias_at(i64 i, i64 v) { st64(xdslot + (MAXDEPTH + i) * 8, v); }
+// M49: the allocatable register with index r, by its x86 encoding number. The
+// set is rbx, r12..r15 -- not contiguous, unlike AArch64's x19..x28, so it takes
+// arithmetic rather than a base. A table would read better and would cost one
+// more file-level global, which is the frozen seed's tight row.
+i64  x86_allocreg_at(i64 r) {
+    if (r == 0) return XR_RBX;                   // 3
+    return r + 11;                               // 1..4 -> r12..r15
+}
+
+// M49: every alias forgotten. Called at a LABEL -- a control-flow merge, where a
+// value carried in an alias could have arrived by another path -- and after every
+// MTASK_REG_STORE, the one place an allocatable register's contents change under
+// a live alias. Guarded by walk_opt() so the plain road never even walks the
+// array.
+void x86_alias_reset() {
+    if (walk_opt() == 0) return;
+    i64 d = 0;
+    loop {
+        if (d >= MAXDEPTH) break;
+        set_xalias_at(d, 0 - 1);
+        d = d + 1;
+    }
+}
 
 i64 x86_form(i64 op) { return x86_d(op, 0); }
 
@@ -243,8 +283,16 @@ i64 x86_slot_depth(i64 d) {
 
 i64 x86_in_reg(i64 depth) { return depth <= XREG_MAX; }
 
-// the register holding the depth's value; a spilled one is loaded into scratch
+// the register holding the depth's value; a spilled one is loaded into scratch.
+//
+// M49: the alias comes first. When MTASK_REG_LOAD has said "depth d IS the value
+// of allocatable register r", the value is in r and nowhere else -- no
+// instruction was emitted and no frame slot written -- so this is the one
+// function that knows where to find it. Contract version 5 makes reading a depth
+// through val_reg an OBLIGATION for every machine, derived ones included:
+// computing XREG_BASE + d by hand reads a stale r8.
 i64 x86_val_reg(i64 depth, i64 scratch) {
+    if (xalias_at(depth) >= 0) return xalias_at(depth);
     if (x86_in_reg(depth)) return XREG_BASE + depth;
     em(X_LD64, scratch, XR_RBP, 0 - x86_slot_depth(depth));
     return scratch;
@@ -255,7 +303,25 @@ i64 x86_dst_reg(i64 depth) {
     return XREG_S1;
 }
 
+// a register the machine may WRITE for depth `d`. x86 is two-operand, so far more
+// tasks here than on AArch64 write their own source; an aliased depth is
+// materialised out of the local's register first, because the result of `x + 1`,
+// of `-x` or of a cast must not land on top of `x` itself.
+i64 x86_own(i64 d) {
+    if (xalias_at(d) >= 0) {
+        i64 rd = x86_dst_reg(d);
+        e2(X_MOV, rd, xalias_at(d));
+        set_xalias_at(d, 0 - 1);
+        return rd;
+    }
+    return x86_val_reg(d, XREG_S1);
+}
+
 void x86_dst_done(i64 depth, i64 rd) {
+    // M49: a new value has landed at this depth, so whatever alias it carried is
+    // stale. Every value-producing task ends here, which is what makes one line
+    // enough.
+    set_xalias_at(depth, 0 - 1);
     if (!x86_in_reg(depth)) em(X_ST64, rd, XR_RBP, 0 - x86_slot_depth(depth));
 }
 
@@ -264,7 +330,9 @@ void x86_save_live(i64 depth) {
     i64 d = 0;
     loop {
         if (d >= depth || !x86_in_reg(d)) break;
-        em(X_ST64, XREG_BASE + d, XR_RBP, 0 - x86_slot_depth(d));
+        // M49: an aliased depth lives in a register the callee preserves, so it
+        // needs no frame round trip and its alias survives the call
+        if (xalias_at(d) < 0) em(X_ST64, XREG_BASE + d, XR_RBP, 0 - x86_slot_depth(d));
         d = d + 1;
     }
 }
@@ -273,7 +341,7 @@ void x86_restore_live(i64 depth) {
     i64 d = 0;
     loop {
         if (d >= depth || !x86_in_reg(d)) break;
-        em(X_LD64, XREG_BASE + d, XR_RBP, 0 - x86_slot_depth(d));
+        if (xalias_at(d) < 0) em(X_LD64, XREG_BASE + d, XR_RBP, 0 - x86_slot_depth(d));
         d = d + 1;
     }
 }
@@ -288,6 +356,7 @@ void x86_prologue_body() {
     loop {
         if (d >= MAXDEPTH) break;
         set_xdslot_at(d, 0);
+        set_xalias_at(d, 0 - 1);                 // M49: nothing aliased yet
         d = d + 1;
     }
     e2(X_PUSH, XR_RBP, 0);
@@ -361,7 +430,7 @@ void x86_bin(i64 op, i64 d, i64 d2) {
         x86_divmod(op, d, d2);
         return;
     }
-    i64 rd = x86_val_reg(d, XREG_S1);
+    i64 rd = x86_own(d);                         // two-operand: the dest is the left
     i64 rr = x86_val_reg(d2, XREG_S2);
     if (op == MOP_SHL || op == MOP_SHR || op == MOP_SAR) {
         x86_mov(XR_RCX, rr);                     // the count only comes from cl
@@ -382,8 +451,20 @@ void x86_cmp(i64 cond, i64 d, i64 d2) {
     x86_dst_done(d, rd);
 }
 
+i64 x86_bool_pair(i64 d);                        // M49: defined below, with P1
+
 void x86_un(i64 op, i64 d) {
-    i64 rd = x86_val_reg(d, XREG_S1);            // operates in place
+    // M49 P2: `setcc rd, cc; movzx rd, rd` then a logical NOT on the same rd is
+    // the same pair with the condition flipped. x86 condition codes are defined
+    // in negation pairs (the low bit of tttn), so `cc ^ 1` inverts e/ne, l/ge and
+    // le/g alike -- the same inversion P1 applies. Guarded by walk_opt() and by
+    // adjacency: an I_LABEL between would BE the last instruction and is not an
+    // X_MOVZXB.
+    if (op == MUN_LNOT && x86_bool_pair(d)) {
+        set_ins_imm(ins_at(nins - 2), ins_imm(ins_at(nins - 2)) ^ 1);
+        return;                                  // the boolean stays at depth d, inverted
+    }
+    i64 rd = x86_own(d);                         // operates in place
     if (op == MUN_NEG)      e2(X_NEG, rd, 0);
     else if (op == MUN_NOT) e2(X_NOT, rd, 0);
     else {
@@ -395,7 +476,7 @@ void x86_un(i64 op, i64 d) {
 }
 
 void x86_bool(i64 d) {
-    i64 rd = x86_val_reg(d, XREG_S1);
+    i64 rd = x86_own(d);
     e2(X_TEST, rd, rd);
     ins_add(X_SETCC, rd, 0, 0, XC_NE, 0, 0);
     e2(X_MOVZXB, rd, rd);
@@ -404,8 +485,7 @@ void x86_bool(i64 d) {
 
 // M45: fill the bytes above the type's width -- zero for a TK_INT, the sign for
 // a TK_SINT -- by width and kind, never by the id
-void x86_cast(i64 ty, i64 d) {
-    i64 rd = x86_val_reg(d, XREG_S1);
+void x86_cast_reg(i64 rd, i64 ty) {
     i64 w = type_width(ty);
     i64 sgn = type_kind(ty) == TK_SINT;
     if (w == 1) {
@@ -420,6 +500,11 @@ void x86_cast(i64 ty, i64 d) {
         if (sgn) e2(X_MOVSXD, rd, rd);
         else     e2(X_MOV32, rd, rd);            // a 32-bit mov zeroes the top half
     }
+}
+
+void x86_cast(i64 ty, i64 d) {
+    i64 rd = x86_own(d);                         // in place -- never the local's own register
+    x86_cast_reg(rd, ty);
     x86_dst_done(d, rd);
 }
 
@@ -474,10 +559,11 @@ void x86_global_store(i64 ty, i64 d, i64 sym) {
     em(x86_mem_op(ty, 1), rv, XREG_S1, 0);
 }
 
-void x86_arg_to(i64 r, i64 d) {
-    if (x86_in_reg(d)) { x86_mov(r, XREG_BASE + d); return; }
-    em(X_LD64, r, XR_RBP, 0 - x86_slot_depth(d));
-}
+// M49: one line, through val_reg. For a spilled depth val_reg loads into the
+// scratch it was given -- the argument register itself -- which is exactly the
+// `em(X_LD64, r, ...)` this used to do by hand, and for an aliased one it answers
+// the allocatable register the walker handed out.
+void x86_arg_to(i64 r, i64 d) { x86_mov(r, x86_val_reg(d, r)); }
 
 // The arguments past the register table go on the stack, at [rsp], [rsp + 8]...
 // when the call happens. `push` takes its operand straight from memory, so no
@@ -500,8 +586,9 @@ i64 x86_push_args(i64 dbase, i64 na) {
     loop {
         if (i < nr) break;
         i64 d = dbase + i;
-        if (x86_in_reg(d)) e2(X_PUSH, XREG_BASE + d, 0);
-        else               em(X_PUSHM, 0, XR_RBP, 0 - x86_slot_depth(d));
+        if (xalias_at(d) >= 0)  e2(X_PUSH, xalias_at(d), 0);
+        else if (x86_in_reg(d)) e2(X_PUSH, XREG_BASE + d, 0);
+        else                    em(X_PUSHM, 0, XR_RBP, 0 - x86_slot_depth(d));
         i = i - 1;
     }
     if (x86_shadow) { ei(X_SPSUB, 0, 0, x86_shadow); bytes = bytes + x86_shadow; }
@@ -558,15 +645,122 @@ void x86_callp(i64 d, i64 na) {
 void x86_ret(i64 d)  { x86_mov(XR_RAX, x86_val_reg(d, XREG_S1)); }
 void x86_jump(i64 l) { el(X_JMP, l); }
 
+// M49: 1 when the last two instructions are the `setcc rd, cc; movzx rd, rd`
+// pair x86_cmp, x86_bool and x86_un(LNOT) all end in, writing the depth's own
+// register. That pair IS the boolean at depth d, and it is the only shape P1 and
+// P2 rewrite -- setcc writes one byte, so the movzx is never separable from it.
+i64 x86_bool_pair(i64 d) {
+    if (walk_opt() == 0 || xalias_at(d) >= 0 || !x86_in_reg(d)) return 0;
+    if (nins < ins_base + 2) return 0;
+    uptr z = ins_at(nins - 1);
+    uptr s = ins_at(nins - 2);
+    if (ins_op(z) != X_MOVZXB || ins_rd(z) != XREG_BASE + d || ins_rn(z) != XREG_BASE + d) return 0;
+    if (ins_op(s) != X_SETCC  || ins_rd(s) != XREG_BASE + d) return 0;
+    return 1;
+}
+
+// M49 P1: `cmp; setcc rd, cc; movzx rd, rd` then a branch on that boolean is one
+// `jcc`. Drop the pair (X_NOP generates no bytes and no dump line) and branch on
+// the flags the cmp left. take_true selects the sense: JNZ (branch when the
+// boolean is true) uses cc, JZ (branch when it is false) uses cc ^ 1. The
+// boolean's register is dead after a JZ/JNZ at every walker site (gen_if at depth
+// 0, gen_logic overwrites the depth on both paths), so no liveness beyond
+// adjacency is needed. No instruction FORM is added: x86_jcond has always ended
+// in X_JCC, so the peephole only removes.
+i64 x86_fuse_branch(i64 d, i64 l, i64 take_true) {
+    if (!x86_bool_pair(d)) return 0;
+    i64 cc = ins_imm(ins_at(nins - 2));
+    if (take_true == 0) cc = cc ^ 1;
+    set_ins_op(ins_at(nins - 1), X_NOP);
+    set_ins_op(ins_at(nins - 2), X_NOP);
+    ins_add(X_JCC, 0, 0, 0, cc, l, 0);
+    return 1;
+}
+
 void x86_jcond(i64 d, i64 l, i64 cc) {
     i64 rv = x86_val_reg(d, XREG_S1);
     e2(X_TEST, rv, rv);
     ins_add(X_JCC, 0, 0, 0, cc, l, 0);
 }
 
-void x86_jz(i64 d, i64 l)  { x86_jcond(d, l, XC_E); }
-void x86_jnz(i64 d, i64 l) { x86_jcond(d, l, XC_NE); }
-void x86_label(i64 l)      { el(I_LABEL, l); }
+void x86_jz(i64 d, i64 l)  { if (!x86_fuse_branch(d, l, 0)) x86_jcond(d, l, XC_E); }
+void x86_jnz(i64 d, i64 l) { if (!x86_fuse_branch(d, l, 1)) x86_jcond(d, l, XC_NE); }
+void x86_label(i64 l)      { x86_alias_reset(); el(I_LABEL, l); }
+
+// ---- M49: the six version 5 tasks -----------------------------------------
+// rbx, r12..r15 on BOTH ABIs, and the walker names them by index alone.
+i64 x86_reg_count() { return XREG_NALLOC; }
+
+// The save area is ordinary frame slots (docs/specs/M49.md § 4.3), so these two
+// are mov forms the encoder already has: the allocator adds no instruction form
+// to the sweep, the frame record stays unconditional, `leave` still ends the
+// function and a stack walker finds everything at a fixed [rbp - k].
+void x86_reg_save(i64 r, i64 off)    { em(X_ST64, x86_allocreg_at(r), XR_RBP, 0 - off); }
+void x86_reg_restore(i64 r, i64 off) { em(X_LD64, x86_allocreg_at(r), XR_RBP, 0 - off); }
+
+// argument i straight into its register, READING the ABI registers and never
+// writing them. The ones past the table were pushed by the caller above rbp --
+// past the saved rbp and the return address, and on Win64 past the 32 bytes of
+// shadow space as well ([rbp+48] for the fifth), which is x86_param's own rule.
+void x86_param_reg(i64 ty, i64 i, i64 r) {
+    i64 rd = x86_allocreg_at(r);
+    if (i < x86_nargreg) x86_mov(rd, x86_argreg_at(i));
+    else                 em(X_LD64, rd, XR_RBP, 16 + x86_shadow + (i - x86_nargreg) * 8);
+    x86_cast_reg(rd, ty);                        // the register holds the extended eight bytes
+}
+
+// THE LOAD EMITS NOTHING. It records that depth `d` is the value of the
+// allocatable register, and x86_val_reg hands that register to whoever reads the
+// depth -- which is what turns "locals in registers" into "the ALU reads the
+// local directly".
+void x86_reg_load(i64 d, i64 r) { set_xalias_at(d, x86_allocreg_at(r)); }
+
+// 1 when instruction `op` WRITES ins_rd and does not READ it.
+//
+// This set is much smaller than AArch64's, and the reason is the architecture:
+// x86 is two-operand, so `add rd, rn` means rd = rd + rn, and retargeting its
+// destination at the local's register would add to a register that does not hold
+// the old value. add/sub/and/or/xor/imul/shl/shr/sar/neg/not are all out for that
+// reason; every store is out because its rd is its SOURCE; setcc is out because
+// it writes one byte only; X_CALLR's rd is the call target and X_IDIV/X_DIV's is
+// the divisor. What is left is every form that only writes: the three movs, the
+// two leas, the five register movzx/movsx and the seven loads -- which is what a
+// local's initialiser, a constant, a global read and a comparison's boolean end
+// in.
+i64 x86_retarget_ok(i64 op) {
+    if (op == X_MOVI || op == X_MOV || op == X_MOV32) return 1;
+    if (op == X_LEA  || op == X_LEARIP) return 1;
+    if (op == X_MOVZXB || op == X_MOVZXW) return 1;
+    if (op == X_MOVSXB || op == X_MOVSXW || op == X_MOVSXD) return 1;
+    if (op >= X_LD8 && op <= X_LD64) return 1;
+    if (op == X_LDS8 || op == X_LDS16 || op == X_LDS32) return 1;
+    return 0;
+}
+
+// register r = depth d, truncated to the type's width and extended by its kind.
+//
+// The rewrite: if the instruction just emitted is the one that PRODUCED this
+// depth's value and only wrote it, its destination is retargeted at the local's
+// register and no `mov` is emitted at all. It is safe because the value at the
+// depth is consumed by this store and by nothing else, and because an I_LABEL
+// between would BE the last instruction and is not in the whitelist.
+void x86_reg_store(i64 ty, i64 d, i64 r) {
+    i64 rd = x86_allocreg_at(r);
+    i64 done = 0;
+    if (xalias_at(d) < 0 && x86_in_reg(d) && nins > ins_base) {
+        uptr e = ins_at(nins - 1);
+        if (x86_retarget_ok(ins_op(e)) && ins_rd(e) == XREG_BASE + d) {
+            set_ins_rd(e, rd);
+            // `mov rbx, rbx` is what a depth that already read this same local
+            // collapses to. Only the 64-bit mov: `mov32 rbx, rbx` TRUNCATES.
+            if (ins_op(e) == X_MOV && ins_rn(e) == rd) set_ins_op(e, X_NOP);
+            done = 1;
+        }
+    }
+    if (done == 0) x86_mov(rd, x86_val_reg(d, XREG_S1));
+    x86_cast_reg(rd, ty);                        // truncate by width, extend by kind
+    x86_alias_reset();                           // an allocatable register just changed
+}
 void x86_word(i64 w)       { ins_add(X_EMIT, 0, 0, 0, w, 0, 0); }
 
 // the two instructions that always carry a relocation of their own, and how far
@@ -858,6 +1052,12 @@ void machine_x86_64_init() {
     x86_task(MTASK_DUMP,         &x86_dump);
     x86_task(MTASK_RELOC_KIND,   &x86_reloc_kind);
     x86_task(MTASK_RELOC_OFF,    &x86_reloc_off);
+    x86_task(MTASK_REG_COUNT,    &x86_reg_count);
+    x86_task(MTASK_REG_LOAD,     &x86_reg_load);
+    x86_task(MTASK_REG_STORE,    &x86_reg_store);
+    x86_task(MTASK_REG_SAVE,     &x86_reg_save);
+    x86_task(MTASK_REG_RESTORE,  &x86_reg_restore);
+    x86_task(MTASK_PARAM_REG,    &x86_param_reg);
     machine("x86_64", m_x86_64);
 
     // M20: the Win64 machine is the SAME machine with one slot replaced. Every

@@ -307,8 +307,12 @@ prologue writes each one it uses into an ordinary frame slot right after the fra
 epilogue reads it back just before `add sp`, so a caller never sees one of its own callee-saved
 registers change. The frame record stays unconditional, the epilogue is still `add sp` / `ldp` /
 `ret`, and `x0` is still untouched by it — every claim of this section holds on both roads.
-`scripts/check-surface.sh` asserts it per function over the whole of `src/mc.mc`: 1787 functions,
-3011 allocated registers, every one saved and restored, and `x18` named nowhere.
+`scripts/check-surface.sh` asserts it per function over the whole of `src/mc.mc`: 1929 functions,
+3556 allocated registers, every one saved and restored, and `x18` named nowhere. (That assertion was
+VACUOUS until M49 step D2: its `awk` used `\y`, a GNU word boundary the `awk` on macOS and the one in
+`alpine:3` both ignore, so the set of used registers was always empty and the check could not fail.
+It is a non-word character on both sides now, and the two save/restore patterns also had to learn
+that a slot at offset 0 prints `[sp]` with no `#`.)
 
 The one sentence that is **withdrawn for `--opt=1`** is the old permission to keep runtime state in
 `x19..x28` across generated code — a coroutine switch, a thread pointer. It still holds on the plain
@@ -401,13 +405,25 @@ and nothing would diagnose a violation.
 | `rcx` | spill scratch (right), and the count of every shift |
 | `rdx` | the remainder of `idiv`/`div`; zeroed before an unsigned one |
 | `r8..r11` | expression depths 0..3 |
-| `rbx`, `r12..r15` | **never written, never read** — the callee-saved half |
+| `rbx`, `r12..r15` | **never written, never read on the plain road**; with `--opt=1`, one per allocated local, saved in the prologue and restored before `leave` (M49 step D2) |
 | `rbp` | the frame pointer; locals live at `[rbp - k]` |
 | `rsp` | moved only by the prologue, the epilogue and the two-slot argument area of a call |
 
 Depth 4 and beyond spills to the frame through `rax`/`rcx`. The `frame too large` limit (4095
 bytes) is AArch64's 12-bit immediate and x86 has no such bound, but the walker keeps it so the
 diagnostic is the same on every target.
+
+**With `--opt=1` (M49 step D2) the five callee-saved registers become the allocator's, in the way a
+C caller already allows.** `rbx`, `r12`, `r13`, `r14` and `r15` are the only five the allocator ever
+hands out — the same five on System V and on Win64, so `rsi` and `rdi` are never allocated on either
+(D11). Each one a function uses is written into an ordinary frame slot right after the frame reserve
+and read back just before `leave`, so a caller never sees one of its own callee-saved registers
+change; the frame record stays `push rbp; mov rbp, rsp; sub rsp`, the epilogue stays `leave; ret`,
+`MTASK_FRAME_FIX` still patches only the `sub rsp`, and `rax` is still untouched by the epilogue.
+On the **plain road** none of the five is named at all, which `scripts/check-surface.sh` asserts for
+both machines over the whole of `src/mc.mc`, and with `--opt=1` it asserts per function that every
+one a body names is in the set stored after the prologue and in the set loaded before `leave`:
+1929 functions, 2860 allocated registers on each ABI.
 
 **A narrow result is extended the same way** (M45): `movsxd rd, rd` after a `call` whose callee is
 declared `i32` (any `TK_SINT`), `movzx`/`mov r32, r32` for `u8`/`u16`/`u32`, nothing at width 8;
@@ -455,9 +471,22 @@ the calling convention, and it changes in exactly five places
 | `rcx` | spill scratch (right), and the count of every shift |
 | `rdx` | the remainder of `idiv`/`div`; zeroed before an unsigned one |
 | `r8..r11` | expression depths 0..3 |
-| `rbx`, `rsi`, `rdi`, `r12..r15` | **never written, never read** — the callee-saved half |
+| `rsi`, `rdi` | **never written, never read**: callee-saved here, and the allocator never hands them out on either ABI (M49 D11) |
+| `rbx`, `r12..r15` | **never written, never read on the plain road**; with `--opt=1`, one per allocated local, saved in the prologue and restored before `leave` (M49 step D2) |
 | `rbp` | the frame pointer; locals live at `[rbp - k]` |
 | `rsp` | moved only by the prologue, the epilogue and the argument area of a call |
+
+**With `--opt=1` (M49 step D2) the five callee-saved registers become the allocator's, in the way a
+C caller already allows.** `rbx`, `r12`, `r13`, `r14` and `r15` are the only five the allocator ever
+hands out — the same five on System V and on Win64, so `rsi` and `rdi` are never allocated on either
+(D11). Each one a function uses is written into an ordinary frame slot right after the frame reserve
+and read back just before `leave`, so a caller never sees one of its own callee-saved registers
+change; the frame record stays `push rbp; mov rbp, rsp; sub rsp`, the epilogue stays `leave; ret`,
+`MTASK_FRAME_FIX` still patches only the `sub rsp`, and `rax` is still untouched by the epilogue.
+On the **plain road** none of the five is named at all, which `scripts/check-surface.sh` asserts for
+both machines over the whole of `src/mc.mc`, and with `--opt=1` it asserts per function that every
+one a body names is in the set stored after the prologue and in the set loaded before `leave`:
+1929 functions, 2860 allocated registers on each ABI.
 
 **`r8` and `r9` are argument registers 3 and 4 and depth registers 0 and 1 at the same time, and
 that is safe.** The argument table is written in **ascending** index, and each depth register's own

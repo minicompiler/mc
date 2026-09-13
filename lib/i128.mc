@@ -873,14 +873,39 @@ i64 xw_stack_units(i64 d, i64 na, i64 retw) {
     return nstk;
 }
 
+// M49: the x86 twin of wi_param_reg, and for the same reason -- this machine
+// overrides MTASK_PARAM, so version 5 obliges it to override MTASK_PARAM_REG as
+// well, because xw_param counts its own argument slots.
+void xw_param_reg(i64 ty, i64 i, i64 r) {
+    if (iw_is(ty)) die("an i128/u128 parameter in an allocatable register");
+    i64 rd = x86_allocreg_at(r);
+    i64 nreg = x86_nargreg;
+    if (xw_win) {
+        i64 slot = xw_ngrn;                        // one slot per argument on Win64
+        xw_ngrn = xw_ngrn + 1;
+        if (slot < nreg) x86_mov(rd, x86_argreg_at(slot));
+        else             em(X_LD64, rd, XR_RBP, 16 + x86_shadow + (slot - nreg) * 8);
+    } else if (xw_ngrn < nreg) {
+        x86_mov(rd, x86_argreg_at(xw_ngrn));
+        xw_ngrn = xw_ngrn + 1;
+    } else {
+        em(X_LD64, rd, XR_RBP, 16 + xw_pstk * 8);
+        xw_pstk = xw_pstk + 1;
+    }
+    x86_cast_reg(rd, ty);
+}
+
 void xw_call(i64 d, i64 na, i64 sym) {
     x86_save_live(d);
     i64 i = 0;
     loop {                                         // spill scalar argument depths
         if (i >= na) break;
         i64 ad = d + i;
+        // M49 (contract version 5): read the depth through x86_val_reg, never as
+        // XREG_BASE + ad -- an allocated local's value lives in a callee-saved
+        // register the walker handed out
         if (!iw_is(walk_depth_type(ad)) && x86_in_reg(ad))
-            em(X_ST64, XREG_BASE + ad, XR_RBP, 0 - x86_slot_depth(ad));
+            em(X_ST64, x86_val_reg(ad, XREG_S1), XR_RBP, 0 - x86_slot_depth(ad));
         i = i + 1;
     }
     i64 retw = iw_is(walk_ret_type());
@@ -1080,6 +1105,7 @@ void xw_fill(uptr tab, uptr orig, uptr src, uptr prologue) {
     }
     machine_slot(tab, MTASK_PROLOGUE,     prologue);
     machine_slot(tab, MTASK_PARAM,        &xw_param);
+    machine_slot(tab, MTASK_PARAM_REG,    &xw_param_reg);
     machine_slot(tab, MTASK_BIN,          &xw_bin);
     machine_slot(tab, MTASK_CMP,          &xw_cmp);
     machine_slot(tab, MTASK_CAST,         &xw_cast);

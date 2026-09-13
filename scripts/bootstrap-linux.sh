@@ -96,6 +96,7 @@ case "$(uname -m)" in
        exit 1 ;;
 esac
 golden="tests/golden/mc2-linux-$target.sha256"
+golden_opt="tests/golden/mc2-linux-$target-opt.sha256"
 
 if [ ! -f "$entry" ]; then
     echo "FAIL: $entry not found (run from the repository root)" >&2
@@ -307,6 +308,69 @@ if ! diff build/mc1l.asm build/mc2l.asm > build/mc-linux.asmdiff; then
     exit 1
 fi
 echo "  ok: identical"
+
+# ---- M49 step D2: the optimized road, and the cross-road identity ----------
+# The plain chain above is the reference and never takes a flag. This one is the
+# same two self-hosted stages with `--opt=1`, plus the line that makes the
+# allocator falsifiable on this host: the optimized compiler, asked for the
+# PLAIN road, has to write byte for byte the object the plain one wrote. The
+# whole block self-skips when the seed does not accept the flag -- a published
+# release older than M49 does not.
+if build/mc1l --opt=0 --version > /dev/null 2>&1; then
+    echo ""
+    echo "=== M49 -- the optimized road on linux/$target: mc1l -O -> mc2lo -> mc3lo ==="
+
+    echo "-- stage 2o: build/mc1l --opt=1 $entry -> build/mc2lo.o --"
+    rm -f build/mc2lo.o build/mc2lo
+    step "mc1l -O compiles $entry"  build/mc1l --opt=1 "$entry" -o build/mc2lo.o
+    echo "  size build/mc2lo.o: $(size_of build/mc2lo.o) bytes"
+    step "link build/mc2lo"         link_stage build/mc1l build/mc2lo
+
+    echo "-- stage 3o: build/mc2lo --opt=1 $entry -> build/mc3lo.o --"
+    rm -f build/mc3lo.o
+    step "mc2lo -O compiles $entry" build/mc2lo --opt=1 "$entry" -o build/mc3lo.o
+    echo "  size build/mc3lo.o: $(size_of build/mc3lo.o) bytes"
+
+    echo "-- fixed-point criterion: cmp build/mc2lo.o build/mc3lo.o --"
+    if ! cmp build/mc2lo.o build/mc3lo.o; then
+        echo "FAIL: build/mc2lo.o != build/mc3lo.o -- no fixed point on the optimized road" >&2
+        echo "diagnosis: diff <(build/mc1l --dump-asm --opt=1 $entry) <(build/mc2lo --dump-asm --opt=1 $entry)" >&2
+        exit 1
+    fi
+    echo "  ok: build/mc2lo.o == build/mc3lo.o"
+
+    echo "-- golden SHA-256 of build/mc2lo.o --"
+    got_hash=$(sha256_of build/mc2lo.o)
+    mkdir -p "$(dirname "$golden_opt")"
+    if [ ! -f "$golden_opt" ]; then
+        printf '%s  build/mc2lo.o\n' "$got_hash" > "$golden_opt"
+        echo "  WARNING: $golden_opt did not exist -- recorded now:"
+        echo "  $got_hash"
+    else
+        want_hash=$(awk '{print $1}' "$golden_opt")
+        if [ "$got_hash" != "$want_hash" ]; then
+            echo "FAIL: build/mc2lo.o diverges from the golden $golden_opt" >&2
+            echo "  expected: $want_hash" >&2
+            echo "  got:      $got_hash" >&2
+            echo "  (review the --dump-asm --opt=1 diff before rewriting it)" >&2
+            exit 1
+        fi
+        echo "  ok: $got_hash matches $golden_opt"
+    fi
+
+    echo "-- cross-road identity: build/mc2lo $entry == build/mc2l.o --"
+    rm -f build/mc2lo-plain.o
+    step "mc2lo compiles $entry plain" build/mc2lo "$entry" -o build/mc2lo-plain.o
+    if ! cmp build/mc2lo-plain.o build/mc2l.o; then
+        echo "FAIL: the optimized compiler does not compute the plain compiler" >&2
+        echo "diagnosis: diff <(build/mc2l --dump-asm $entry) <(build/mc2lo --dump-asm $entry)" >&2
+        exit 1
+    fi
+    echo "  ok: build/mc2lo-plain.o == build/mc2l.o"
+else
+    echo ""
+    echo "=== M49 -- the optimized road: SKIPPED (build/mc1l does not accept --opt=) ==="
+fi
 
 echo ""
 if [ "$use_exe" = "1" ]; then

@@ -1024,17 +1024,32 @@ optbad=$(awk '
     }
     /^_/ { flush(); fn = $0; pro = 1; next }
     fn == "" { next }
-    # the prologue`s save area: `str xN, [sp, #k]` before anything else touches
-    # a high register, and the epilogue`s is `ldr xN, [sp, #k]` before `add sp`
-    /^  str x(19|2[0-8]),/ && pro { r = $2; sub(/,$/, "", r); sub(/^x/, "", r); saved[r] = 1; next }
-    /^  ldr x(19|2[0-8]),/       { r = $2; sub(/,$/, "", r); sub(/^x/, "", r); restored[r] = 1; next }
+    # the frame record, then the save area: `str xN, [sp, #k]` before anything
+    # else touches a high register. `pro` has to survive the three words of the
+    # record, or it would already be 0 when the first save arrives.
+    pro && /^  stp x29, x30, \[sp, #-16\]!$/ { next }
+    pro && /^  mov x29, sp$/                  { next }
+    pro && /^  sub sp, sp, #/                 { next }
+    pro && /^  str x(19|2[0-8]), \[sp(, #[0-9]+)?\]$/ { r = $2; sub(/,$/, "", r); sub(/^x/, "", r); saved[r] = 1; next }
+    # the epilogue`s is `ldr xN, [sp, #k]` before `add sp` -- and the slot at
+    # offset 0 prints `[sp]`, with no `#` at all
+    /^  ldr x(19|2[0-8]), \[sp(, #[0-9]+)?\]$/       { r = $2; sub(/,$/, "", r); sub(/^x/, "", r); restored[r] = 1; next }
     { pro = 0 }
     {
-        line = $0
-        while (match(line, /x(19|2[0-8])\y/)) {
-            t = substr(line, RSTART + 1, RLENGTH - 1)
+        # a trailing space so a register at the end of the line is seen, and a
+        # following non-digit instead of \y, which the awk on this host and the
+        # one in alpine:3 both ignore -- with it this loop never matched at all
+        # and the whole assertion was vacuous
+        # a space at each end so a register at either end of the line is seen,
+        # and a NON-WORD character on both sides instead of \y, which the awk on
+        # this host and the one in alpine:3 both ignore -- without it this loop
+        # never matched at all and the whole assertion was vacuous, and with only
+        # the right-hand side a symbol name would match (`l_str1330` holds `r13`)
+        line = " " $0 " "
+        while (match(line, /[^a-zA-Z0-9_]x(19|2[0-8])[^a-zA-Z0-9_]/)) {
+            t = substr(line, RSTART + 2, RLENGTH - 3)
             used[t] = 1
-            line = substr(line, RSTART + RLENGTH)
+            line = substr(line, RSTART + RLENGTH - 1)
         }
     }
     END { flush(); print bad + 0 "|" report }
@@ -1051,6 +1066,74 @@ else
     echo "  x18 mentions: $n18"
     fails=$((fails + 1))
 fi
+
+# ---- M49 step D2: the same assertion on the two x86-64 machines ---------------
+# The claim is the C promise, told in x86's vocabulary: rbx, r12, r13, r14 and
+# r15 are the callee's to preserve under System V AND under Win64, so a function
+# that names one has to store it after the prologue and load it back before
+# `leave`. And rdi/rsi are never allocated: they are callee-saved on Win64, and
+# D11 gave both ABIs the same five registers rather than a second code path.
+# The plain road names none of the five at all, which is the inertness half.
+for m in x86_64 x86_64-win; do
+    "$mc1" --dump-asm --machine=$m src/mc.mc > "$tmp/x-$m-p.asm" 2>&1
+    "$mc1" --dump-asm --machine=$m --opt=1 src/mc.mc > "$tmp/x-$m-o.asm" 2>&1
+    nplain=$(grep -cE '\b(rbx|r1[2-5])\b' "$tmp/x-$m-p.asm")
+    if [ "$nplain" = "0" ]; then
+        echo "ok abi ($m): the plain road never names rbx or r12..r15"
+    else
+        echo "FAIL abi ($m): the plain road names a callee-saved register $nplain times"
+        fails=$((fails + 1))
+    fi
+    # per function: every callee-saved register the body mentions is in the set
+    # stored right after the prologue and in the set loaded before `leave`
+    xbad=$(awk '
+        function flush(  r, k) {
+            if (fn == "") return
+            for (k in used) if (!(k in saved) || !(k in restored)) { bad++; report = report " " fn ":" k }
+            delete used; delete saved; delete restored
+        }
+        /^_/ { flush(); fn = $0; pro = 1; next }
+        fn == "" { next }
+        # `pro` has to survive the frame record, or it would be 0 before the
+        # first save; then the save area, then the epilogue`s loads
+        pro && /^  push rbp$/       { next }
+        pro && /^  mov rbp, rsp$/   { next }
+        pro && /^  sub rsp, /       { next }
+        pro && /^  mov \[rbp-[0-9]+\], (rbx|r1[2-5])$/ { r = $3; saved[r] = 1; next }
+        /^  mov (rbx|r1[2-5]), \[rbp-[0-9]+\]$/        { r = $2; sub(/,$/, "", r); restored[r] = 1; next }
+        { pro = 0 }
+        {
+            # a non-word character on both sides: `lea r9, [rip+l_str1330]`
+            # holds `r13` inside a SYMBOL NAME and is not a use of r13
+            line = " " $0 " "
+            while (match(line, /[^a-zA-Z0-9_](rbx|r1[2-5])[^a-zA-Z0-9_]/)) {
+                used[substr(line, RSTART + 1, RLENGTH - 2)] = 1
+                line = substr(line, RSTART + RLENGTH - 1)
+            }
+        }
+        END { flush(); print bad + 0 "|" report }
+    ' "$tmp/x-$m-o.asm")
+    xcount=$(printf '%s' "$xbad" | cut -d'|' -f1)
+    xwhere=$(printf '%s' "$xbad" | cut -d'|' -f2)
+    xfn=$(grep -c '^_' "$tmp/x-$m-o.asm")
+    xsave=$(grep -cE '^  mov \[rbp-[0-9]+\], (rbx|r1[2-5])$' "$tmp/x-$m-o.asm")
+    # rdi/rsi: on Win64 they are callee-saved and this machine must not name
+    # them AT ALL (D11 gave both ABIs the same five registers rather than a
+    # second code path); on System V they are argument registers 1 and 2 and
+    # appear all over, so the claim there is the one x86_allocreg_at makes by
+    # construction -- its range is {rbx, r12, r13, r14, r15} and nothing else.
+    nrdi=0
+    if [ "$m" = "x86_64-win" ]; then
+        nrdi=$(grep -cE '[^a-zA-Z0-9_](rdi|rsi)[^a-zA-Z0-9_]' "$tmp/x-$m-o.asm")
+    fi
+    if [ "$xcount" = "0" ] && [ "$nrdi" = "0" ]; then
+        echo "ok abi ($m, --opt=1): $xfn functions, $xsave allocated registers, every one saved and restored"
+    else
+        echo "FAIL abi ($m, --opt=1): $xcount functions use a callee-saved register they do not save and restore:$xwhere"
+        echo "  rdi/rsi named on Win64: $nrdi"
+        fails=$((fails + 1))
+    fi
+done
 
 # determinism: the same source compiled twice by the same compiler is the same object
 "$demo" lib/syntax_demo_test.mc -o "$tmp/sdt1.o" 2>/dev/null

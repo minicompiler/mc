@@ -204,7 +204,11 @@ void fx_save_live(i64 depth) {
         if (fx_is_float(walk_depth_type(d))) {
             if (fx_in_reg(d)) em(FX_ST_D, fx_base_reg + d, XR_RBP, 0 - x86_slot_depth(d));
         } else {
-            if (x86_in_reg(d)) em(X_ST64, XREG_BASE + d, XR_RBP, 0 - x86_slot_depth(d));
+            // M49 (contract version 5): the integer half reads the depth through
+            // x86_val_reg, never as XREG_BASE + d. With the allocator on, the
+            // value of a depth may live in a callee-saved register the walker
+            // handed out, and XREG_BASE + d is then a stale r8.
+            if (x86_in_reg(d)) em(X_ST64, x86_val_reg(d, XREG_S1), XR_RBP, 0 - x86_slot_depth(d));
         }
         d = d + 1;
     }
@@ -217,6 +221,10 @@ void fx_restore_live(i64 depth) {
         if (fx_is_float(walk_depth_type(d))) {
             if (fx_in_reg(d)) em(FX_LD_D, fx_base_reg + d, XR_RBP, 0 - x86_slot_depth(d));
         } else {
+            // M49: the counterpart of the save above. This one WRITES the depth's
+            // own register, so it stays XREG_BASE + d -- an aliased depth still
+            // answers its allocatable register through x86_val_reg, and the value
+            // the save wrote into the slot is the same value either way.
             if (x86_in_reg(d)) em(X_LD64, XREG_BASE + d, XR_RBP, 0 - x86_slot_depth(d));
         }
         d = d + 1;
@@ -288,6 +296,27 @@ void fx_param(i64 ty, i64 i, i64 off) {
     em(X_LD64, XR_RAX, XR_RBP, 16 + x86_shadow + fx_pstk * 8);
     em(x86_mem_op(ty, 1), XR_RAX, XR_RBP, 0 - off);
     fx_pstk = fx_pstk + 1;
+}
+
+// M49: a machine that overrides MTASK_PARAM MUST override MTASK_PARAM_REG --
+// the bundled x86_param_reg reads argument `i` out of x86_argreg[i], while
+// fx_param walks its own NGRN/NSRN counters, so from the second parameter on
+// `i` and the register part company. The integer branch of fx_param, writing
+// the allocatable register instead of a frame slot.
+void fx_param_reg(i64 ty, i64 i, i64 r) {
+    if (fx_is_float(ty)) die("float parameter in an allocatable register");
+    i64 rd = x86_allocreg_at(r);
+    i64 slot = fx_ngrn;
+    if (fx_slotshare) slot = i;
+    if (slot < x86_nargreg) {
+        x86_mov(rd, x86_argreg_at(slot));
+        fx_ngrn = fx_ngrn + 1;
+        if (fx_slotshare) fx_nsrn = fx_nsrn + 1;
+    } else {
+        em(X_LD64, rd, XR_RBP, 16 + x86_shadow + fx_pstk * 8);
+        fx_pstk = fx_pstk + 1;
+    }
+    x86_cast_reg(rd, ty);                         // the register holds the extended eight bytes
 }
 
 void fx_const(i64 d, i64 imm) {
@@ -536,8 +565,10 @@ i64 fx_push_args(i64 dbase, i64 na) {
             em(FX_ST_D, fx_val_reg(d, XF_S1), XR_RSP, 0 - 8);
             ei(X_SPSUB, 0, 0, 8);
         } else {
-            if (x86_in_reg(d)) e2(X_PUSH, XREG_BASE + d, 0);
-            else               em(X_PUSHM, 0, XR_RBP, 0 - x86_slot_depth(d));
+            // M49: an aliased depth is pushed from the register that holds it
+            if (xalias_at(d) >= 0)  e2(X_PUSH, xalias_at(d), 0);
+            else if (x86_in_reg(d)) e2(X_PUSH, XREG_BASE + d, 0);
+            else                    em(X_PUSHM, 0, XR_RBP, 0 - x86_slot_depth(d));
         }
         i = i - 1;
     }
@@ -759,6 +790,7 @@ void fx_fill(uptr tab, uptr orig, uptr src, uptr prologue) {
     }
     machine_slot(tab, MTASK_PROLOGUE,     prologue);
     machine_slot(tab, MTASK_PARAM,        &fx_param);
+    machine_slot(tab, MTASK_PARAM_REG,    &fx_param_reg);
     machine_slot(tab, MTASK_CONST,        &fx_const);
     machine_slot(tab, MTASK_BIN,          &fx_bin);
     machine_slot(tab, MTASK_CMP,          &fx_cmp);

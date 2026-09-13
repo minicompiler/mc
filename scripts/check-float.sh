@@ -92,6 +92,32 @@ if [ "$mode" = "build" ]; then
     tmpb="$tmp/build"
     mkdir -p "$tmpb"
     n=0
+    # $1 = source, $2 = the manifest name, $3 = non-empty for the optimized road
+    build_float_obj() {
+        {
+            echo '[project]'
+            echo "entry = \"$root/$1\""
+            echo "out   = \"$root/$split/$2.$ext\""
+            echo 'kind  = "obj"'
+            # M49 step D2: `opt = 1` in [project] is the TOML half of --opt=1
+            [ -n "$3" ] && echo 'opt   = 1'
+            echo
+            echo '[target]'
+            echo "os   = \"$bos\""
+            echo "arch = \"$barch\""
+        } > "$tmpb/mc.toml"
+        if ! msg=$("$demo" build "$tmpb" --config "$tmpb/mc.toml" 2>&1); then
+            echo "FAIL $2 (build: $msg)"; fails=$((fails + 1)); return 1
+        fi
+        echo "exit: $(want_exit0 "$1")" > "$split/$2.expect"
+        if grep -q '^// expect-stdout:' "$1"; then
+            echo "stdout: $(want_out0 "$1")" >> "$split/$2.expect"
+        fi
+        echo "$2 $lmode" >> "$split/manifest"
+        echo "built $2"
+        n=$((n + 1))
+        return 0
+    }
     for f in tests/float/*.mc; do
         [ -f "$f" ] || continue
         name=$(basename "$f" .mc)
@@ -102,29 +128,14 @@ if [ "$mode" = "build" ]; then
             echo "$name — $why" >> "$split/skipped"
             continue
         fi
-        {
-            echo '[project]'
-            echo "entry = \"$root/$f\""
-            echo "out   = \"$root/$split/$name.$ext\""
-            echo 'kind  = "obj"'
-            echo
-            echo '[target]'
-            echo "os   = \"$bos\""
-            echo "arch = \"$barch\""
-        } > "$tmpb/mc.toml"
-        if ! msg=$("$demo" build "$tmpb" --config "$tmpb/mc.toml" 2>&1); then
-            echo "FAIL $name (build: $msg)"; fails=$((fails + 1)); continue
-        fi
-        echo "exit: $(want_exit0 "$f")" > "$split/$name.expect"
-        if grep -q '^// expect-stdout:' "$f"; then
-            echo "stdout: $(want_out0 "$f")" >> "$split/$name.expect"
-        fi
-        echo "$name $lmode" >> "$split/manifest"
-        echo "built $name"
-        n=$((n + 1))
+        build_float_obj "$f" "$name" ""
+        # M49 step D2: the same source with the optimizer on, as a second object
+        # in the same manifest. The foreign legs RUN both, which is the only
+        # place a float program built by the x86-64 allocator is ever executed.
+        build_float_obj "$f" "$name-opt" 1
     done
     if [ "$fails" != 0 ]; then echo "check-float --build-only: $fails failures"; exit 1; fi
-    echo "check-float --build-only: $n float objects for $bos/$barch in $split"
+    echo "check-float --build-only: $n float objects for $bos/$barch in $split (half of them --opt=1)"
     exit 0
 fi
 
@@ -170,11 +181,13 @@ done
 echo "ok   macos/aarch64: $pass/$total"
 
 # ------------------------------------------------------------- the linux legs
-gen_linux_toml() {                      # entry, out, sysroot
+gen_linux_toml() {                      # entry, out, sysroot, arch, opt
     {
         echo '[project]'
         echo "entry = \"$1\""
         echo "out   = \"$2\""
+        # M49 step D2: `opt = 1` in [project] is the TOML half of --opt=1
+        [ -n "$5" ] && echo 'opt   = 1'
         echo
         echo '[target]'
         echo 'os   = "linux"'
@@ -212,11 +225,20 @@ linux_leg() {                           # arch, docker platform
         why=$(skip_for "$f" "$arch")
         if [ -n "$why" ]; then echo "skip linux/$arch $name ($why)"; ls=$((ls + 1)); continue; fi
         lt=$((lt + 1))
-        gen_linux_toml "$root/$f" "$root/build/float-$arch/$name" "$sysroot" "$arch"
+        gen_linux_toml "$root/$f" "$root/build/float-$arch/$name" "$sysroot" "$arch" ""
         if ! msg=$("$demo" build "$tmp" --config "$tmp/mc.toml" 2>&1); then
             echo "FAIL linux/$arch $name (build: $msg)"; fails=$((fails + 1)); continue
         fi
         list="$list $name"
+        # M49 step D2: the same source with the optimizer on, as a second binary
+        # in the same container run. On linux/x86_64 this is the only place a
+        # float program built by the x86-64 allocator is actually EXECUTED.
+        lt=$((lt + 1))
+        gen_linux_toml "$root/$f" "$root/build/float-$arch/$name-opt" "$sysroot" "$arch" 1
+        if ! msg=$("$demo" build "$tmp" --config "$tmp/mc.toml" 2>&1); then
+            echo "FAIL linux/$arch $name-opt (build: $msg)"; fails=$((fails + 1)); continue
+        fi
+        list="$list $name-opt"
     done
     # one container for the whole leg: starting one per test is most of the time
     { echo '# one crash must not hide the rest of the leg'
@@ -225,7 +247,7 @@ linux_leg() {                           # arch, docker platform
     docker run --rm --platform "$platform" -v "$root":/w -w /w alpine:3 \
         /bin/sh /w/"${tmp#$root/}"/run.sh > "$tmp/out-$arch" 2>&1 || true
     for name in $list; do
-        f="tests/float/$name.mc"
+        f="tests/float/${name%-opt}.mc"          # M49: both roads, one source
         got=$(sed -n "/^### $name\$/,/^rc=/p" "$tmp/out-$arch" | sed '1d;$d')
         rc=$(sed -n "/^### $name\$/,/^rc=/p" "$tmp/out-$arch" | sed -n 's|^rc=||p')
         if [ "$rc" != "$(want_exit "$f")" ] || [ "$got" != "$(want_out "$f")" ]; then
@@ -285,17 +307,26 @@ windows_leg() {                         # arch, lld machine
         name=$(basename "$f" .mc)
         why=$(skip_for "$f" windows)
         if [ -z "$why" ]; then why=$(skip_for "$f" "$arch"); fi
-        if [ -n "$why" ]; then echo "skip windows/$arch $name ($why)"; ws=$((ws + 1)); continue; fi
-        wt=$((wt + 1))
-        if ! msg=$("$demo" --backend=$backend "$f" -o "$out/$name.obj" 2>&1); then
-            echo "FAIL windows/$arch $name (compile: $msg)"; fails=$((fails + 1)); continue
-        fi
-        if ! msg=$($(tool lld-link) -machine:$lmachine -subsystem:console -entry:mc_start \
-                   -nodefaultlib -out:"$out/$name.exe" "$out/$name.obj" "$out/sys_windows.obj" \
-                   "$out/sys_windows_start.obj" "$sysroot/kernel32.lib" 2>&1); then
-            echo "FAIL windows/$arch $name (link: $msg)"; fails=$((fails + 1)); continue
-        fi
-        wp=$((wp + 1))
+        if [ -n "$why" ]; then echo "skip windows/$arch $name ($why)"; ws=$((ws + 2)); continue; fi
+        # M49 step D2: both roads. Nothing here executes a Windows binary -- the
+        # two CI legs are the runtime oracle -- but a `--opt=1` object that does
+        # not LINK is caught here, and the peephole is what could produce one.
+        for road in "" 1; do
+            oname="$name"
+            [ -n "$road" ] && oname="$name-opt"
+            optarg=""
+            [ -n "$road" ] && optarg="--opt=1"
+            wt=$((wt + 1))
+            if ! msg=$("$demo" $optarg --backend=$backend "$f" -o "$out/$oname.obj" 2>&1); then
+                echo "FAIL windows/$arch $oname (compile: $msg)"; fails=$((fails + 1)); continue
+            fi
+            if ! msg=$($(tool lld-link) -machine:$lmachine -subsystem:console -entry:mc_start \
+                       -nodefaultlib -out:"$out/$oname.exe" "$out/$oname.obj" "$out/sys_windows.obj" \
+                       "$out/sys_windows_start.obj" "$sysroot/kernel32.lib" 2>&1); then
+                echo "FAIL windows/$arch $oname (link: $msg)"; fails=$((fails + 1)); continue
+            fi
+            wp=$((wp + 1))
+        done
     done
     if [ "$ws" != 0 ]; then echo "ok   windows/$arch: $wp/$wt objects linked ($ws skipped, not executed here)"
     else                    echo "ok   windows/$arch: $wp/$wt objects linked (not executed here)"; fi
