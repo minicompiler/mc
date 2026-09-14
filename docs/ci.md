@@ -516,12 +516,24 @@ link without opening a pull request. Such a push simply does not get a version.
 
 From the pull request's labels, highest first:
 
-| label | bump | `0.4.2` becomes |
-|---|---|---|
-| `release:skip` | none — merged, no tag, no release | `0.4.2` |
-| `release:major` | major | `1.0.0` |
-| `release:minor` | minor | `0.5.0` |
-| *(none)* | patch — the default | `0.4.3` |
+| label | bump | `0.4.2` becomes | what the stability policy allows |
+|---|---|---|---|
+| `release:skip` | none — merged, no tag, no release | `0.4.2` | anything — the change is not released |
+| `release:major` | major | `1.0.0` | the only label that may REMOVE a surface entry, and only one already marked `deprecated` in `tests/golden/surface.txt` |
+| `release:minor` | minor | `0.5.0` | an ADDITIVE surface change (a new symbol, flag, TOML key, directive, `<mc/*>` name, `mc.lock` key, or an append-only machine-contract version) |
+| *(none)* | patch — the default | `0.4.3` | a wording fix, or any change that moves no line of `tests/golden/surface.txt` |
+
+That last column is [`reference/hooks.md`](reference/hooks.md) § 8's table, restated against the
+one place a human actually picks the label. `check-freeze` enforces the removal half mechanically
+— an entry missing from the extraction fails unless it was deprecated first — but it does not know
+which label a pull request carries, so a `release:minor` on a change that removed an entry is a
+review mistake the gate cannot catch.
+
+**RC 0.17.0 is an ordinary `release:minor` tag, not a version suffix.** "RC" names a *state of the
+repository* — the freeze gate lands and becomes binding — and 0.17.x that follows it takes bug
+fixes only, per [`specs/M53.md`](specs/M53.md) § 7 (D18). There is no `1.0.0-rc.N` tag: two places
+in this automation refuse a `-` suffix on purpose (below), and the *candidate* semantics live in
+the GitHub release's pre-release flag instead ([§ The canary](#the-canary)).
 
 The label has to be on the pull request before it is merged; `autotag.yml` reads the labels of the
 pull request it just identified, at the moment the push arrives.

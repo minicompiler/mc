@@ -1,5 +1,10 @@
 # The machine task contract
 
+**This whole page is frozen surface**: the contract's version (one line, extracted by
+`scripts/surface-extract.sh` as the `machine` kind) may only go up, and only in a commit that adds
+a `Version N → M` paragraph like the ones below — `check-freeze` enforces both
+([hooks.md](hooks.md) § 8).
+
 > **Contract version 5 -- the integer tasks, the depth type, deriving a machine, the KIND
 > obligation and the register allocator (M17, M24, M39, M45, M49).**
 > `src/gen_walk.mc` is the target-independent walker; `src/machine_arm64.mc` (M17 step A) and

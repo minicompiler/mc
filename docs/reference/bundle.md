@@ -26,6 +26,10 @@ i64 main() {
 }
 ```
 
+Every `<mc/*>` name column 1 of `tools/bundle.list` carries — a library or a compiler PART alike
+— is in the recorded public surface, as the `bundle` kind (101 entries: § The catalogue); what a
+PATCH, a MINOR and a MAJOR may do to one is [hooks.md](hooks.md) § 8.
+
 `<name>` is served by the bundle, by the library tree, or by a package this project locked — **or
 it is an error** — there is no fallback to the working
 directory, on purpose: `<name>` means "a library that is not in my tree", and the answer must be a

@@ -6914,6 +6914,29 @@ agents (`.claude/agents/`): `stage0-dev` (C23), `mc-dev` (`.mc` code), `reviewer
   Not in this step: **B** the policy (`hooks.md` § 8 in full, the six pointers, `ci.md`'s label
   table), **C** the canary (`release.yml`'s `MC_CANARY` pre-release flag and the `promote` job),
   and **D** the deprecation note, which lands with the first deprecation (D13).
+- M53 step B ✔ (`docs/specs/M53.md` § 5, § 9 row 2 + its new § Implementation notes -- step B):
+  **the stability policy.** Docs only -- `git diff --stat src/ stage0/ tests/golden/` empty, no
+  golden moves, no name frozen or unfrozen. `docs/reference/hooks.md` § 8 written in full
+  (+108/-5, 110 lines in place): the seven-kind inventory table, what is **not** the surface
+  (`src/` globals -- an accessor is the migration, a rename goes in the release note; diagnostic
+  text -- the exit code and the stream are the contract, wording is a PATCH), the PATCH/MINOR/MAJOR
+  rules table, the four-step deprecation lane, the compile-time note SPECIFIED and NOT BUILT (D13,
+  ~25 `src/` lines priced for the pull request that ships the first real deprecation), and the
+  0.16.x / RC / 1.0.0 table. Six one-line pointers -- `cli.md`, `toml.md`, `packages.md` § 4,
+  `bundle.md`, `objects.md`, `machine.md` (+3/+3/+5/+4/+5/+5) -- `objects.md` in place of the
+  spec's own `directives.md` (§ Implementation notes 3: `objects.md` already draws the byte/name
+  distinction § 8 needs, `dir`'s ten rows have nothing further to say). `docs/ci.md` § Versioning
+  (+18/-6): the label table gains a "what the policy allows" column (`release:major` is the only
+  label that may remove a `deprecated`-marked entry, `release:minor` any additive one) and a line
+  naming RC 0.17.0 as a state of the repository, not a suffix (§ 7 D18).
+  -- `check-freeze` unchanged: `ok freeze: 420 entries (209 sym, 50 flag, 35 toml, 10 dir,
+  101 bundle, 14 lock, 1 machine)`, exit 0. `check-docs` green:
+  `docs ok: 209 symbols, 50 flags, 35 toml keys, 10 directives, 52 samples, 570 links`.
+  Docs: `docs/specs/M53.md` (§ 9 row 2 LANDED with the real line counts + seven implementation
+  notes, including the one found while writing note 7 itself -- a markdown-link SYNTAX quoted
+  literally to illustrate a pointer's shape is itself a link to `check-docs`'s naive scan, and
+  broke it), `docs/plan.md`'s M53 row (steps A/B/C landed; the milestone still closes only on
+  teko's own gap list reaching zero, § 13).
 - Next: the **site + registry server, M47 S4-S6**, in
   `minicompiler/mc-registry`; then **M42 step 2** (PE `--exe`, CI-gated on the Windows runners).
   **M46** only on the owner's request; **M43 Layer 2** after 1.0.0. M13 and M18 stay in the backlog

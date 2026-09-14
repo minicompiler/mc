@@ -6,6 +6,9 @@ the repository root does exactly what `mc build` does from inside `examples/api`
 
 The parser is `src/toml.mc`; the driver that reads these keys is `src/driver.mc`.
 
+Every key on this page is in the recorded public surface (the `toml` kind), compared on every
+`make check`; what a PATCH, a MINOR and a MAJOR may do to one is [hooks.md](hooks.md) § 8.
+
 ---
 
 ## The whole file

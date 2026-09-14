@@ -25,6 +25,9 @@ usage: mc build [DIR] [--config FILE] [--sync [--yes]] [--compiler-only] [--limi
        mc sandbox check
 ```
 
+Every flag on this page is in the recorded public surface, compared on every `make check`; what a
+PATCH, a MINOR and a MAJOR may do to one is [hooks.md](hooks.md) § 8.
+
 ---
 
 ## 1. The single-file compiler
