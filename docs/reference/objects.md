@@ -911,11 +911,37 @@ another spelling:
   and calls `ExitProcess` (the one forced import — there is no exit syscall). With neither:
   `no main and no mc_start: cannot generate an executable`.
 
+**The code sections need not be contiguous, and the entry may sit outside `BaseOfCode +
+SizeOfCode`.** `BaseOfCode` is the first executable section's RVA and `SizeOfCode` the SUM of every
+executable section's RAW size, which is what PE/COFF defines them to be; sections are page-aligned
+in memory and 512-aligned in the file, so that sum spans the virtual range only when all the code is
+one section — which mc's is not, since the thunks (`.text0`) and the synthesized entry (`.text1`)
+each get their own. A program with no strings and one import loads at `.text 0x1000`, `.text0
+0x2000`, `.text1 0x3000`, `.idata 0x4000`, with `BaseOfCode 0x1000`, `SizeOfCode 1536` and
+`AddressOfEntryPoint 0x3000` — outside that range, and it runs: `tests/001-return42.mc` is that
+image and the `windows-2025` leg executes it on every CI run. `lld-link` merges its code into one
+`.text` and so has no such gap; that is a difference of shape, not of correctness.
+
+**An undefined symbol becomes an import of the default DLL, and nothing checks that the DLL has
+it.** This road links one translation unit and no second object, so a declaration the program does
+not define can only be an import — `kernel32.dll` unless a `#dylib` or an `[externs]` pattern names
+another. `kernel32` is not a C library: it exports `WriteFile`, never `write`
+(`scripts/sysroot-windows.sh` writes the whole list). An image importing a name kernel32 does not
+export is written without complaint, and the loader binds the IAT before the entry runs, so it dies
+before its first instruction. Diagnosing one: `llvm-readobj --coff-imports prog.exe` against
+`build/sysroot/windows-<arch>/kernel32.def`. This is the M11 `--exe` trade-off in its Windows
+spelling — a `.o` is refused at link time, an `--exe` is built and the loader kills it
+([docs/bootstrap.md](../bootstrap.md) § M11) — and the reason there is no heuristic list of the
+names a DLL cannot serve.
+
 Unlike Linux there is **no bare I/O suite**: `write`/`open`/… are mc wrappers over kernel32, not DLL
 exports, so a portable test that declares `extern write` cannot both import and define it in one
 `--exe` translation unit (`function declared twice`). A program that writes its I/O directly against
 `<sys_windows>`, or a pure-compute program, is self-contained and `--exe`s; a portable I/O test
-stays on the `lld-link` object path (`scripts/test-windows.sh`). `scripts/test-windows-exe.sh` is
+stays on the `lld-link` object path (`scripts/test-windows.sh`), where `winrt.obj` supplies them.
+`tests/windows/074-sys-io-exe.mc` is that shape — `#include <sys>`, `puts`, `putnum` — and its
+header says what each road does with it; it runs on both Windows legs through `lld-link` and
+`scripts/test-windows-exe.sh` skips it with the reason. `scripts/test-windows-exe.sh` is
 the runtime gate for the self-contained subset, run on the `windows-11-arm` and `windows-2025` CI
 legs.
 

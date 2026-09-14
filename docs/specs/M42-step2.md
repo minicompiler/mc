@@ -230,3 +230,42 @@ A `windows` build that HAS a `[linker]` still takes the object + linker road unc
 3. **The synthesized entry is exercised bare.** A pure `tests/*.mc` has no `mc_start`, so
    `mc --exe pure.mc` genuinely produces a runnable PE through the synthesized stub, whose only
    import is `ExitProcess`.
+
+4. **`#include <sys>` in a Windows `--exe` writes an image the loader refuses, and the image is
+   otherwise correct** — reported from a `windows-latest` runner with the published
+   `mc-0.16.0-windows-x86_64`, reproduced STRUCTURALLY on macOS, and the report's own diagnosis
+   (`AddressOfEntryPoint 0x3000` outside `BaseOfCode 0x1000` + `SizeOfCode 1536`) refuted by
+   measurement. The whole difference between the two rows is one import:
+
+   | `i64 main() { return 42; }` | `--exe` | 4 sections, entry `0x3000`, IAT `0x4058`, imports `ExitProcess` | runs, 42 |
+   | `#include <sys>` + the same `main` | `--exe` | 4 sections, entry `0x3000`, IAT `0x4068`, imports **`write`**, `ExitProcess` | refused |
+
+   Every other header field is the same; both were dumped here with
+   `llvm-readobj --file-headers --sections --coff-imports`. `io.mc`'s `puts`/`putnum` call `write`,
+   mc emits every defined function, so `write` is undefined; on this road there is no second object,
+   so every undefined symbol is an import of the default DLL — and `kernel32.dll` does not export
+   `write` (`scripts/sysroot-windows.sh` writes the whole 19-name list; `WriteFile` is the export).
+   The loader binds the IAT before the entry runs, so the image never executes an instruction.
+
+   **The entry outside `BaseOfCode + SizeOfCode` is normal for this writer and loads**, and the
+   repository's own green CI is the proof: `001-return42` — which the `windows-2025` leg RUNS and
+   which returns 42 on every run — has exactly that configuration (entry `0x3000`, `BaseOfCode`
+   `0x1000`, `SizeOfCode` 1536), and `070-kernel32` runs with `.rdata` between two code sections and
+   a code section outside the range. Both fields are what PE/COFF defines them to be (`SizeOfCode` is
+   the SUM of the code sections' RAW sizes, `BaseOfCode` the first one's RVA), and with sections
+   page-aligned in memory and 512-aligned in the file that sum cannot span the virtual range unless
+   all code is one section, which is what `lld-link` produces by merging.
+
+   The consumer's third row (`--backend=coff-obj-x86_64` + `lld-link` → 42) is not the same link:
+   `write` is resolved there by `winrt.obj` (`lib/sys_windows.mc` defines the six over kernel32).
+   With `kernel32.lib` alone `lld-link` refuses the same object — `undefined symbol: write,
+   referenced by puts / putnum` — which is the linker's own authority that kernel32 cannot serve it.
+
+   **No compiler change was made.** Refusing the import would need a list of the names the default
+   DLL cannot serve, which is the heuristic symbol list the post-M11 batch refused for exactly this
+   trade-off (`docs/bootstrap.md` § M11: a `.o` is refused at link time, an `--exe` is built and the
+   loader kills it). The cure is the one the surface already offers: `<sys_windows>` + `<io>` for a
+   self-contained PE (`070-kernel32.mc`), or the object road, where a per-target system layer is
+   picked from outside the source by `[include].paths` — what `examples/conc` and
+   `lib/linux/<arch>/sys_arch.mc` do. `tests/windows/074-sys-io-exe.mc` is that shape, running on
+   both Windows legs through `lld-link` and skipped by `scripts/test-windows-exe.sh` with the reason.

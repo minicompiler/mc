@@ -406,7 +406,13 @@ else
     # (which is in EVERY link line) has no win_setup/win_argv to call, and the
     # link fails with two undefined symbols -- which is exactly what both
     # Windows CI legs reported. Nothing in it collides with the layer's names.
-    for name in 073-int-return; do
+    # 074 is a `kernel32` link for the opposite reason: it includes <sys>, the
+    # C-library layer, so it DECLARES write/puts' write and winrt.obj next to it
+    # defines them. It is the shape a `mc --exe` PE cannot carry -- one
+    # translation unit, no second object, so `write` becomes an import of
+    # kernel32.dll, which does not export it -- and scripts/test-windows-exe.sh
+    # skips it for that reason. Here it links and runs.
+    for name in 073-int-return 074-sys-io-exe; do
         f="tests/windows/$name.mc"
         [ -f "$f" ] || continue
         why=$(skip_reason "$f")
