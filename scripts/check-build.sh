@@ -169,6 +169,64 @@ else
     run_check "$dir/build/app-toy" "toy.toml -> kind = \"exe\" through the taught target"
 fi
 
+# and the control for the block below: with NO [linker], a taught compiler on a
+# host that has a direct executable backend is still written in one step. The
+# object is the tell -- the link road is the only one that writes it.
+total=$((total + 1))
+if [ -e "$dir/build/mc-toy.o" ]; then
+    fail "toy.toml, no [linker]" "build/mc-toy.o was written: the taught compiler took the link road"
+elif [ ! -x "$dir/build/mc-toy" ]; then
+    fail "toy.toml, no [linker]" "build/mc-toy is not there"
+else
+    ok "toy.toml, no [linker] -> the taught compiler is written by the direct exe backend"
+fi
+
+# ---- 0.16.1: a declared [linker] wins over the host's direct exe backend ----
+# drv_teach asked the host target for its exe slot and took it whenever it was
+# not 0, so a [linker] the config declares was read for the ENTRY (drv_entry has
+# always preferred it) and ignored for the COMPILER. Harmless while the only
+# hosts with an exe slot were the ones nobody cross-linked on; a defect the day
+# M42 step 2 filled windows/x86_64's, where the consumer's config declares
+# `lld-link` and got a PE the driver wrote itself (mc 0.16.0, windows-latest).
+#
+# This host has a direct exe backend too, so the same branch is reachable here:
+# teach-link.toml is link.toml with a [compiler], and what proves the road is
+# the object plus the `link` step line -- neither exists on the direct one.
+total=$((total + 1))
+rm -f "$dir/build/mc-teachld" "$dir/build/mc-teachld.o"
+if ! "$mc" build "$dir" --config "$dir/teach-link.toml" > "$tmp/o" 2>&1; then
+    fail "teach-link.toml" "$(cat "$tmp/o")"
+elif [ ! -f "$dir/build/mc-teachld.o" ]; then
+    fail "teach-link.toml" "no object for the taught compiler: the [linker] was ignored"
+elif ! grep -q "^link build/mc-teachld.o -> build/mc-teachld$" "$tmp/o"; then
+    fail "teach-link.toml" "the taught compiler was not linked: $(cat "$tmp/o")"
+else
+    sed 's|^|  |' "$tmp/o"
+    ok "teach-link.toml -> [linker] wins: the taught compiler is object + linker"
+    total=$((total + 1))
+    run_check "$dir/build/app-teachld" "teach-link.toml -> and the linked compiler built the entry"
+fi
+
+# ---- 0.16.1: a spawned compiler that fails is reported ----
+# The other half of the same report: the child died with exit 127 -- a loader
+# refusing the executable, before its first instruction -- and `mc build`
+# returned 1 with the `compiler x.mc -> x` step line as its last word. Exit 1
+# stays exempt (that is how every mc diagnostic ends, and noobj.toml above
+# asserts its own message as the last line), so this fixture exits 127.
+total=$((total + 1))
+"$mc" build "$dir" --config "$dir/teach-fail.toml" > "$tmp/o" 2>&1
+rc=$?
+got=$(tail -1 "$tmp/o")
+want="mc: $dir/build/mc-teachfail exited 127"
+if [ "$rc" != "1" ]; then
+    fail "teach-fail.toml" "exit $rc, expected 1"
+elif [ "$got" != "$want" ]; then
+    fail "teach-fail.toml" "got '$got', expected '$want'"
+else
+    ok "teach-fail.toml -> a spawned compiler that dies mute is named"
+    echo "  $got"
+fi
+
 # ---- post-M41: `--exe` resolves the HOST's exe slot, and a 0 there is refused ----
 # The third entry point into the same registry, and the reason it belongs in
 # this script: `mc build` (above), `mc sysroot stub` (below) and the single-file

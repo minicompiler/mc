@@ -6764,6 +6764,87 @@ agents (`.claude/agents/`): `stage0-dev` (C23), `mc-dev` (`.mc` code), `reviewer
   `docs/specs/M53.md` § 6.1 and § 6.2 point 2 corrected to the ROOT form, § 9 row 3 LANDED, plus
   twelve implementation notes. `docs/ci.md` § Branch protection needed nothing: `release.yml` fires
   on a tag and none of its jobs is a pull-request check.
+- `mc build` fixes 0.16.1 (two defects the consumer -- teko -- reported from a real
+  `windows-latest` run with `mc-0.16.0-windows-x86_64`; `docs/specs/M42.md` § Implementation notes
+  -- the precedence gap step 2 opened): **a declared `[linker]` wins over the host's direct exe
+  backend for the taught compiler, and a spawned compiler that fails is named.** `stage0/`
+  untouched (2848/3000); the whole code change is `src/driver.mc` **+42/-4, 9 of the added lines
+  neither comment nor blank**, and **zero new globals** (`check-limits` still reports
+  `globals 268/512, 52%` on `src/mc_seed.mc`).
+  1. **`drv_teach` took the exe slot whenever it was not 0.** The road existed for the entry
+     (`drv_entry` has always preferred `[linker]`) and not for the compiler, so a config declaring
+     `[linker] cmd = "lld-link"` -- the only road to a Windows binary at 0.15.23, when Windows had
+     no exe slot -- got a PE the driver wrote itself the day M42 step 2 filled `windows/x86_64`'s.
+     Reproduced here BEFORE the fix, on macOS, which has the same shape (a host with a direct exe
+     backend and a `[linker]` in the config): `tests/proj/teach-link.toml` printed
+     `compiler build/mc-teachld.mc -> build/mc-teachld` / `compile app.mc -> build/app-teachld.o` /
+     `link build/app-teachld.o -> build/app-teachld` -- the ENTRY linked, the COMPILER not, no
+     `build/mc-teachld.o` written at all. After: a `link build/mc-teachld.o -> build/mc-teachld`
+     step line, the object on disk, and the linked compiler compiles the entry, which runs
+     (`sqlite ok`, exit 0). The condition is one local -- `has_linker == 0 && tgt_exe_at(ht) != 0`
+     -- and the existing `a taught compiler on this host needs [linker]` message is byte for byte
+     where it was. The obligation it creates is documented: the linker a config names has to be
+     able to link a binary THIS host can run, since `mc build` spawns the compiler it just wrote.
+  2. **A spawned tool that fails is named.** `drv_teach` did `return 1` with no diagnostic, so the
+     CI printed `compiler build/teko.mc -> build/teko.exe` and died mute (exit 127 from the child,
+     the loader refusing the PE). Reproduced before the fix with `tests/proj/teach-fail.toml`,
+     whose module is `_exit(127)` in `user_init`: exit 1, last line
+     `compile app.mc -> build/app-teachfail`, nothing else. After:
+     `mc: tests/proj/build/mc-teachfail exited 127`, exit 1. ONE helper, `drv_tool_failed`, at the
+     two places the driver waits on a tool -- the `[linker]` spawn and the taught compiler's, so
+     both `--compiler-only` and the normal road are covered. **Exit 1 is exempt**, and that is the
+     whole rule: it is how every diagnostic in this compiler ends (`die`/`err_at` both `_exit(1)`)
+     and how a linker reports its own error, so the tool has already said what was wrong and a
+     line from here would only push it off the end of the output -- which `check-build`'s
+     `noobj.toml` case, among others, reads as the last line (verified unchanged:
+     `tests/proj/noobj.toml:19:8: toy/toy has no object backend: use kind = "exe": target.os`).
+     Anything else is a death the tool had no chance to report; 128 + N is read as
+     `killed by signal N`, drv_spawn's encoding and the shell's convention.
+  Gates: `scripts/check-build.sh` **55/55 -> 59/59** (+4) -- `tests/proj/teach-link.toml`
+  (`link.toml` plus a `[compiler]`, asserting the object AND the `link` step line for the taught
+  compiler, then RUNNING the entry it built), the control that `toy.toml` (the same shape with no
+  `[linker]`) still writes no `build/mc-toy.o`, and `tests/proj/teach-fail.toml` asserting the new
+  line as the LAST one with exit 1. New fixtures: `tests/proj/teach-link.toml`,
+  `tests/proj/quiet.mc` (a module that teaches nothing), `tests/proj/exit127.mc`,
+  `tests/proj/teach-fail.toml`.
+  `make bundle` re-run BEFORE bootstrapping (`src/driver.mc` is bundled as `mc/driver`): 60 files,
+  raw 1244184 -> LZ 564064, blob 564838 B. `make check` green end to end (**RC 0, zero FAIL**):
+  `budget` 2848/3000, `test` 32/32, `check-obj` **32/32 identical to the frozen seed**,
+  `check-bundle`, `bootstrap` at a fixed point on both roads (`mc2.o == mc3.o`, 1444480 B, the
+  `--dump-asm` diff between `mc1` and `mc2` **empty**; `mc2o.o == mc3o.o` and the cross-road
+  identity `mc2o-plain.o == mc2.o`), **`check-build` 59/59**, `check-limits` **17/17 under 90%**,
+  `check-docs`, `site` + `check-site`. `make check-linux-host` RC 0 over all four cells (aarch64
+  and x86_64 x musl and gnu), each after its own `mc2l.o == mc3l.o` and `mc2lo.o == mc3lo.o` and
+  with the cross proof against the macOS `build/mc2.o` green.
+  `scripts/check-inert.sh <mc1 from origin/main f9c5797> build/mc1`: **33 objects identical on the
+  plain road and 33 on `--opt=1`** (`tests/*.mc` and `src/mc.mc`) plus byte-identical artefacts for
+  `examples/api`, `lang`, `conc`, `desktop` and `kernel`. None of the five declares `[linker]` on
+  this host -- the two configs in the repository that carry `[compiler]` AND `[linker]`,
+  `examples/api/mc.linux.toml` and `examples/conc/mc.linux.toml`, are host-Linux configs no script
+  exercises, and on a Linux host they now link the taught compiler with the `ld.lld` line their own
+  headers already describe.
+  The ten goldens rewritten **once**, each only after its own criterion: `mc2.sha256`
+  `7c5daea8...f74e679` -> `045a89e47b5bc39bc94adc663972dc53afa6afb0c2277c046ec069b42e991ba8` and
+  `mc2-opt.sha256` `3ea767f6...b39f3d4` ->
+  `ca7711c2b5aa5687271502a596315d30b3bc61419affdd1417443c3624b0335c` (deleted and re-recorded by
+  `make bootstrap` after the empty `--dump-asm` diff and the two `cmp`s); the four Linux ones
+  deleted and re-recorded by `make check-linux-host` -- `mc2-linux-arm64`
+  `a1d2b044b0d0ead348fca4f89b8b6e7271e7317eba828993dec8d830d2cf477f`, `mc2-linux-arm64-opt`
+  `ae5e9b7cbd790f06ef159d4fe2fef87cebe9846ab72ce82dca9d04715398e9dd`, `mc2-linux-x86_64`
+  `761ef33949ae7345dc396004f9fea115ed56539135a04dc4902e7a144d0f8205`, `mc2-linux-x86_64-opt`
+  `464887e40e0a7d3ddbefbfdcf71501fa55e96ba506fad19d1f1d09c33dc4753c`; the four Windows ones
+  cross-computed per `tests/golden/README.md` -- `mc2-windows-arm64`
+  `0cb5677b0b0fe51d02344ede3ce4880ddc4e45b14a66ecd09f799eef38e5c889` (1479443 B),
+  `mc2-windows-arm64-opt`
+  `a068edbd3c757eca60e32badc174bdfbe4879989ac438d768b116a85a4422141` (1420723 B),
+  `mc2-windows-x86_64`
+  `493edc5134202a840e26bad2a197d9981c3144a364bfc3798a48ca9a95c3f043` (1535127 B),
+  `mc2-windows-x86_64-opt`
+  `97dfee1d4b168a66188ab0b11fce9b763f53bf0080553e5bb16f652a6879c554` (1463087 B).
+  Docs: `docs/build.md` § `[compiler]` (the two-road table and the precedence, and what the driver
+  prints when the compiler it spawned fails) and § `[linker]`, `docs/reference/toml.md`
+  (the `linker.cmd` row and the errors), `docs/reference/diagnostics.md` (one new row),
+  `docs/specs/M42.md` § Implementation notes.
 - Next: the **site + registry server, M47 S4-S6**, in
   `minicompiler/mc-registry`; then **M42 step 2** (PE `--exe`, CI-gated on the Windows runners).
   **M46** only on the owner's request; **M43 Layer 2** after 1.0.0. M13 and M18 stay in the backlog

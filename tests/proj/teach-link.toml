@@ -1,0 +1,35 @@
+# teach-link.toml — link.toml with a [compiler]: a taught compiler on a host
+# that HAS a direct executable backend, and a [linker] declared beside it.
+#
+# The precedence is what this file is for. Until 0.16.1 drv_teach asked the host
+# target for its exe slot and used it whenever it was not 0, so on macos -- and,
+# since M42 step 2, on windows/x86_64, which is where the consumer met it -- the
+# [linker] written here was read for the ENTRY and ignored for the COMPILER.
+# A config that says how to link is the developer's decision, and it wins: the
+# taught compiler goes object + linker, exactly as the entry does.
+#
+# `ld` and {sdk} are link.toml's, so this needs nothing installed that the case
+# above it does not need already.
+[project]
+entry = "app.mc"
+out   = "build/app-teachld"
+kind  = "exe"
+
+[target]
+os   = "macos"
+arch = "aarch64"
+
+[compiler]
+out     = "build/mc-teachld"
+modules = ["quiet.mc"]
+
+[linker]
+cmd  = "ld"
+args = ["-arch", "arm64", "-platform_version", "macos", "13.0", "13.0",
+        "-syslibroot", "{sdk}", "-lSystem", "-o", "{out}", "{obj}", "{libs}"]
+
+[libs]
+sqlite3 = "{sdk}/usr/lib/libsqlite3.tbd"
+
+[include]
+paths = ["inc"]
