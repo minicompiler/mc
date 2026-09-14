@@ -51,7 +51,7 @@ void mc_build_init() {
     // M14/M23/M25: the three subcommands, each carrying the exact usage text
     // `mc` with no argument prints for it. `sysroot` carries two lines.
     subcommand("build", &drv_build,
-        "usage: mc build [DIR] [--config FILE] [--compiler-only] [--limits|--fix-limits] [--sysroot-dir DIR] [--libs-dir DIR]\n");
+        "usage: mc build [DIR] [--config FILE] [--sync [--yes]] [--compiler-only] [--limits|--fix-limits] [--sysroot-dir DIR] [--libs-dir DIR]\n");
     subcommand("limits", &drv_limits,
         "       mc limits [DIR|FILE.mc]\n");
     subcommand("sysroot", &sysroot_cmd,

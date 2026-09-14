@@ -6379,6 +6379,120 @@ agents (`.claude/agents/`): `stage0-dev` (C23), `mc-dev` (`.mc` code), `reviewer
   `docs/reference/sandbox.md` (§ The tree, § The profiles), `docs/bootstrap.md`;
   `docs/reference/diagnostics.md` needed no change -- step A had already written all three
   sentences.
+- M52 step C ✔, and **M52 is CLOSED** (`docs/specs/M52.md` § 5 D7, § 10.8, § 11 row 3 + its new
+  § Implementation notes -- step C): **`mc build --sync`, the one road from a build to the
+  network.** `stage0/` untouched (2848/3000, `git diff origin/main -- stage0/` empty); zero new
+  globals.
+  * **The flag is `pkg_sync` and nothing else.** `mc build [DIR] --sync [--yes]` runs the SAME
+    function `mc pkg sync` runs -- same plan, same install table, same `[[permission]]` consent,
+    same `--yes`, same refusals -- and then builds. It runs at the top of `drv_run`, before
+    anything reads `mc.lock` (`deps_apply`, inside `drv_parse`), and re-parses the config for
+    itself: `toml_parse` resets the table, so the two reads of the same file cannot see each other.
+    Without the flag `mc build` is byte for byte the command it was, and `check-pkg`'s
+    `curl`/`wget`/`tar` shim (exit 97 if invoked) keeps proving it.
+  * **The driver may not NAME `pkg_sync`.** `src/driver.mc` is `<mc/core_build>` and `src/pkg.mc`
+    is `<mc/core_pkg>`; `check-parts` § 1b requires each part to stand on `<mc/core_min>` alone,
+    and `docs/reference/packages.md` § 9's claim -- "a compiler assembled without `<mc/core_pkg>`
+    cannot download even in principle" -- is a property of the code. So the sync step arrives as a
+    **pointer**, `drv_set_sync(&pkg_sync_for_build)` from `mc_pkg_init()`, the shape
+    `lex_set_bundle`/`lex_set_libs` already have, stored in the driver's own record (`DRV_SYNCFN`).
+    Measured: a compiler assembled from `<mc/core_min>` + `<mc/core_machines>` +
+    `<mc/core_writers>` + `<mc/core_build>` has `_drv_build` and **no `_pkg_sync`** in
+    `--dump-syms`, and `mc build DIR --sync` on it is `mc: --sync needs the package half of this
+    compiler: mc pkg is not in it`, exit 1.
+  * **One bit `pkg_sync` could not answer.** It returns 0 both when the lock is written and when
+    it printed a plan it did not run -- for `mc pkg sync` those are one outcome, for a build they
+    are not. `pkg_sync_for_build(dir, cfg, yes)` is `pkg_open_config` + `pk_set_yes` + **that same
+    `pkg_sync`**, then one line: `if (!pk_yes() && (pk_nplan() > 0 || pkg_perm_ask())) return -1;`
+    -- `-1` is "stop, exit 0". The permission half is not decoration: a build that walked past an
+    unaccepted `[[permission]]` set would be a second road around the consent.
+  * **The four cases, measured.** (a) plain `mc build` on an unsynced project still refuses --
+    `mc: mc.lock is stale`, exit 2, with its `run:` line, nothing spawned. (b) `--sync` alone:
+    two `fetch` rows, `nothing was downloaded: re-run with --yes`, **exit 0, no lock written and
+    nothing built**. (c) `--sync --yes`: fetched, `mc.lock` byte for byte `mc.lock.expect`, built,
+    and the program runs (exit 42, `plot 110`) -- one command from checkout to binary. (d) with a
+    `[compiler]` section (`tests/pkg/sync/teach.toml`, new): **one `lock` line and two `fetch`
+    rows, not two and four** -- `drv_teach` writes the child's argv name by name, so `--sync`
+    cannot travel to the `--entry-only` child, and the gate measures the consequence rather than
+    the code. Plus (e): after (c), a plain `mc build` under the FULL shim (a `tar` that exits 97 as
+    well as the two downloaders) still builds.
+  * **A no-op sync stays a sync**: with no `[deps]` and no `[tools]` it is `sync: no
+    dependencies`, an empty lock, and the build -- what `pkg_sync` does there, kept.
+  * **`--yes` on its own is refused**, not ignored (`mc: --yes applies to --sync: mc build
+    downloads nothing without it`) -- the post-M42 rule for a flag read by nobody. Both flags live
+    in ONE record field (`DRV_SYNC`, 0/1/2), so `drv_run` needed no new parameter and its three
+    callers were not touched.
+  * **The `run:` line did not change**, against the step table's "the `run:` line it makes
+    unnecessary" read as a licence to rewrite it: the refusal is raised by `src/deps.mc`, which is
+    `<mc/core_build>` and has no business naming a flag that needs the other part, and
+    `mc pkg sync --yes` is right on every road. What `--sync` makes unnecessary is the second
+    COMMAND. `check-mc` and `check-pkg` assert that text and neither moved.
+  * **`mc build` has no `--registry`** and does not get one: a build whose answer depended on a
+    registry named in the shell line would be a build two people cannot reproduce from the same
+    checkout -- the same argument § 5 used to refuse implicit resolution. The registry is
+    `[registry].url` or the default; `check-pkg` § 38 names its fixture registry by `sed`-ing that
+    table into a copy of the project's config, which is what a private tap looks like.
+  * **A part-less compiler still ADVERTISES the flag** (the usage line is
+    `subcommand("build", ...)`'s, `<mc/core_build>`'s): a subcommand disappears with its part
+    (M43 § 4b), a flag inside one cannot. The refusal is what tells the truth, and it names the
+    missing half. Re-registering `build` from `mc_pkg_init()` with a longer string was the
+    alternative and puts the same text in two files.
+  -- cost: **79 added lines in `src/`, 30 of them neither comment nor blank**
+  (`src/driver.mc` +48/-1, `src/pkg.mc` +25, `src/core_pkg.mc` +5, `src/core_build.mc` +1/-1),
+  against the spec's ~20. New fixtures `tests/pkg/sync/teach.toml` and `tests/pkg/sync/user.mc`;
+  `scripts/check-pkg.sh` § 38 (**186/186 -> 191/191**) and `scripts/check-parts.sh` § 4c (the part
+  boundary, three assertions). `make bundle` re-run BEFORE bootstrapping (60 files, raw 1238096 ->
+  lz 560911, blob 561685 B).
+  `make check` green end to end (**RC 0, zero FAIL**): `budget` 2848/3000, `test` 32/32,
+  `check-lex` 177/177 (5 skipped), `check-ast`/`check-asm` 178/178, `check-obj` **32/32 identical
+  to the frozen seed**, `check-bundle`, `bootstrap` at BOTH fixed points -- `mc2.o == mc3.o` (1439768 B, the
+  `--dump-asm` diff between `mc1` and `mc2` **empty**) and `mc2o.o == mc3o.o` (1381736 B, the
+  `--dump-asm --opt=1` diff empty) -- `check-surface` 32/32, `check-opt` 75/75, `test-exe` 32/32,
+  `check-mc`, `check-standalone`, `check-parts`, `check-toml`, `check-build` 55/55, **`check-pkg`
+  191/191**, `check-libroot` 7/7, `check-tool` 27/27, `check-stubs`, `check-sysroots`,
+  `check-limits` 17/17 under 90%,
+  `test-linux`/`test-linux-x86_64` and the four `--exe` cells, `test-windows`/
+  `test-windows-x86_64`, `check-examples`, `check-lang`, `check-conc`, `check-desktop`,
+  `check-float`, `check-wide`, `check-kernel`, `check-avr`, `test-sandbox` 73 ok / 0 failed /
+  1 skipped, `check-docs` (206 symbols, 50 flags, 35 TOML keys, 10 directives, 52 samples,
+  525 links), `site` 99 pages + `check-site` (0 link problems) + `check-site-linux`.
+  `make check-linux-host` **RC 0 over all four cells** (aarch64 and x86_64 x musl and gnu), each
+  after its own `mc2l.o == mc3l.o` and `mc2lo.o == mc3lo.o`, the cross-road identity
+  (`mc2lo-plain.o == mc2l.o`) and the cross proof (`mc2l --backend=macho src/mc.mc` byte for byte
+  the macOS `build/mc2.o`).
+  `scripts/check-inert.sh build/mc1.pre build/mc1` (pre = a `mc1` built from `origin/main`
+  345b2b4): **33 objects identical on the plain road and 33 with `--opt=1`** (`tests/*.mc` and
+  `src/mc.mc`) plus byte-identical artefacts for `examples/api`, `lang`, `conc`, `desktop` and
+  `kernel` -- a flag nobody writes emits nothing.
+  **Ten goldens rewritten once**, each only after its own criterion: `mc2.sha256`
+  `a983077bbeba100e788b8639e2ff33cab3d96b26caa65070649bd8f32e6989e2` and `mc2-opt.sha256`
+  `dbae8f11eb867d98ab82ab5bf44f28a7f549364fe8d4cb41e929fc9331420604` (after the two empty
+  `--dump-asm` diffs and the two `cmp`s); the four Linux ones deleted and re-recorded by
+  `make check-linux-host` -- `mc2-linux-arm64`
+  `a560cbe66292858e79df4a0d4de6c5c1715c151d42a04c08347622a9baab48e5`, `mc2-linux-arm64-opt`
+  `6e509ec41ca8b3cfe5b872a2f31b84820f4e02b7c2ff59ff66554933d6894623`, `mc2-linux-x86_64`
+  `78d77eb56ef6f280e4eebba5c30d74aff0140a9e94c20884c4d8a63a35ad7d8e`, `mc2-linux-x86_64-opt`
+  `88f256bee38d84c3281669cba1eb8e17bc56a669829b1cae3152ca0319fead26`; the four Windows ones
+  cross-computed per `tests/golden/README.md` -- `mc2-windows-arm64`
+  `4b9874f0feae7871327d3a2ac11338d4c65ebd2b1cb193a5b97b78f29083e3b4` (1474759 B),
+  `mc2-windows-x86_64` `0f22974824ea801d3534d8d19fb6bdb542ebe05e2e49b8f2b87278572f208f9a`
+  (1530211 B), `mc2-windows-arm64-opt`
+  `bc02ae2b5abc1240755f61625a1ed69d1db0ba30232ea9807cdfcf25974f9dfa` (1416147 B),
+  `mc2-windows-x86_64-opt` `6f41c01d20044cdcd0b231352832c50a92bdf2fe1d3eddb331007351abb08468`
+  (1458291 B).
+  **M52 closed**, three gated steps: **A** the library root beside the binary and the refusal that
+  names `mc install` (86 added, 37 code), **B** the cut -- **101 blob rows -> 60**, 41 to the tree,
+  **the binary −132 098 B, −9.4%, `__DATA,__data` −18.0%, `__text` and `__cstring` byte-identical**
+  (52 code lines) -- and **C** this. The three roots are `<libs>` (`--libs-dir` or
+  `$HOME/.mc/libs`), then `lib/mc/v<ver>/` beside the executable, then one directory up for a
+  packager who puts `mc` in `bin/`. No `#include` spelling changed anywhere, and no library was
+  published as a package of its own (§ 9.2, deferred).
+  Docs: `docs/reference/cli.md` § 2 (`--sync`, `--yes`, and the sync's own output above the build's),
+  `docs/reference/packages.md` § 9 (the one exception to "it never downloads") and § 10 (a new
+  § "The same sync, from a build"), `docs/reference/diagnostics.md` (two rows),
+  `docs/build.md` § M14/M44, `docs/guide/25-packages.md` § 6, `docs/specs/M52.md` (§ 11 row 3
+  LANDED + § Implementation notes -- step C, nine notes) and `docs/plan.md`'s M52 row marked done
+  with the measured numbers.
 - Next: the **site + registry server, M47 S4-S6**, in
   `minicompiler/mc-registry`; then **M42 step 2** (PE `--exe`, CI-gated on the Windows runners).
   **M46** only on the owner's request; **M43 Layer 2** after 1.0.0. M13 and M18 stay in the backlog
@@ -6390,10 +6504,14 @@ agents (`.claude/agents/`): `stage0-dev` (C23), `mc-dev` (`.mc` code), `reviewer
   stays deferred to its own spec) and **M50 is CLOSED** (steps A, B and C -- the reproducible cell
   on three GitHub Actions cells, the gate, and the committed dated JSON that replaced
   `docs/comparison.md`'s two caveats; it gave M49 D2's x86-64 allocator its first timing, 19-21%
-  on `mix`). What is left of that batch is **M51** (a bundled `<http>` library carrying the
-  `mc-forkka` fork-per-connection-keep-alive shape) and **M52** (the standard library) --
-  the registry server's own move off fork-per-request is `minicompiler/mc-registry`'s work, not
-  this repository's; both are in lockstep with teko.
+  on `mix`). **M52 is CLOSED** too (steps A, B and C -- the library root beside
+  the binary, the cut that took 41 of 101 blob rows out for −9.4% of the binary, and
+  `mc build --sync`), which makes the **0.16.0 cut** the immediate next thing: one coordinated tag
+  with teko, dispatched by hand after the consumer's dry run. After it: the **surface freeze**
+  (RC 0.17.0) and the deprecation policy, then **M51** -- the `<http>` library, now a registry
+  PACKAGE and not a bundle row (M52 § 9.3), carrying the `mc-forkka`
+  fork-per-connection-keep-alive shape; the registry server's own move off fork-per-request is
+  `minicompiler/mc-registry`'s work, not this repository's.
   Update this section when each milestone closes.
 - i18n done (2026-09-03): the repository is fully in English — diagnostics, program/script
   output, identifiers, comments, and docs (`docs/*.md`, `docs/specs/*.md`, `CLAUDE.md`,

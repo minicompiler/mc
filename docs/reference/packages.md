@@ -506,16 +506,26 @@ mc: mathx 1.0.0 is not fetched
 
 ## 9. What `mc build` does NOT do
 
-**It never downloads.** There is no downloader in the read side at all: it reads the lock, finds
-each tree in `deps/` or `<libs>`, hashes, registers the roots, compiles. `make check-pkg` proves
-it rather than asserting it — the whole run has a `curl`, a `wget` and a `tar` on `PATH` that fail
-if they are invoked.
+**It never downloads** — unless you ask, by name, on the command line. There is no downloader in
+the read side at all: `mc build` reads the lock, finds each tree in `deps/` or `<libs>`, hashes,
+registers the roots, compiles. `make check-pkg` proves it rather than asserting it — the whole run
+has a `curl`, a `wget` and a `tar` on `PATH` that fail if they are invoked.
+
+The one road from a build to the network is **`mc build --sync`** ([cli.md](cli.md) § 2), and it is
+exactly the sync step of § 10 run before the build: the same plan, the same consent, the same
+`--yes`, the same refusals, and the lock is written before anything reads it. It is a flag and not
+a fallback for one reason: a build that resolved "the newest that satisfies the file" on its own
+would make the object a function of the day it ran ([determinism.md](../determinism.md)), which is
+the same argument that makes the lock the thing a build reads.
 
 **It never opens a directory no lock names**, and it never guesses a version.
 
 A compiler assembled without `<mc/core_pkg>` cannot download even in principle: it has no
 fetcher, no registry and no lock writer, and it still builds every project above. That is the
-CI and consumer shape ([bundle.md](bundle.md) § The parts).
+CI and consumer shape ([bundle.md](bundle.md) § The parts). `--sync` is `mc build`'s flag, so such
+a compiler still lists it in its usage and answers `mc: --sync needs the package half of this
+compiler: mc pkg is not in it`, exit 1 — a subcommand disappears with its part, a flag inside one
+says what is missing.
 
 ---
 
@@ -789,6 +799,23 @@ it: `version` is what selection chose, `lib`, `deps`, the kind, `bin` and `permi
 the package's **own** `mc.toml`, and `sha256` is the tree hash of what is on the disk. A `[replace]`d package gets a
 `path` line and no hash (§ 7). Rows nothing requires are dropped, because the lock is written from
 the build list and from nothing else.
+
+### The same sync, from a build
+
+`mc build --sync [--yes]` runs everything in this section — the plan, the install table, the
+consent, the fetch, the checks, the lock writer — and then builds, in one command and one process.
+It is the same function; there is no second resolution model to learn and no second place a
+refusal can come from. Two things are its own:
+
+* Without `--yes` it **stops after the plan**. `mc pkg sync` with no `--yes` has said everything it
+  had to say and exits 0; a build cannot go on from there, because the lock was not written.
+* The registry is `[registry].url` or the default. `mc build` has no `--registry` flag — a build
+  that names a registry on the command line would be a build whose answer depends on the shell
+  line, and a project that uses a private registry says so in its own file.
+
+With a `[compiler]` section the sync happens **once**, in the process you ran: the taught compiler
+is spawned with `--entry-only` and never with `--sync`, and it compiles the entry from the lock the
+parent wrote.
 
 ### Vendoring
 

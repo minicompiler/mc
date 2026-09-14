@@ -202,8 +202,23 @@ compiler build/mc-app.mc -> build/mc-app
 compile main.mc -> build/app
 ```
 
-`mc build` **never downloads**: it reads the lock, finds each tree, hashes it, and compiles. When
-something is wrong it says so and stops:
+`mc build` **never downloads** — it reads the lock, finds each tree, hashes it, and compiles —
+unless you ask it to, in the one spelling that exists:
+
+```console
+$ mc build myproject --sync --yes
+fetch  geo 1.2.0      https://github.com/minicompiler/mc-geo/archive/refs/tags/v1.2.0.tar.gz
+fetch  mathx 1.0.0    https://github.com/minicompiler/mc-mathx/archive/refs/tags/v1.0.0.tar.gz
+lock   myproject/mc.lock (2 packages)
+compile main.mc -> build/app
+```
+
+That is `mc pkg sync` followed by the build: same plan, same hashes, same `mc.lock`. Leave `--yes`
+off and you get the plan and nothing else — nothing is fetched, no lock is written, nothing is
+built. On a fresh clone of a project whose `deps/` is not in git, `mc build --sync --yes` is the
+one command that takes it from checkout to binary.
+
+When something is wrong it says so and stops:
 
 ```console
 $ mc build myproject

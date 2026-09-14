@@ -1967,12 +1967,18 @@ first thing a missing entry does is refuse a legitimate program.
 compiles. With no `[deps]` it reads no lock, opens nothing extra, and behaves exactly as it did
 before packages existed.
 
-**It never downloads.** The fetcher, the registry, minimal version selection and the lock writer
-are `mc pkg`'s, in a part of their own — `<mc/core_pkg>` — and a compiler assembled without that
-part has none of them and still builds any project from its lock and its `deps/` tree. That is not
-a claim in a document: `make check-pkg` runs the whole fixture suite with a `curl`, a `wget` and a
-`tar` on `PATH` that fail if they are invoked, and builds the vendored project with
-`tests/pkg/nopkg.mc`, a compiler without the part.
+**It never downloads, unless you ask for it by name.** The fetcher, the registry, minimal version
+selection and the lock writer are `mc pkg`'s, in a part of their own — `<mc/core_pkg>` — and a
+compiler assembled without that part has none of them and still builds any project from its lock
+and its `deps/` tree. That is not a claim in a document: `make check-pkg` runs the whole fixture
+suite with a `curl`, a `wget` and a `tar` on `PATH` that fail if they are invoked, and builds the
+vendored project with `tests/pkg/nopkg.mc`, a compiler without the part.
+
+The one exception is a flag you type: **`mc build --sync [--yes]`** (M52 § D7) runs `mc pkg sync`
+and then the build, in one command. It is the same function, the same plan, the same consent and
+the same refusals; without `--yes` it prints the plan and stops. It is a flag and not a fallback
+because a build that resolved a version on its own would make the object a function of the day it
+ran.
 
 | command | what it writes |
 |---|---|
@@ -1989,8 +1995,8 @@ server that publishes exactly that layout. **A directory with the same layout is
 a private tap is a `git clone` and one line of TOML, and it is also what the test suite uses:
 `scripts/check-pkg.sh` builds a registry of local tarballs and never touches the network.
 
-Two flags are new to `mc build` itself: `--libs-dir DIR` (where installed packages live, instead
-of `~/.mc/libs`, so no CI job depends on `HOME`) and nothing else. Everything about the model —
+Three flags are `mc build`'s own: `--libs-dir DIR` (where installed packages live, instead of
+`~/.mc/libs`, so no CI job depends on `HOME`), and `--sync [--yes]`. Everything about the model —
 the tree hash, the resolution order, the closure rule, every message — is in
 [reference/packages.md](reference/packages.md).
 

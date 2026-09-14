@@ -90,7 +90,17 @@
 #define DRV_TOL       88      // [limits].tolerance, in basis points
 #define DRV_OPT       96      // M49: --opt=N / -O on the command line, -1 = not
                               // given (and then [project].opt, default 0)
-#define DRV_SIZE     104
+#define DRV_SYNC     104      // M52 D7: 0 = no --sync, 1 = --sync, 2 = --sync
+                              // --yes. One field and not two, so `mc build`'s
+                              // two new flags cost the record eight bytes and
+                              // drv_run no extra parameter
+#define DRV_SYNCFN   112      // M52 D7: `mc pkg sync`, as a pointer, registered
+                              // by mc_pkg_init(). src/driver.mc is
+                              // <mc/core_build> and src/pkg.mc is
+                              // <mc/core_pkg>, so this part must not NAME the
+                              // other one: a compiler assembled without the
+                              // package half leaves it 0 and --sync refuses
+#define DRV_SIZE     120
 
 uptr drv_state = 0;                   // the one global of this file
 
@@ -118,6 +128,8 @@ i64  drv_static()      { return ld64(drv_rec() + DRV_STATIC); }
 i64  drv_lim_mode()    { return ld64(drv_rec() + DRV_LIMMODE); }
 i64  drv_tol()         { return ld64(drv_rec() + DRV_TOL); }
 i64  drv_opt_flag()    { return ld64(drv_rec() + DRV_OPT); }
+i64  drv_sync_mode()   { return ld64(drv_rec() + DRV_SYNC); }
+uptr drv_sync_fn()     { return ld64(drv_rec() + DRV_SYNCFN); }
 
 void set_cfg_file(uptr v)        { st64(drv_rec() + DRV_CFG, v); }
 void set_drv_sdk_cache(uptr v)   { st64(drv_rec() + DRV_SDK, v); }
@@ -132,6 +144,13 @@ void set_drv_static(i64 v)       { st64(drv_rec() + DRV_STATIC, v); }
 void set_drv_lim_mode(i64 v)     { st64(drv_rec() + DRV_LIMMODE, v); }
 void set_drv_tol(i64 v)          { st64(drv_rec() + DRV_TOL, v); }
 void set_drv_opt_flag(i64 v)     { st64(drv_rec() + DRV_OPT, v); }
+void set_drv_sync_mode(i64 v)    { st64(drv_rec() + DRV_SYNC, v); }
+
+// M52 D7: the one road from a build to the network, and it arrives as a
+// pointer. The handler is `i64 f(dir, cfg, yes)` -- pkg_sync_for_build in
+// src/pkg.mc -- and it answers 0 to go on with the build, -1 to stop with exit
+// 0 (it printed a plan it did not run), or an exit code.
+void drv_set_sync(uptr fn) { st64(drv_rec() + DRV_SYNCFN, fn); }
 
 // M49: the level THIS build compiles the entry with. The flag wins over the
 // key, and with neither it is 0 -- the plain road, which every determinism gate
@@ -797,6 +816,25 @@ void drv_usage() { subcommand_usage(); }
 i64 drv_run(uptr dir, uptr cfg, i64 entry_only, i64 compiler_only) {
     if (dir == 0) dir = ".";
     if (cfg == 0) cfg = path_norm(tm_cat(dir, "/mc.toml"));
+    // M52 D7: `mc build --sync` is `mc pkg sync` followed by the build -- the
+    // same function, the same plan, the same [[permission]] consent, the same
+    // --yes. It runs HERE, before anything reads mc.lock (deps_apply, inside
+    // drv_parse), and it re-parses the config for itself: toml_parse resets the
+    // table, so the two reads of the same file cannot see each other.
+    //
+    // Without the flag nothing below is reached and `mc build` is byte for byte
+    // the command it was -- which is what keeps "mc build never downloads"
+    // (docs/reference/packages.md § 9) a property of the code and not a promise.
+    // The flag is NOT forwarded to the --entry-only child (drv_teach writes that
+    // argv itself, name by name): a project is synced once, by the process the
+    // user ran, and the child compiles the entry from the lock the parent wrote.
+    if (drv_sync_mode() != 0) {
+        if (drv_sync_fn() == 0)
+            die("--sync needs the package half of this compiler: mc pkg is not in it");
+        i64 src = callp(drv_sync_fn(), dir, cfg, drv_sync_mode() == 2);
+        if (src == -1) return 0;         // the plan was printed, nothing fetched
+        if (src != 0) return src;
+    }
     set_cfg_file(cfg);
     toml_parse(cfg);
     set_drv_tol(toml_bp("limits.tolerance", 2500, 0, 10000,
@@ -888,6 +926,8 @@ i64 drv_build(i64 argc, uptr argv) {
     uptr cfg = 0;
     i64 entry_only = 0;
     i64 compiler_only = 0;
+    i64 sync = 0;
+    i64 yes = 0;
     i64 i = 2;                                 // argv[1] is "build"
     while (i < argc) {
         uptr a = ld64(argv + i * 8);
@@ -919,6 +959,8 @@ i64 drv_build(i64 argc, uptr argv) {
             else if (str_eq(v, "1")) set_drv_opt_flag(1);
             else die2("--opt must be 0 or 1", v);
         }
+        else if (str_eq(a, "--sync"))          sync = 1;
+        else if (str_eq(a, "--yes"))           yes = 1;
         else if (str_eq(a, "--entry-only"))    entry_only = 1;
         else if (str_eq(a, "--compiler-only")) compiler_only = 1;
         else if (str_eq(a, "--limits"))        set_drv_lim_mode(1);
@@ -929,6 +971,11 @@ i64 drv_build(i64 argc, uptr argv) {
         i = i + 1;
     }
     if (entry_only && compiler_only) die("--entry-only and --compiler-only are exclusive");
+    // M52 D7: --yes is read by the sync step and by nothing else, so on its own
+    // it is a flag nobody reads -- refused rather than ignored (the post-M42
+    // rule for --libc/--link/--interp).
+    if (yes && !sync) die("--yes applies to --sync: mc build downloads nothing without it");
+    set_drv_sync_mode(sync + yes);
     return drv_run(dir, cfg, entry_only, compiler_only);
 }
 

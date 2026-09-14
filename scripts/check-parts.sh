@@ -276,6 +276,60 @@ if [ -x "$tmp/mcmin" ]; then
     fi
 fi
 
+# --------------------------- 4c. the other part that is not there (M52 step C)
+# `mc build --sync` (D7) runs `mc pkg sync`, which is <mc/core_pkg>'s, from the
+# driver, which is <mc/core_build>'s. The driver must therefore not NAME it: the
+# sync step arrives as a pointer that mc_pkg_init() writes, the way lex_set_libs
+# and lex_set_bundle already do. This assembles the driver WITHOUT the package
+# half and asks for the flag.
+#
+# The flag is `mc build`'s, so it is still in the usage line -- a subcommand can
+# disappear with its part (4b) and a flag inside one cannot. What the flag does
+# without the part is say so, and that is what is measured here.
+cat > "$tmp/nopkg.mc" <<'EOF'
+#include <mc/host>
+#include <mc/core_min>
+#include <mc/core_machines>
+#include <mc/core_writers>
+#include <mc/core_build>
+#include <user_default>
+i64 main(i64 argc, uptr argv, uptr envp) {
+    host_init(envp);
+    mc_machines_init();
+    mc_writers_init();
+    mc_build_init();
+    return mc_main(argc, argv, envp);
+}
+EOF
+mkdir -p "$tmp/nolibs"
+rm -f "$tmp/mcnopkg"
+if ! msg=$("$mc" --exe "$tmp/nopkg.mc" -o "$tmp/mcnopkg" 2>&1); then
+    fail "<mc/core_build> without <mc/core_pkg> does not build: $msg"
+else
+    "$mc" --dump-syms "$tmp/nopkg.mc" > "$tmp/nopkg.syms" 2>&1
+    if grep -q " _pkg_sync\$" "$tmp/nopkg.syms"; then
+        fail "the driver drags pkg_sync in without <mc/core_pkg>"
+    else
+        echo "ok   no <mc/core_pkg>: _drv_build is there and _pkg_sync is not"
+    fi
+    msg=$("$tmp/mcnopkg" build tests/pkg/std --sync 2>&1); rc=$?
+    want="mc: --sync needs the package half of this compiler: mc pkg is not in it"
+    if [ "$rc" = 1 ] && [ "$msg" = "$want" ]; then
+        echo "ok   no <mc/core_pkg>: 'mc build --sync' is '$msg', exit 1"
+    else
+        fail "no <mc/core_pkg>: 'mc build --sync' said [$msg], exit $rc"
+    fi
+    # and the whole compiler, for contrast: the same flag reaches pkg_sync, which
+    # has nothing to do on a project with no [deps] and says so.
+    msg=$("$mc" build tests/pkg/std --sync --libs-dir "$tmp/nolibs" 2>&1 | head -1)
+    rm -rf tests/pkg/std/build tests/pkg/std/mc.lock
+    if [ "$msg" = "sync: no dependencies" ]; then
+        echo "ok   with the part: 'mc build --sync' runs the sync step ($msg)"
+    else
+        fail "with the part: 'mc build --sync' said [$msg]"
+    fi
+fi
+
 # ------------------------------------------------------------- 5. the removals
 cat > "$tmp/uses_ld64.mc" <<'EOF'
 i64 main() {

@@ -33,6 +33,11 @@
 // `mc pkg`. It lives here rather than in <mc/core_build> because raising a
 // minimum needs the index and MVS, which are this part's.
 void mc_pkg_init() {
+    // M52 D7: `mc build --sync`. The driver is <mc/core_build> and must not name
+    // this part, so the sync step arrives as a pointer, the way lex_set_libs and
+    // lex_set_bundle already do. A compiler without this part has a 0 there and
+    // refuses the flag.
+    drv_set_sync(&pkg_sync_for_build);
     subcommand("pkg", &pkg_cmd,
         "       mc pkg sync|add|list|vendor|verify [DIR] [--yes] [--registry URL|DIR] [--libs-dir DIR]\n       mc pkg hash DIR | check INDEX.toml [--yes]\n");
     subcommand("update", &update_cmd,
