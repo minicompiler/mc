@@ -200,7 +200,7 @@ A `[compiler]` product is a **second binary**, written into the project's own `b
 ([`reference/packages.md`](reference/packages.md) § 2) — the tree a release carries beside `mc`,
 and the one `make` lays beside `build/mc1` — are invisible to it. Before M52 step D that only
 showed up when the product was run **standalone**, outside the `mc build` that wrote it: the
-parent hands its own root over to the child it spawns, so `mc build DIR` worked and
+parent used to hand its own root over to the child it spawns, so `mc build DIR` worked and
 `build/mine --entry-only DIR` answered `lib/rt.tk:40: unknown bundled include: sys`.
 
 So `mc build` now **stages a library root of its own beside the product**:
@@ -222,6 +222,14 @@ There is **no flag**: it is the contract. Two consequences worth knowing:
   one tree write one tree;
 - when the running `mc` found no root at all there is nothing to stage — every library name is out
   of its own reach too — and the product inherits the same refusal.
+
+The staging happens **before** the child is spawned, and since M52 step E it is the whole of what
+the child is told: `mc build` forwards `--libs-dir` only when it was given one on its own command
+line, never one it derived. A derived one would name the directory holding `mc`'s library tree,
+and `<libs>` is also where the project's `[deps]` are installed — so the child would look for them
+there and answer `<pack> <ver> is not fetched` with them under `$HOME/.mc/libs` all along
+([`reference/packages.md`](reference/packages.md) § 2). Left alone, the child resolves the `mc`
+tree through the root staged beside it and the packages through the `<libs>` it inherits.
 
 Moving the product away from its `build/` directory loses the tree, exactly as copying `mc` out of
 a release tarball does ([`bootstrap.md`](bootstrap.md)); `mc install` is the answer in both cases.

@@ -1248,8 +1248,8 @@ uptr dp_root_beside(uptr self, uptr rel) {
 }
 
 // Roots 2 and 3 as a <libs> DIRECTORY -- the one that holds `mc/v<ver>/` --
-// or 0 when neither is there. Two readers: dp_mc_root below, and the driver,
-// which hands it to the taught compiler it spawns (deps_libs_for_child).
+// or 0 when neither is there. One reader, dp_mc_root below: a root derived
+// from this binary's own path is never handed to another process (step E).
 uptr dp_beside_libs() {
     uptr self = host_self_path();
     if (self == 0) return 0;
@@ -1281,26 +1281,19 @@ uptr dp_mc_root() {
     return dp_root_in(dp_beside_libs());
 }
 
-// M52 step B: the <libs> a spawned taught compiler must be told about, or 0.
+// M52 step E: there is no root a parent derives FOR a spawned taught compiler.
+// `deps_libs_for_child` used to hand the tree beside THIS binary over as the
+// child's --libs-dir when nothing was installed, and that broke every project
+// whose entry has [deps]: <libs> serves two roles -- the `mc` tree AND the
+// installed packages -- so the child then looked for `geo 1.2.0` under
+// <dir of mc>/lib/ and died with `geo 1.2.0 is not fetched`, measured on
+// tests/pkg/app with packages sitting in $HOME/.mc/libs all along.
 //
-// `mc build` with a [compiler] section writes that compiler into the project's
-// own build/ directory and spawns it there (drv_teach), so its host_self_path()
-// is NOT this binary's: roots 2 and 3 -- the library tree the release tarball
-// carries beside `mc` -- are invisible to it, and after the cut every library
-// name is in that tree. Root 1 needs no argument (the child inherits HOME) and
-// an explicit --libs-dir is forwarded already, so what is left is exactly the
-// tree beside THIS binary, and only when root 1 did not answer -- which keeps
-// the child's resolution order the same as the parent's (D4).
-//
-// Measured before it existed: `mc build examples/desktop --config ui.toml`
-// answered `main.ui:16: #include <sys>: not in this compiler and mc 0.0.0-dev's
-// library tree was not found: run mc install`, with the tree sitting beside
-// build/mc1 all along.
-uptr deps_libs_for_child() {
-    if (dp_libs_opt != 0) return 0;
-    if (dp_root_in(deps_libs_root()) != 0) return 0;
-    return dp_beside_libs();
-}
+// Since step D the child has a root 2 of its own, staged beside it by
+// drv_stage_libroot BEFORE the spawn, so it resolves the `mc` tree through its
+// own roots and the packages through the same <libs> the parent used (the
+// child inherits HOME). An explicit --libs-dir is still forwarded, because
+// that one is the user's answer for BOTH roles -- see drv_teach.
 
 void dp_mc_load() {
     uptr s = dp_state();

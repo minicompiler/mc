@@ -6593,6 +6593,100 @@ agents (`.claude/agents/`): `stage0-dev` (C23), `mc-dev` (`.mc` code), `reviewer
   § 2 (root 2 is now also `mc build` beside a taught compiler; the `--libs-dir` workaround
   paragraph rewritten), `docs/specs/M52.md` (§ 7 D12 with the three weighed shapes, and
   § Implementation notes -- step D, ten notes).
+- M52 step E done (`docs/specs/M52.md` § 11 row 4 + its § Implementation notes -- step E): **the
+  spawned taught compiler resolves its own roots, and `host_self_path()` resolves a symlink.** Two
+  defects the consumer's (teko's) dry run against `main` d18930d found, both reproduced here before
+  a line was written. `stage0/` untouched (2848/3000, `git diff d18930d -- stage0/` empty).
+  1. **`deps_libs_for_child` turned the `mc` tree into the WHOLE package root in the child.** Step B
+     added it for the road step D had not built yet: with no `--libs-dir` and nothing under
+     `$HOME/.mc/libs`, `drv_teach` handed the spawned compiler `--libs-dir <dir of mc>/lib`. But
+     `<libs>` names two things -- the `mc` library tree under `<libs>/mc/v<ver>/` AND the installed
+     packages under `<libs>/<pack>/v<ver>/`, which is what `dep_resolve` reads -- so a `[compiler]`
+     project whose ENTRY has `[deps]` died in the child. Reproduced on `tests/pkg/app` (a
+     `[compiler]` and three `[deps]`), packages installed under a scratch `HOME`, no `--libs-dir`:
+     `compiler build/mc-app.mc -> build/mc-app`, `compile main.mc -> build/app`, then **`mc: geo
+     1.2.0 is not fetched`, exit 1** -- the consumer's own `teko 0.11.0 is not fetched` with another
+     name. After the fix the same command is exit 0 and the program runs (`geo 120`, exit 42).
+     **Fixed at the root**: the parent forwards `--libs-dir` only when it was GIVEN one
+     (`dp_libs_opt`), never a derived one, and `deps_libs_for_child` is DELETED -- since step D the
+     child has a root 2 of its own and needs no derived answer. **The order was checked and not
+     assumed**: `drv_stage_libroot(drv_path(cbin))` is called in `drv_teach` before `drv_finish` and
+     before the `drv_spawn`, so the tree is beside the child when the child runs -- confirmed from
+     the other side too, since the failing repro had already staged
+     `tests/pkg/app/build/lib/mc/v0.0.0-dev/`. No case remains where the child would need a tree the
+     parent could not stage: `drv_stage_libroot` stages from the root the running `mc` resolved by
+     roots 1/2/3, and if it found none there is no library for either of them.
+  2. **`host_self_path()` answered the symlink's path on macOS.** `~/bin/mc -> …/build/mc1` is how a
+     developer puts one compiler on `PATH`, and `_NSGetExecutablePath` answers the path as invoked,
+     so roots 2 and 3 were computed from `~/bin/` and the tree beside the real binary was invisible:
+     `#include <sys>: not in this compiler and mc 0.0.0-dev's library tree was not found: run mc
+     install`, exit 1, measured; after the fix, exit 0. `src/host_macos.mc` passes the answer through
+     `realpath(3)` (libSystem, the buffer `xalloc`ed, so no global) and keeps the raw path when that
+     fails. **The other two hosts need nothing and that was read rather than assumed**:
+     `readlink("/proc/self/exe")` returns the target the kernel resolved and `GetModuleFileNameA`
+     answers the module's own path. `docs/reference/hooks.md` § 6 claimed the opposite in prose
+     ("the answer is not resolved any further") and is corrected with the code. One observable
+     consequence, and it is the fix working: `mc upgrade` with no `--to` prints the RESOLVED path on
+     its `into` line, so it replaces the compiler and not the link -- `check-pkg` § 33i asserted that
+     line with `$tmp` spelled out and `$TMPDIR` on macOS is `/var/folders/…`, a symlink to
+     `/private/var`, so the case now asserts the suffix and prints the whole line
+     (`into   /private/var/folders/…/u/self/mc`).
+  -- cost: **44 added / 35 removed lines in `src/`, code +4 / -7 -- net 3 code lines REMOVED**
+  (`deps.mc` +14/-21, `driver.mc` +12/-10, `host_macos.mc` +18/-4). **Zero new globals**
+  (`build/mc1 limits src/mc.mc` says `globals 446/512` before and after) and the seed's `MAXFUNCS`
+  headroom is unchanged: `lib/mc_i128.mc` is **2045 of 2048** on d18930d and on this branch
+  (`lowered` 2026 -> 2025, one function gone; `funcs` level, the `extern realpath` taking its slot),
+  so no `seed-skip` was needed and `check-asm` stays 178/178.
+  New gates: `scripts/check-pkg.sh` § 39 (**194/194**) -- `mc pkg sync --yes` with NO `--libs-dir`
+  and a scratch `HOME` writes `$HOME/.mc/libs`, then `mc build` on the `[compiler]` config with no
+  flag at all builds and the program runs (exit 42, `plot 110`), which proves both halves at once
+  since that entry also says `#include <sys>` and therefore needs the staged tree; then the same
+  config with an explicit `--libs-dir` still builds and runs, so the forwarded flag still wins.
+  `scripts/check-libroot.sh` case (h) (**11/11**): a symlink in a directory with no `lib/` of its own
+  compiles `#include <sys>` -- a REAL name, because `m52probe` exists only in the trees that script
+  lays and would say nothing about the tree beside `build/mc1`.
+  `make bundle` re-run BEFORE bootstrapping (60 files, raw 1242281 -> LZ 563098, blob 563872 B).
+  `make check` green end to end (**RC 0, zero FAIL**): `budget` 2848/3000, `test` 32/32,
+  `check-lex` 177/177 (5 skipped), `check-ast`/`check-asm` 178/178, `check-obj` **32/32 identical to
+  the frozen seed** (and 32/32 `arm64-surface` against `macho`), `check-bundle`, `bootstrap` at BOTH
+  fixed points (`mc2.o == mc3.o` 1442984 B, `mc2o.o == mc3o.o`) with the cross-road identity
+  (`build/mc2o src/mc.mc == build/mc2.o`) and **both `--dump-asm` diffs between `mc1` and `mc2`
+  empty** (plain and `--opt=1`), `check-surface` 32/32 + inert, `check-opt`, `test-exe` 32/32,
+  `check-mc`, `check-standalone`, `check-parts`, **`check-libroot` 11/11**, `check-toml`,
+  `check-build`, **`check-pkg` 194/194**, `check-tool` 27/27, `check-sysroots`, `check-stubs`,
+  `check-limits` **17/17 seed limits under 90%**, `check-minimal`, `test-linux`/`test-linux-x86_64`
+  and the four `--exe` cells, `test-windows`/`test-windows-x86_64`, `check-examples`, `check-lang`,
+  `check-conc`, `check-desktop`, `check-float`, `check-wide`, `check-kernel`, `check-avr`,
+  **`test-sandbox` 73 ok / 0 failed / 1 skipped**, `check-docs` (206 symbols, 50 flags, 35 TOML keys,
+  10 directives, 52 samples, 533 links), `site` + `check-site` + `check-site-linux`.
+  `make check-linux-host` **RC 0 over all four cells** (aarch64 and x86_64 x musl and gnu), each
+  after its own plain AND optimized fixed point (`mc2l.o == mc3l.o`, `mc2lo.o == mc3lo.o`), its own
+  cross-road identity (`mc2lo-plain.o == mc2l.o`) and the cross proof
+  (`mc2l --backend=macho src/mc.mc` byte for byte the macOS `build/mc2.o`) green in all four.
+  `scripts/check-inert.sh <mc1 from d18930d> build/mc1`: **33 objects identical on the plain road and
+  33 with `--opt=1`** (`tests/*.mc` and `src/mc.mc`) plus byte-identical artefacts for
+  `examples/api`, `lang`, `conc`, `desktop` and `kernel` through the taught compiler each side
+  builds -- what moved is which root the child reads, not a byte the compiler writes.
+  **The ten goldens rewritten once**, each only after its own criterion: `mc2.sha256`
+  `8543f340…5a8ab3` -> `7c5daea8e4f2c28ff42fa1c787a6c5dfbcd32ca5eaa3ed440793500c9f74e679` and
+  `mc2-opt.sha256` -> `3ea767f6c5d017d09bc7a8c1dfd5cc6d49386016cd930b96413213587b39f3d4` (both by
+  `scripts/bootstrap.sh`, after the two empty `--dump-asm` diffs and the two `cmp`s); the four Linux
+  ones deleted and re-recorded by `make check-linux-host` -- `mc2-linux-arm64`
+  `4e7dcc4fcd7be9239b989d7c68fdada8502f01779c3459c051a0372d90f9faae`, `mc2-linux-arm64-opt`
+  `21cbd65662893efbb1152c8a765838ae2784307ad857a3c3ccf3c4bc7c00080b`, `mc2-linux-x86_64`
+  `730c24adffb643aefe8fa3dab5670fdd2766c49974a3a465c133ed65a00a4c6a`, `mc2-linux-x86_64-opt`
+  `958ab1b421d74bc6c41e673795e9630ae17e7da6084c91e71dcd30a4a830ce04`; the four Windows ones
+  cross-computed on macOS per `tests/golden/README.md` -- `mc2-windows-arm64`
+  `33aec08cab4171de320246f90a95bce2c965f9160046caa1ef2abe0f8feed84b` (1477929 B),
+  `mc2-windows-arm64-opt` `5f365d5a304a4fdf3947695c60e2b4006c4a5d9fbeccb52464885ac73a44b3e1`
+  (1419245 B), `mc2-windows-x86_64`
+  `68efe037f8d08505a65550b4ec397d211d5e07c593c80c5ec731ed6f6d901f5d` (1533557 B),
+  `mc2-windows-x86_64-opt` `c858c9e6e1a95eca648d268a400f8bb80462eaf365f7a56083bd3f0f51236f76`
+  (1461541 B); `build/mc2` writes the two plain Windows objects byte for byte as `build/mc1` does.
+  Docs: `docs/reference/packages.md` § 2 (what each root serves in a child, and why `--libs-dir` is
+  forwarded only when explicit), `docs/build.md` § `[compiler]`, `docs/reference/hooks.md` § 6
+  (`host_self_path` resolves a symlink, and which host needs what),
+  `docs/specs/M52.md` (§ 11 row 4 LANDED + § Implementation notes -- step E).
 - Next: the **site + registry server, M47 S4-S6**, in
   `minicompiler/mc-registry`; then **M42 step 2** (PE `--exe`, CI-gated on the Windows runners).
   **M46** only on the owner's request; **M43 Layer 2** after 1.0.0. M13 and M18 stay in the backlog

@@ -109,11 +109,14 @@ somewhere else:
   written into the project's own `build/` directory, so the tree beside `mc` is not beside it.
   Since M52 step D it gets a **root 2 of its own**: `mc build` stages
   `<dir of [compiler].out>/lib/mc/v<version>/` — the same partial tree a release carries — beside
-  the binary it writes. So the product is self-sufficient on every road: spawned by `mc build`
-  (where the parent also passes its `<libs>` along), or run standalone with `--entry-only`, from a
-  `bootstrap.sh`, or by a user who was handed the binary, with no `--libs-dir` and no `$HOME`.
+  the binary it writes, before it spawns it. So the product is self-sufficient on every road:
+  spawned by `mc build`, or run standalone with `--entry-only`, from a `bootstrap.sh`, or by a
+  user who was handed the binary, with no `--libs-dir` and no `$HOME`.
   Moving it out of its `build/` directory loses the tree, exactly as copying `mc` out of a tarball
   does; `--libs-dir <prefix>/lib` and `mc install` are the two ways back.
+  The spawned child resolves all three roots **for itself**: the `mc` tree through the root staged
+  beside it, and the project's packages through the same `<libs>` the parent used, which it
+  reaches because it inherits `$HOME`.
 * **Inside `mc sandbox`** the compiler is a single file bound at `/mc` and the box has no `/proc`
   for it to read its own path from, so the box mounts the tree where `<libs>` looks instead
   ([sandbox.md](sandbox.md) § The tree).
@@ -121,6 +124,12 @@ somewhere else:
 `--libs-dir DIR` **replaces** `<libs>`, so a directory named that way is expected to be a whole
 one: packages under `DIR/<pack>/v<ver>/` *and* the compiler's own library tree under
 `DIR/mc/v<version>/`. `mc install --libs-dir DIR` writes the second.
+
+That is also why `mc build` forwards `--libs-dir` to the taught compiler it spawns **only when it
+was given one explicitly**, and never one it derived for itself (M52 step E). `<libs>` names two
+things at once — the `mc` tree and the installed packages — so a child told that `<libs>` is the
+directory holding `mc`'s own tree would look for the entry's `[deps]` there too, and answer
+`<pack> <ver> is not fetched` with them installed under `$HOME/.mc/libs` all along.
 
 ## 2b. When nothing answered
 

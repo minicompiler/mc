@@ -16,7 +16,7 @@
 # is the trick below, and it is what makes each case say which root answered
 # instead of asserting a name that would have worked anyway.
 #
-# Seven cases:
+# Eight cases:
 #   a  no root at all: the refusal names the road, exit 1 (D6, first row)
 #   b  root 2 serves the name: the program compiles and RUNS (exit 42)
 #   c  root 3 serves it too, with the binary in a bin/ beside a lib/
@@ -30,6 +30,8 @@
 #      staged beside it, and works STANDALONE -- the case the consumer measured
 #      (a [compiler] product is a second binary in the project's build/, so the
 #      parent's roots 2 and 3 are invisible to it). The staging is idempotent.
+#   h  M52 step E: the binary is reached through a SYMLINK, and the root is
+#      still the one beside the file the kernel loaded
 #
 # HOME is an empty directory for every compile: the single-file CLI has no
 # --libs-dir, so HOME is what picks root 1, and a developer who ran `mc install`
@@ -263,6 +265,29 @@ else
             fail "the staging is not idempotent" "$touched files rewritten"
         fi
     fi
+fi
+
+
+# ------------------------------------------------ h. the binary is a symlink
+# M52 step E: `~/bin/mc -> …/build/mc1` is how a developer puts one compiler on
+# PATH, and roots 2 and 3 are relative to the file the kernel LOADED, not to the
+# link. Measured before the fix: `#include <sys>: not in this compiler and
+# mc <ver>'s library tree was not found`, with the tree beside the real binary.
+# The link here deliberately sits in a directory with NO lib/ of its own, so a
+# success is the tree beside $mc and nothing else. The program says `<sys>`,
+# a name the blob does not carry since step B and the tree beside build/mc1
+# does -- `m52probe` would not do, it lives only in the trees this script lays.
+mkdir -p "$tmp/sym/bin"
+ln -s "$mc" "$tmp/sym/bin/mc"
+cat > "$tmp/p/sys.mc" <<'EOF'
+#include <sys>
+i64 main() { return 42; }
+EOF
+out=$(HOME="$tmp/home" "$tmp/sym/bin/mc" "$tmp/p/sys.mc" -o "$tmp/p/sys.o" 2>&1); rc=$?
+if [ "$rc" = 0 ]; then
+    ok "a symlinked binary resolves its root from the real path"
+else
+    fail "a symlinked binary" "exit $rc: $out"
 fi
 
 echo "check-libroot: $((total - fails))/$total"
