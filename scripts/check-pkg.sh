@@ -1768,10 +1768,15 @@ else
     before=$(ls -i "$tmp/u/self/mc" | awk '{print $1}')
     upgrade_run "$tmp/u/self/mc" 9.9.9 --yes --no-install --registry "$tmp/u/reg" --libs-dir "$tmp/u/l9"
     after=$(ls -i "$tmp/u/self/mc" | awk '{print $1}')
-    if [ "$rc" = 0 ] && grep -q "^into   $tmp/u/self/mc$" "$tmp/o" \
+    # M52 step E: the `into` line is host_self_path()'s answer, and on macOS that
+    # is the RESOLVED path -- $TMPDIR is /var/folders/..., a symlink to
+    # /private/var. So the prefix is not asserted; what is, is that the target is
+    # this file and not `.new` and not somewhere else.
+    into=$(grep '^into   ' "$tmp/o")
+    if [ "$rc" = 0 ] && printf '%s' "$into" | grep -q '/self/mc$' \
        && [ "$("$tmp/u/self/mc" --version)" = "mc 9.9.9" ] \
        && [ "$before" != "$after" ] && [ ! -f "$tmp/u/self/mc.new" ]; then
-        ok "mc upgrade replaces the running binary: inode $before -> $after, and it reports mc 9.9.9"
+        ok "mc upgrade replaces the running binary: $into, inode $before -> $after, mc 9.9.9"
     else
         fail "the self-replacement" "exit $rc: $(cat "$tmp/o")"
     fi
@@ -2293,6 +2298,63 @@ else
         fail "a taught compiler with --sync runs" "exit $arc, stdout '$out'"
     fi
 fi
+
+# (f) M52 step E: the same [compiler] shape with NO --libs-dir anywhere.
+#
+# This is the consumer's command. HOME is a scratch tree, `mc pkg sync --yes`
+# writes the packages under $HOME/.mc/libs, and `mc build` is then run with no
+# flag at all. Between step B and step D the parent handed the child a DERIVED
+# --libs-dir -- the `mc` library tree beside THIS binary -- and <libs> is where
+# the installed PACKAGES live too, so the child looked for plot and mathx under
+# <dir of mc>/lib/ and died with `plot 1.0.0 is not fetched` with them sitting
+# in $HOME/.mc/libs all along. Measured on tests/pkg/app before the fix.
+#
+# The entry says `#include <sys>`, so the same run proves the other half: the
+# child finds the `mc` tree through the root step D stages beside it, with
+# nothing installed under this HOME and no flag naming one.
+rm -f tests/pkg/sync/mc.lock
+rm -rf tests/pkg/sync/build "$tmp/h5"
+mkdir -p "$tmp/h5"
+PATH="$tmp/bin2:$realpath_env" HOME="$tmp/h5" "$mc" pkg sync tests/pkg/sync \
+    --registry "$reg" --yes > "$tmp/o" 2>&1
+rc=$?
+if [ "$rc" != 0 ]; then
+    fail "sync into \$HOME" "exit $rc: $(cat "$tmp/o")"
+elif [ ! -f "$tmp/h5/.mc/libs/plot/v1.0.0.toml" ]; then
+    fail "sync into \$HOME" "no plot manifest under \$HOME/.mc/libs: $(ls -R "$tmp/h5" | head)"
+else
+    ok "mc pkg sync --yes with no --libs-dir writes \$HOME/.mc/libs"
+fi
+HOME="$tmp/h5" "$cc" build tests/pkg/sync --config tests/pkg/sync/reg-teach.toml \
+    > "$tmp/o" 2>&1
+rc=$?
+if [ "$rc" != 0 ]; then
+    fail "a taught compiler with no --libs-dir" "exit $rc: $(cat "$tmp/o")"
+else
+    out=$(tests/pkg/sync/build/sync 2>/dev/null); arc=$?
+    if [ "$arc" = 42 ] && [ "$out" = "plot 110" ]; then
+        ok "with a [compiler] and NO --libs-dir: the child finds \$HOME's packages and the staged mc tree"
+    else
+        fail "a taught compiler with no --libs-dir runs" "exit $arc, stdout '$out'"
+    fi
+fi
+# and the explicit flag still wins for both roles: the same config, built out of
+# a <libs> that is neither $HOME's nor the one beside this binary
+rm -rf tests/pkg/sync/build
+HOME="$tmp/h5" "$cc" build tests/pkg/sync --config tests/pkg/sync/reg-teach.toml \
+    --libs-dir "$tmp/c4" > "$tmp/o" 2>&1
+rc=$?
+if [ "$rc" != 0 ]; then
+    fail "an explicit --libs-dir" "exit $rc: $(cat "$tmp/o")"
+else
+    tests/pkg/sync/build/sync > /dev/null 2>&1; arc=$?
+    if [ "$arc" = 42 ]; then
+        ok "an explicit --libs-dir is still forwarded to the child, and still wins"
+    else
+        fail "an explicit --libs-dir" "the program exited $arc"
+    fi
+fi
+
 rm -f tests/pkg/sync/reg.toml tests/pkg/sync/reg-teach.toml
 
 echo "check-pkg: $((total - fails))/$total"

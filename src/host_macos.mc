@@ -106,17 +106,31 @@ uptr host_home() {
 // it is whatever the caller passed, and after a PATH lookup it is a bare name.
 // Each host asks the system instead. `_NSGetExecutablePath` fills the buffer
 // and takes its size as a `uint32_t` in and out; a non-zero result means the
-// buffer was too small. The answer is what dyld used -- symlinks and `..` and
-// all -- and is deliberately not resolved further: replacing the file the
-// kernel loaded is exactly what an upgrade means. 0 when there is no answer.
+// buffer was too small. 0 when there is no answer.
+//
+// M52 step E: the answer is what dyld was GIVEN -- symlinks, `..` and all --
+// so `~/bin/mc -> …/build/mc1` made resolution roots 2 and 3
+// (docs/reference/packages.md § 2) relative to `~/bin/` and every library name
+// came back `mc 0.0.0-dev's library tree was not found`, measured. `realpath`
+// answers the file the kernel actually loaded, which is what the three readers
+// want: the tree beside the binary, and -- for `mc upgrade` -- the file to
+// replace, since writing over the symlink would delete the link and not the
+// compiler. The raw path stands when realpath fails (a deleted or unreadable
+// path is still better than no answer at all). The other two hosts need
+// nothing: `readlink /proc/self/exe` and `GetModuleFileNameA` are resolved.
 extern i64 _NSGetExecutablePath(uptr buf, uptr size);
+extern uptr realpath(uptr path, uptr resolved);
 
 uptr host_self_path() {
     uptr buf = xalloc(4097);
     u8 sz[8];
     st32(sz, 4096);
     if (_NSGetExecutablePath(buf, sz) != 0) return 0;
-    return buf;
+    // realpath writes at most PATH_MAX (1024 here) into a caller's buffer;
+    // 4097 is the same arena block every other path in this file asks for.
+    uptr real = xalloc(4097);
+    if (realpath(buf, real) == 0) return buf;
+    return real;
 }
 
 // M48 C3: the current working directory of the invocation, absolute, or 0. It

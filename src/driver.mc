@@ -720,11 +720,10 @@ void drv_entry(uptr entry, uptr out, uptr kind) {
 // A [compiler] product is a SECOND binary, written into the project's own
 // build/ directory, so its host_self_path() is not this one's and roots 2 and 3
 // -- the library tree a release carries beside `mc`, and the one `make` lays
-// beside build/mc1 -- are invisible to it. Spawning it works because the parent
-// hands the root over (deps_libs_for_child); running it STANDALONE did not, and
-// answered `lib/rt.tk:40: unknown bundled include: sys` on a product with a
-// blob, or the `library tree was not found` sentence on a <mc/core_min> one.
-// Both shapes were measured on this tree before the fix.
+// beside build/mc1 -- are invisible to it. Running it STANDALONE answered
+// `lib/rt.tk:40: unknown bundled include: sys` on a product with a blob, or
+// the `library tree was not found` sentence on a <mc/core_min> one. Both
+// shapes were measured on this tree before the fix.
 //
 // So the product gets a root 2 of its own: <dir of [compiler].out>/lib/mc/
 // v<version>/, staged from the root the RUNNING mc resolved for itself
@@ -837,12 +836,15 @@ i64 drv_teach(uptr cout, uptr dir, i64 compiler_only) {
     i64 n = 6;
     // M44: --libs-dir has to reach the child, which re-reads the same TOML and
     // the same lock and resolves the entry's dependencies for itself.
-    // M52 step B: with no --libs-dir and nothing installed, it is told about
-    // the library tree beside THIS binary instead -- the child is a different
-    // binary in the project's own build/ directory, so roots 2 and 3 cannot
-    // reach it (deps_libs_for_child says what each case answers and why).
+    //
+    // M52 step E: ONLY when it was given explicitly. A derived one was handed
+    // over between step B and step D, and it was a defect: <libs> is where the
+    // installed PACKAGES live as well as the `mc` tree, so a child told
+    // `--libs-dir <dir of mc>/lib` looked for the entry's [deps] there and
+    // answered `<name> <ver> is not fetched` with them installed in
+    // $HOME/.mc/libs all along. The child needs no derived root: step D staged
+    // one beside it, above, before this spawn.
     uptr libs = dp_libs_opt;
-    if (libs == 0) libs = deps_libs_for_child();
     if (libs != 0) {
         st64(av + n * 8, "--libs-dir");
         st64(av + n * 8 + 8, libs);
