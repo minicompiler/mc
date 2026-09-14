@@ -6031,6 +6031,80 @@ agents (`.claude/agents/`): `stage0-dev` (C23), `mc-dev` (`.mc` code), `reviewer
   § D, `docs/ci.md` § `bench-cell.yml` (what the gate step can fail and what it cannot),
   `docs/plan.md`'s M50 row marked done with the numbers, `docs/specs/M50.md` § 9 row 3 LANDED with
   the real line count + its § Implementation notes -- step C.
+- The registry index snapshot is refreshed when its answer could be stale (reported by the teko
+  consumer against mc 0.15.23 with a pure-mc reproducer; `docs/specs/M44.md` § Implementation
+  notes -- the stale index): **`pkg_index_file` fetched the snapshot once and read it for ever
+  after.** `stage0/` untouched (2848/3000). Reproduced before anything was written, on a compiler
+  built from `main`, over an `https://` registry a fixture `curl` serves: sync at `teko = "0.9.0"`
+  writes `<libs>/index/teko.toml`; the registry gains 0.10.0; `mc pkg sync --yes` at 0.10.0 is
+  **`mc: teko 0.10.0: no such version in the registry`, exit 1**, with the registry serving it --
+  and `rm ~/.mc/libs/index/teko.toml` the only way out.
+  * **The rule is "with `--yes` the snapshot is refreshed, not read".** `--yes` means "you may
+    download" and it is carried by exactly the roads that ask the registry a question whose answer
+    changes over time (`sync`, `add`, `mc update`, `mc install`, `mc upgrade`); at most one download
+    per package per invocation, because `pkg_index_load` memoises. Without `--yes` the snapshot is
+    read exactly as it is -- that offline read is what it exists for -- and **`mc build` is not
+    involved either way**: it reads `mc.lock` and never the index, which is what the § 5 promise
+    actually protects. Refresh-on-miss-and-retry was rejected as INSUFFICIENT, not merely bigger: a
+    stale snapshot answers `pkg_newest`/`pkg_lowest`/`pkg_highest` with a version that EXISTS, so
+    there is no miss to notice and `mc pkg add NAME` would silently choose the old one (asserted).
+  * **The second half is the negative answers such a snapshot must not give.**
+    `pkg_index_maybe_stale(name)` (a URL registry and no `--yes`) guards the three of them --
+    `pkg_expand`'s missing row, `pkg_pick`'s missing-or-nothing-to-choose-from, `pkg_reselect`'s
+    empty range -- and each plans the index fetch instead, landing in the existing `fetch  index
+    <name>` + `nothing was downloaded: re-run with --yes` at exit 0. `pkg_index_load` already
+    answered 0 under exactly that condition when there was no snapshot at all, which is why the two
+    cases merge into one branch at each site. **No message was added and none changed**;
+    `pkg_check_immutable` was left alone (it fetches into its own `<snapshot>.published` and must
+    read a 404 as "a new package", so it is a different read and not a duplicate).
+  -- cost: `src/pkg.mc` **+71/-20, 33 added lines that are neither comment nor blank**; zero new
+  globals (`build/mc1 limits src/mc.mc` reports `globals 446/512` before and after, and
+  `check-limits` is **17/17 under 90%**, its tightest row `globals 268/512 = 52%` on
+  `src/mc_seed.mc`). `scripts/check-pkg.sh` § 36, **177 -> 183/183**, offline like everything above
+  it: a THIRD bin directory whose `curl` serves `$WEBROOT` instead of exiting 97, so the transfer is
+  a file copy through exactly the argv `fetch_get` builds while the two refusing downloaders stay on
+  PATH for every other section. Six cases -- the first sync writing the snapshot, the reproducer
+  itself (a row published after it, found with nothing deleted by hand), a version that truly does
+  not exist still refused with the same message after one refresh, the no-`--yes` plan with the
+  snapshot left untouched, `mc pkg add` picking the newly published newest, and **`mc build` green
+  on a locked project under the REFUSING downloader**.
+  `make bundle` re-run BEFORE bootstrapping (`src/pkg.mc` is `mc/pkg`): 101 files, raw 1479468 ->
+  LZ 677117, blob 678368 B. `make check` green end to end (**RC 0, zero FAIL**), `check-obj`
+  **32/32 identical to the frozen seed**, both fixed points (`mc2.o == mc3.o`, `mc2o.o == mc3o.o`)
+  with the cross-road identity and **both `--dump-asm` diffs between `mc1` and `mc2` empty** (plain
+  and `--opt=1`), `test-sandbox` 73 ok / 0 failed / 1 skipped as its last gate.
+  `scripts/check-inert.sh <pre> build/mc1`: **33 objects identical on the plain road and 33 on
+  `--opt=1`** (`tests/*.mc` and `src/mc.mc`) plus byte-identical artefacts for `examples/api`,
+  `lang`, `conc`, `desktop` and `kernel` -- a package-manager fix emits no different byte.
+  **All ten goldens rewritten once**, each only after its own criterion -- the blob and `src/pkg.mc`
+  are what moved: `mc2.sha256`
+  `1b56148c4c1b11e57664072797e3dd8b7536b10b8e388653e0c80af1dacd5029`, `mc2-opt.sha256`
+  `adc33a341a1aa80c48d94aeb4fbc9ab4c2c4c09977c547265ca2a41a3ecb6e4c` (both recorded by
+  `make bootstrap` after the two empty `--dump-asm` diffs and the two `cmp`s); the four Linux ones
+  deleted and re-recorded by **`make check-linux-host` RC 0 over all four cells** (aarch64 and
+  x86_64 x musl and gnu), each after its own plain AND optimized fixed point, its own cross-road
+  identity and the cross proof (`mc2l --backend=macho src/mc.mc` byte for byte the macOS
+  `build/mc2.o`) -- `mc2-linux-arm64.sha256`
+  `2d22393da374ae2fb5252f429d919663e14f15c5d176021ef9fc0ea18a04616e`,
+  `mc2-linux-arm64-opt.sha256`
+  `91035e13960e9acb1a85e618bd793d2e7089622df6744c81f6f43c2dcefda0ea`,
+  `mc2-linux-x86_64.sha256`
+  `0a1b1305a460c7c6c662b2aab31b3eefa23a55adcc2ae8ab8c29a83eeb6ed2a1`,
+  `mc2-linux-x86_64-opt.sha256`
+  `2d73d574e2864ffa69b35e85fa68ac02b364d3e9ff678c42c94402c09fb243b5`; the four Windows ones
+  cross-computed on macOS
+  per `tests/golden/README.md` -- `mc2-windows-arm64.sha256`
+  `455e35b2eaecd1d017e2a4dfcb1c02e893f1192e4d126e023bfcb8fe5696469e` (1587307 B),
+  `mc2-windows-arm64-opt.sha256`
+  `ebdb305a2fd13691741059084c28f1aef24e9bad0d1f0b254bada1f08113974d` (1528975 B),
+  `mc2-windows-x86_64.sha256`
+  `1d3dc718d5cb805096a42bd50715f8d501cbe1fb4bb8a89bf91d9ab20228634a` (1642183 B),
+  `mc2-windows-x86_64-opt.sha256`
+  `b0da93d82b23507c80cd671320d5b63999b135957e9095d5a25f794ec6a12afa` (1570723 B), all four also
+  written byte for byte by `build/mc2`.
+  Docs: `docs/reference/packages.md` § 10 (§ "When the snapshot is refreshed"),
+  `docs/reference/cli.md` (the `--registry` row), `docs/reference/diagnostics.md` (the
+  `no such version in the registry` row now says when it is raised), `docs/specs/M44.md`.
 - Next: the **site + registry server, M47 S4-S6**, in
   `minicompiler/mc-registry`; then **M42 step 2** (PE `--exe`, CI-gated on the Windows runners).
   **M46** only on the owner's request; **M43 Layer 2** after 1.0.0. M13 and M18 stay in the backlog

@@ -287,8 +287,38 @@ uptr pkg_index_snapshot(uptr name) {
     return tm_cat(tm_cat(root, "/index/"), tm_cat(name, ".toml"));
 }
 
+// the plan line for the index of `name`: what a refresh would download.
+void pkg_plan_index(uptr name) {
+    pkg_plan(tm_cat("index ", name), pkg_index_url(name), 0, pkg_index_snapshot(name));
+}
+
+// 1 when the index this invocation can read may be OLDER than the registry: a
+// URL registry whose snapshot has to be taken as it is, because --yes was not
+// given and nothing may be downloaded. It is exactly the condition under which
+// pkg_index_load answers 0 when there is no snapshot at all, which is why the
+// two cases merge into one branch at each call site: a NEGATIVE answer out of
+// such an index is not an answer, so the caller plans the refresh instead of
+// refusing a version the registry may well have.
+i64 pkg_index_maybe_stale(uptr name) {
+    return fetch_is_url(pkg_index_url(name)) && !pk_yes();
+}
+
 // where the index file for `name` is on this disk, or 0 when it would have to
 // be downloaded first and --yes was not given (the plan records it).
+//
+// A snapshot is a CACHE of a file that GAINS ROWS over time, so with --yes it is
+// REFRESHED here and not merely read. The bug that closes: a version published
+// after the first query was invisible for ever after -- `mc pkg sync --yes`
+// answered `teko 0.10.0: no such version in the registry` with the registry
+// already serving it, and only `rm <libs>/index/teko.toml` was a way out.
+// --yes means "you may download", and it is carried by exactly the roads that
+// ask the registry a question whose answer changes over time (sync, update, add,
+// install, upgrade). At most one download per package per invocation, because
+// pkg_index_load remembers what it has read.
+//
+// Without --yes the snapshot is read exactly as it is: that offline read is what
+// it exists for (M44 § 5), and `mc build` is untouched either way -- it reads
+// mc.lock and never comes here.
 uptr pkg_index_file(uptr name) {
     uptr url = pkg_index_url(name);
     if (!fetch_is_url(url)) {
@@ -297,9 +327,9 @@ uptr pkg_index_file(uptr name) {
         return url;
     }
     uptr snap = pkg_index_snapshot(name);
-    if (lex_readable(snap)) return snap;
     if (!pk_yes()) {
-        pkg_plan(tm_cat("index ", name), url, 0, snap);
+        if (lex_readable(snap)) return snap;
+        pkg_plan_index(name);
         return 0;
     }
     drv_mkdirs(snap);
@@ -569,18 +599,24 @@ void pkg_reselect(i64 i) {
         // a range (possibly lo == 0 for a bare `*`)
         if (lo != 0 && hi != 0 && ver_cmp(lo, hi) >= 0)
             pkg_conflict(ld64(e + SL_NAME), lo, hi);
-        if (!pkg_index_load(ld64(e + SL_NAME))) {
-            // plan mode (URL registry, no snapshot, no --yes): a provisional so
-            // nothing dereferences 0; pkg_expand returns incomplete and the plan
-            // is printed without a concrete version being locked
-            uptr prov = lo;
-            if (prov == 0) prov = "0.0.0";
-            st64(e + SL_VER, prov);
-            return;
-        }
         i64 pre = lo != 0 && ver_is_pre(lo);
-        pick = pkg_lowest(ld64(e + SL_NAME), lo, hi, pre);
-        if (pick == 0) pkg_conflict(ld64(e + SL_NAME), lo, hi);
+        if (pkg_index_load(ld64(e + SL_NAME)))
+            pick = pkg_lowest(ld64(e + SL_NAME), lo, hi, pre);
+        if (pick == 0) {
+            // Either there is no index on this disk yet, or the snapshot this
+            // invocation may not refresh holds nothing satisfying the range --
+            // and a snapshot older than the registry cannot say "nothing
+            // satisfies". A provisional so nothing dereferences 0: pkg_expand
+            // then plans the index and answers incomplete, and the plan is
+            // printed without a concrete version being locked.
+            if (pkg_index_maybe_stale(ld64(e + SL_NAME))) {
+                uptr prov = lo;
+                if (prov == 0) prov = "0.0.0";
+                st64(e + SL_VER, prov);
+                return;
+            }
+            pkg_conflict(ld64(e + SL_NAME), lo, hi);
+        }
     }
     if (ld64(e + SL_VER) == 0 || ver_cmp(pick, ld64(e + SL_VER)) != 0) {
         st64(e + SL_VER, pick);
@@ -671,8 +707,12 @@ i64 pkg_expand(i64 i) {
     uptr ver = ld64(e + SL_VER);
     if (!pkg_index_load(name)) return 0;
     i64 r = pkg_row(name, ver);
-    if (r < 0)
+    if (r < 0) {
+        // a snapshot this invocation may not refresh could simply be older than
+        // the registry: plan the refresh instead of refusing a published version
+        if (pkg_index_maybe_stale(name)) { pkg_plan_index(name); return 0; }
         pkg_die1(tm_cat(tm_cat(name, " "), ver), "no such version in the registry");
+    }
     uptr row = pk_vr(r);
     i64 nd = ld64(row + VR_DEPN);
     i64 j = 0;
@@ -1651,20 +1691,31 @@ uptr pkg_at_ver(uptr s) {
 
 // the version `add`/`update` picks for a name: the one that was asked for, or
 // the newest that is not yanked (within `major`, or any major when it is -1)
+// what this command answers when the index it needs is not on the disk yet: the
+// plan, and no version chosen. Also the answer when the snapshot it DID read is
+// one this invocation may not refresh and does not hold what was asked for.
+void pkg_plan_stop() {
+    pkg_print_plan();
+    out_str(1, "nothing was downloaded: re-run with --yes\n");
+    _exit(0);
+}
+
 uptr pkg_pick(uptr name, uptr want, i64 major, i64 pre) {
-    if (!pkg_index_load(name)) {
-        pkg_print_plan();
-        out_str(1, "nothing was downloaded: re-run with --yes\n");
-        _exit(0);
-    }
+    if (!pkg_index_load(name)) pkg_plan_stop();
     if (want != 0) {
         i64 r = pkg_row(name, want);
-        if (r < 0) pkg_die1(tm_cat(tm_cat(name, " "), want), "no such version in the registry");
+        if (r < 0) {
+            if (pkg_index_maybe_stale(name)) { pkg_plan_index(name); pkg_plan_stop(); }
+            pkg_die1(tm_cat(tm_cat(name, " "), want), "no such version in the registry");
+        }
         if (ld64(pk_vr(r) + VR_YANK))
             pkg_die1(tm_cat(tm_cat(name, " "), want), "is yanked: pick another version");
         return want;                      // asked for by name: a candidate is fine
     }
     uptr v = pkg_newest(name, major, pre);
+    // Nothing to choose from is also an answer a snapshot older than the
+    // registry can give wrongly, so it goes through the same plan.
+    if (v == 0 && pkg_index_maybe_stale(name)) { pkg_plan_index(name); pkg_plan_stop(); }
     // A registry that has published nothing but candidates is not an error in
     // the registry: it is a choice the reader has to make, so say which one.
     if (v == 0 && !pre && pkg_newest(name, major, 1) != 0)

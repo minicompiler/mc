@@ -1965,5 +1965,158 @@ else
     echo "skip package.mc refusal: no baked 9.9.9 compiler for this target"
 fi
 
+# ---- 36. the snapshot of a URL registry is refreshed when it could be stale ----
+# The one road every section above avoids: an `https://` registry, which is the
+# only shape that HAS a snapshot (a DIR registry is read in place). Still no
+# network -- a third bin directory holds a `curl` that SERVES $tmp/web instead of
+# refusing, so the transfer is a file copy through exactly the argv fetch_get
+# builds, and the two refusing downloaders stay on PATH for everything else.
+#
+# The defect, reported with this exact shape: the snapshot was fetched once and
+# read for ever after, so a version published later was invisible and
+# `mc pkg sync --yes` answered `no such version in the registry` with the
+# registry already serving it. Only `rm <libs>/index/<name>.toml` was a way out.
+cd "$here" || exit 1
+mkdir -p "$tmp/bin3" "$tmp/web/index" "$tmp/stale/l" "$tmp/stale/proj"
+cp "$tmp/bin2/wget" "$tmp/bin3/wget"          # the fallback still refuses
+cat > "$tmp/bin3/curl" <<'EOF'
+#!/bin/sh
+# the fixture's web server: https://<host>/<path> -> $WEBROOT/<path>, nothing else
+out=""; url=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+    -o)       out="$2"; shift 2 ;;
+    https://*) url="$1"; shift ;;
+    *)        shift ;;
+    esac
+done
+p=$(printf '%s' "$url" | sed 's|^https://[^/]*||')
+[ -f "$WEBROOT$p" ] || exit 22                # curl -f on a 404
+cp "$WEBROOT$p" "$out"
+EOF
+chmod +x "$tmp/bin3/curl"
+WEBROOT="$tmp/web"
+export WEBROOT
+wpkg() {    # wpkg ARGS... -- mc pkg against the served registry
+    PATH="$tmp/bin3:$realpath_env" "$mc" pkg "$@" \
+        --registry https://example.invalid --libs-dir "$tmp/stale/l" > "$tmp/o" 2>&1; rc=$?
+}
+webrow() {  # webrow VERSION SRCDIR  -- append one row to $tmp/web/index/mathx.toml
+    { echo
+      echo '[[versions]]'
+      echo "version = \"$1\""
+      echo "url     = \"$tmp/archives/mathx-$1.tar.gz\""
+      echo "strip   = 1"
+      echo "sha256  = \"$(sh scripts/pkg-hash.sh "$2")\""
+      echo 'deps    = []'
+    } >> "$tmp/web/index/mathx.toml"
+}
+webindex() {                          # webindex [1.1.0]
+    { echo '[package]'; echo 'name = "mathx"'; } > "$tmp/web/index/mathx.toml"
+    webrow 1.0.0 tests/pkg/src/mathx-1.0.0
+    [ -z "$1" ] || webrow 1.1.0 tests/pkg/src/mathx-1.1.0
+}
+printf 'i64 main() { return mathx_sq(6) + 6; }\n' > "$tmp/stale/proj/app.mc"
+sproj() {                             # sproj VERSION
+    printf '[project]\nname = "stale"\nentry = "app.mc"\nout = "build/stale"\nkind = "exe"\n\n[registry]\nurl = "https://example.invalid"\n\n[deps]\nmathx = "%s"\n' \
+        "$1" > "$tmp/stale/proj/mc.toml"
+}
+printf '#include <mathx>\n' > "$tmp/stale/proj/pre.mc"
+cat "$tmp/stale/proj/pre.mc" "$tmp/stale/proj/app.mc" > "$tmp/o.app" \
+    && mv "$tmp/o.app" "$tmp/stale/proj/app.mc"
+
+# 36a. the first sync writes the snapshot, over a URL registry, offline
+webindex
+sproj 1.0.0
+wpkg sync "$tmp/stale/proj" --yes
+if [ "$rc" = 0 ] && [ -f "$tmp/stale/l/index/mathx.toml" ] \
+   && [ "$(grep -c '^version' "$tmp/stale/l/index/mathx.toml")" = 1 ]; then
+    ok "an https registry: the first sync --yes writes the snapshot (1 row)"
+else
+    fail "the https snapshot" "exit $rc: $(cat "$tmp/o")"
+fi
+
+# 36b. THE BUG: the registry gains 1.1.0 and the next sync must see it, with
+# nothing deleted by hand
+webindex 1.1.0
+sproj 1.1.0
+rm -f "$tmp/stale/proj/mc.lock"
+wpkg sync "$tmp/stale/proj" --yes
+if [ "$rc" = 0 ] && grep -q '^fetch  mathx 1.1.0' "$tmp/o" \
+   && [ "$(grep -c '^version' "$tmp/stale/l/index/mathx.toml")" = 2 ]; then
+    ok "a version published after the snapshot is found: sync --yes refreshes it"
+else
+    fail "the stale snapshot" "exit $rc: $(cat "$tmp/o")"
+fi
+
+# 36c. and a version that really does not exist is still refused, with the same
+# message, after that one refresh
+sproj 9.9.9
+rm -f "$tmp/stale/proj/mc.lock"
+wpkg sync "$tmp/stale/proj" --yes
+if [ "$rc" = 1 ] && grep -q '^mc: mathx 9.9.9: no such version in the registry$' "$tmp/o"; then
+    ok "a version the registry does not have: $(head -1 "$tmp/o")"
+else
+    fail "the refusal after a refresh" "exit $rc: $(cat "$tmp/o")"
+fi
+
+# 36d. without --yes nothing may be downloaded, so a snapshot that predates the
+# row answers with the PLAN and not with a wrong refusal
+rm -rf "$tmp/stale/l"
+mkdir -p "$tmp/stale/l"
+webindex
+sproj 1.0.0
+rm -f "$tmp/stale/proj/mc.lock"
+wpkg sync "$tmp/stale/proj" --yes > /dev/null 2>&1
+webindex 1.1.0
+sproj 1.1.0
+rm -f "$tmp/stale/proj/mc.lock"
+wpkg sync "$tmp/stale/proj"
+if [ "$rc" = 0 ] && grep -q '^fetch  index mathx$' "$tmp/o" \
+   && grep -q 'nothing was downloaded: re-run with --yes' "$tmp/o" \
+   && [ "$(grep -c '^version' "$tmp/stale/l/index/mathx.toml")" = 1 ]; then
+    ok "no --yes: the plan names the index and the snapshot is left alone"
+else
+    fail "the plan for a stale snapshot" "exit $rc: $(cat "$tmp/o")"
+fi
+
+# 36e. `mc pkg add NAME` asks "the newest", which a stale snapshot answers
+# wrongly with no lookup MISS to notice -- so that road refreshes too
+rm -rf "$tmp/stale/l"
+mkdir -p "$tmp/stale/l"
+webindex
+sproj 1.0.0
+rm -f "$tmp/stale/proj/mc.lock"
+wpkg sync "$tmp/stale/proj" --yes > /dev/null 2>&1
+webindex 1.1.0
+printf '[project]\nname = "stale"\nentry = "app.mc"\nout = "build/stale"\nkind = "exe"\n\n[registry]\nurl = "https://example.invalid"\n' \
+    > "$tmp/stale/proj/mc.toml"
+rm -f "$tmp/stale/proj/mc.lock"
+wpkg add mathx "$tmp/stale/proj" --yes
+if [ "$rc" = 0 ] && grep -q '^add .*mathx 1.1.0' "$tmp/o"; then
+    ok "mc pkg add over a stale snapshot picks the newest published: 1.1.0"
+else
+    fail "mc pkg add over a stale snapshot" "exit $rc: $(cat "$tmp/o")"
+fi
+
+# 36f. and `mc build` is untouched by all of it: it reads the LOCK, so the
+# refusing shim is what it runs under and the entry still builds and runs
+sproj 1.1.0
+rm -f "$tmp/stale/proj/mc.lock"
+wpkg sync "$tmp/stale/proj" --yes > /dev/null 2>&1
+PATH="$tmp/bin:$realpath_env" "$mc" build "$tmp/stale/proj" --libs-dir "$tmp/stale/l" \
+    > "$tmp/o" 2>&1; rc=$?
+if [ "$rc" = 0 ]; then
+    "$tmp/stale/proj/build/stale"; arc=$?
+    if [ "$arc" = 42 ]; then
+        ok "mc build reads the lock: green under the refusing downloader (exit 42)"
+    else
+        fail "the locked build's entry" "exit $arc"
+    fi
+else
+    fail "mc build under the refusing downloader" "exit $rc: $(cat "$tmp/o")"
+fi
+unset WEBROOT
+
 echo "check-pkg: $((total - fails))/$total"
 [ "$fails" -eq 0 ]
