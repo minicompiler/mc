@@ -17,6 +17,8 @@ openat
 pread64
 prlimit64
 read
+readlink
+readlinkat
 rseq
 rt_sigprocmask
 set_robust_list

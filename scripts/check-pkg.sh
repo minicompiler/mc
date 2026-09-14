@@ -45,8 +45,20 @@ mc=$(cd "$(dirname "$mc")" && pwd)/$(basename "$mc")
 tmp="${TMPDIR:-/tmp}/check-pkg.$$"
 case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) tmp=$(cygpath -m "$tmp") ;; esac
 rm -rf "$tmp"
-mkdir -p "$tmp/libs" "$tmp/libs2" "$tmp/empty" "$tmp/bin" "$tmp/bin2" "$tmp/out" \
+mkdir -p "$tmp/libs" "$tmp/libs2" "$tmp/empty" "$tmp/none" "$tmp/bin" "$tmp/bin2" "$tmp/out" \
          "$tmp/archives" "$tmp/stage" "$tmp/registry/index" "$tmp/c1" "$tmp/c2" "$tmp/chk"
+
+# M52 step B: `--libs-dir DIR` REPLACES `<libs>`, and since the cut a library
+# name -- `#include <sys>`, which tests/pkg/app, app-float and sync all use --
+# lives in the `mc` package's own tree at `<libs>/mc/v<ver>/`, which is what
+# `mc install --libs-dir DIR` writes. These fixtures are hand-laid, so that
+# tree is laid with them: it is what makes each of them a COMPLETE `<libs>` and
+# not just a directory of packages. `$tmp/empty` is empty of PACKAGES and keeps
+# the tree; `$tmp/none` has neither, and is the one § 15 asks for.
+mcver=$(sed -n 's/^uptr mc_version() { return "\(.*\)"; }$/\1/p' src/version.mc | head -1)
+for d in "$tmp/libs" "$tmp/libs2" "$tmp/empty" "$tmp/c1" "$tmp/c2" "$tmp/chk"; do
+    sh scripts/libroot.sh --libs "$d" "$mcver" > /dev/null
+done
 cleanup() {
     rm -rf "$tmp"
     rm -rf "$here/tests/pkg/app/build" "$here/tests/pkg/app/deps" \
@@ -142,6 +154,7 @@ check_hash tests/pkg/app-bad/mc.lock   bad   tests/pkg/src/bad-1.0.0
 
 # ---- helpers ----
 cc="$mc"                              # which compiler `build` drives
+mcver=$(sed -n 's/^uptr mc_version() { return "\(.*\)"; }$/\1/p' src/version.mc | head -1)
 build() {                             # build DIR CONFIG LIBSDIR -> $tmp/o, $rc
     rm -rf "$1/build"
     if [ -n "$2" ]; then
@@ -400,8 +413,11 @@ if "$mc" --exe src/mc_slim.mc -o "$probe" > "$tmp/o" 2>&1; then
             fail "installed mc package" "the object differs from src/mc.mc's"
         fi
     fi
-    # the same probe with no installed package says so, with the bundle's words
-    build tests/pkg/std "" "$tmp/empty"
+    # the same probe with no installed package says so, with the bundle's words.
+    # $tmp/none and not $tmp/empty: since M52 step B every other fixture <libs>
+    # carries the mc package's library tree, and a probe that found one would
+    # get `unknown bundled include` instead -- the middle state of D6.
+    build tests/pkg/std "" "$tmp/none"
     want_exit "the probe with no installed package" 1 \
         && want_msg "the probe with no installed package" \
                     "#include <mc/host>: not bundled in this compiler and mc .* is not installed: run mc install"
@@ -527,8 +543,11 @@ elif ! grep -q "nothing was downloaded: re-run with --yes" "$tmp/o"; then
     fail "sync plan" "no 'nothing was downloaded' line: $(cat "$tmp/o")"
 elif [ "$(grep -c '^fetch  ' "$tmp/o")" != 2 ]; then
     fail "sync plan" "expected 2 fetch rows, got: $(grep -c '^fetch  ' "$tmp/o")"
-elif [ -n "$(ls -A "$tmp/c1" 2> /dev/null)" ]; then
-    fail "sync plan" "$tmp/c1 is not empty"
+elif [ -n "$(ls -A "$tmp/c1" 2> /dev/null | grep -v '^mc$')" ]; then
+    # no PACKAGE was fetched. `mc` is not one: since M52 step B every fixture
+    # <libs> carries the compiler's own library tree, laid by hand at the top of
+    # this script and never downloaded.
+    fail "sync plan" "$tmp/c1 holds more than the mc library tree"
 elif [ -f tests/pkg/sync/mc.lock ]; then
     fail "sync plan" "a lock was written without --yes"
 else
@@ -2117,6 +2136,57 @@ else
     fail "mc build under the refusing downloader" "exit $rc: $(cat "$tmp/o")"
 fi
 unset WEBROOT
+
+# ---- 37. M52 step B: a LIBRARY comes from the library tree ----
+# Until the cut, `<sys>` was in the blob and no root was ever reached for it;
+# scripts/check-libroot.sh had to invent a row (`m52probe`) to prove the road
+# existed at all. Now the road is the only one there is for a library, so the
+# three states of D6 are measured on a real name, with a real program that runs.
+#
+#   root 2  <dir of the binary>/lib/mc/v<ver>/
+#   root 3  <dir of the binary>/../lib/mc/v<ver>/
+#   neither -> the refusal names `mc install`
+#
+# HOME is an empty directory throughout, so root 1 never answers and a developer
+# who ran `mc install` on this machine cannot change what this measures.
+mkdir -p "$tmp/r2" "$tmp/r3/bin" "$tmp/r0" "$tmp/rhome"
+printf '#include <sys>\ni64 main() { puts("lib\\n"); return 42; }\n' > "$tmp/r0/prog.mc"
+for c in "$tmp/r2/mc" "$tmp/r3/bin/mc" "$tmp/r0/mc"; do
+    cp "$mc" "$c"
+    chmod +x "$c"
+done
+sh scripts/libroot.sh "$tmp/r2" "$mcver" > /dev/null
+sh scripts/libroot.sh "$tmp/r3" "$mcver" > /dev/null
+
+run_prog() {                          # run_prog COMPILER -> $rc, $out
+    rm -f "$tmp/r0/prog.o" "$tmp/r0/prog"
+    out=$(HOME="$tmp/rhome" "$1" "$tmp/r0/prog.mc" -o "$tmp/r0/prog.o" 2>&1); rc=$?
+    if [ "$rc" = 0 ] && out=$(sh scripts/link.sh "$tmp/r0/prog" "$tmp/r0/prog.o" 2>&1); then
+        out=$("$tmp/r0/prog"); rc=$?
+    fi
+}
+
+run_prog "$tmp/r2/mc"
+if [ "$rc" = 42 ] && [ "$out" = "lib" ]; then
+    ok "root 2 serves <sys>: the program runs, exit 42"
+else
+    fail "root 2 serves <sys>" "exit $rc, stdout '$out'"
+fi
+
+run_prog "$tmp/r3/bin/mc"
+if [ "$rc" = 42 ] && [ "$out" = "lib" ]; then
+    ok "root 3 serves <sys>: bin/mc finds ../lib/mc/v$mcver/"
+else
+    fail "root 3 serves <sys>" "exit $rc, stdout '$out'"
+fi
+
+run_prog "$tmp/r0/mc"
+want="#include <sys>: not in this compiler and mc $mcver's library tree was not found: run mc install"
+if [ "$rc" != 0 ] && printf '%s' "$out" | grep -qF "$want"; then
+    ok "with neither root: $(printf '%s' "$out" | sed 's|^.*prog.mc:1: ||')"
+else
+    fail "the refusal with neither root" "exit $rc: $out"
+fi
 
 echo "check-pkg: $((total - fails))/$total"
 [ "$fails" -eq 0 ]

@@ -291,6 +291,7 @@ In order, all inside I's private mount namespace, the first mount being `MS_PRIV
 | `/bin/<basename>` | each `--bin PROG`, as `host_which()` found it on the host's `PATH` | bind of a *file* onto an empty file, read-only. `PATH=/bin` in the box |
 | `/lib`, `/lib64`, `/usr/lib` | the host's, when they exist | bind + remount read-only, so an M42 dynamic binary finds its loader and its libc |
 | `/etc/ld.so.cache` | the host's, when it exists | bind of a *file* onto an empty file, read-only. The **only** thing of `/etc` that is there |
+| `/src/.mc/libs/mc/v<version>/` | the `mc` package's library tree, as the HOST resolved it before the unshare | bind + remount read-only, on the overlay's upper layer. Absent when the host has no tree, and on the fallback road below |
 | everything else | — | does not exist: no `/proc`, no `/dev`, no `/tmp`, no `/home`, and nothing else of `/etc` |
 
 **Why the cache is in the box**, since it was not in the design and it is one host file more than
@@ -304,6 +305,19 @@ opened, and on x86-64 *every* dynamic program died with `refused: syscall 262 (n
 the loader probed `/lib/x86_64-linux-gnu/glibc-hwcaps/x86-64-v4/`. The cache is world-readable, it
 is a list of library names, and it comes in read-only and granted read-only by Landlock;
 `/etc/shadow` is still absent, and still refused by name.
+
+**Why the library tree is in the box, and why at that path** (M52): since the standard library
+left the blob, `#include <sys>` is answered by the `mc` package's tree and not by the binary
+([bundle.md](bundle.md) § The catalogue), so a compile inside the box needs it. A compiler looks in
+`<libs>` and beside its own binary, and the second road cannot work here — `/mc` is a single bound
+file and there is no `/proc` for the compiler to read its own path out of. So the box mounts the
+tree where `<libs>` looks: the box's `HOME` is `/src`, hence `/src/.mc/libs/mc/v<version>/`. It is
+read-only, it is granted read-only by Landlock (a mount of its own, so the `/src` rule does not
+reach it), and it lives on the overlay's upper layer, so the host's source tree is untouched by
+construction. The host path is resolved BEFORE the unshare, in the same order § 2 of
+[packages.md](packages.md) gives: beside the binary, one directory up, then `$HOME/.mc/libs`.
+A box with no tree refuses a library name with the sentence that names `mc install`, which is the
+truth about that box.
 
 Then `pivot_root(".", ".old")` from inside the new root, `umount2("/.old", MNT_DETACH)`,
 `sethostname("sandbox")` and `chdir` to `/src` or to `--cwd`. The environment is `HOME=/src`,
@@ -637,6 +651,22 @@ net    accept accept4 bind connect getpeername getsockname getsockopt listen
        recvfrom recvmsg sendmsg sendto setsockopt shutdown socket            15
 spawn  clone clone3 getuid pipe2 read wait4                                   6
 ```
+
+**`readlinkat` is in every compile profile** (M52): a compile that has to resolve a library name
+asks the system where the compiler's own binary is (`host_self_path()`, `/proc/self/exe`), and
+outside the box — which is where the profiles are measured — that is the road it takes. Inside the
+box it never needs it: the tree is mounted where `<libs>` looks (§ The tree), and `<libs>` is
+tried first. Keeping the call in the profile is what makes the *absence* of a tree report the
+sentence that names `mc install` instead of `refused: syscall 78 (readlinkat)`.
+Measured with `--union` on Ubuntu 26.04 (aarch64, glibc 2.43) and Alpine 3 (aarch64, musl), where
+both C libraries answer `readlinkat` — and then on the `linux/x86_64` sandbox CI cell, which
+answered `readlink`, a *different* system call: **AArch64 has no `readlink` at all**, so both C
+libraries there issue `readlinkat`, while on x86-64 the number exists (89) and glibc 2.39 uses it.
+Both x86-64 compile lists therefore carry both rows and the AArch64 pair carry `readlinkat` alone,
+which is what each host's own trace records; `SN_READLINK` is `SN_ABSENT` on AArch64, so the filter
+builder drops it there. That measurement is the one no host reachable from the development Mac
+could make (`strace` decodes nothing under its amd64 emulation), and it came back as
+`src/sysno.mc has no index for: SN_READLINK`.
 
 `clone` and `clone3` are in the spawn list because the trace saw them and are written into the
 table as a **comment**: no profile allows a call that makes a process (§ The explain channel).

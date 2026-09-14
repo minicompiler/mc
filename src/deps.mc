@@ -1247,13 +1247,10 @@ uptr dp_root_beside(uptr self, uptr rel) {
     return tm_cat(path_join(self, rel), "/");
 }
 
-uptr dp_mc_root() {
-    uptr ver = mc_version();
-    uptr libs = deps_libs_root();
-    if (libs != 0) {
-        uptr d = dp_root_at(tm_cat(tm_cat(tm_cat(libs, "/mc/v"), ver), "/"));
-        if (d != 0) return d;
-    }
+// Roots 2 and 3 as a <libs> DIRECTORY -- the one that holds `mc/v<ver>/` --
+// or 0 when neither is there. Two readers: dp_mc_root below, and the driver,
+// which hands it to the taught compiler it spawns (deps_libs_for_child).
+uptr dp_beside_libs() {
     uptr self = host_self_path();
     if (self == 0) return 0;
     // A path with no directory at all would make path_join answer a RELATIVE
@@ -1267,10 +1264,42 @@ uptr dp_mc_root() {
         i = i + 1;
     }
     if (!slash) return 0;
-    uptr rel = tm_cat("lib/mc/v", ver);
-    uptr d = dp_root_at(dp_root_beside(self, rel));
+    uptr rel = tm_cat("lib/mc/v", mc_version());
+    if (dp_root_at(dp_root_beside(self, rel)) != 0) return path_join(self, "lib");
+    if (dp_root_at(dp_root_beside(self, tm_cat("../", rel))) != 0) return path_join(self, "../lib");
+    return 0;
+}
+
+uptr dp_root_in(uptr libs) {
+    if (libs == 0) return 0;
+    return dp_root_at(tm_cat(tm_cat(tm_cat(libs, "/mc/v"), mc_version()), "/"));
+}
+
+uptr dp_mc_root() {
+    uptr d = dp_root_in(deps_libs_root());
     if (d != 0) return d;
-    return dp_root_at(dp_root_beside(self, tm_cat("../", rel)));
+    return dp_root_in(dp_beside_libs());
+}
+
+// M52 step B: the <libs> a spawned taught compiler must be told about, or 0.
+//
+// `mc build` with a [compiler] section writes that compiler into the project's
+// own build/ directory and spawns it there (drv_teach), so its host_self_path()
+// is NOT this binary's: roots 2 and 3 -- the library tree the release tarball
+// carries beside `mc` -- are invisible to it, and after the cut every library
+// name is in that tree. Root 1 needs no argument (the child inherits HOME) and
+// an explicit --libs-dir is forwarded already, so what is left is exactly the
+// tree beside THIS binary, and only when root 1 did not answer -- which keeps
+// the child's resolution order the same as the parent's (D4).
+//
+// Measured before it existed: `mc build examples/desktop --config ui.toml`
+// answered `main.ui:16: #include <sys>: not in this compiler and mc 0.0.0-dev's
+// library tree was not found: run mc install`, with the tree sitting beside
+// build/mc1 all along.
+uptr deps_libs_for_child() {
+    if (dp_libs_opt != 0) return 0;
+    if (dp_root_in(deps_libs_root()) != 0) return 0;
+    return dp_beside_libs();
 }
 
 void dp_mc_load() {

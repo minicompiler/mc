@@ -13,15 +13,27 @@
 # through in src/deps.mc (dp_mc_open) exactly as an unknown name does, so a
 # full binary answers every `mc/*` name from its own blob and never reads here.
 #
+# With --libs the same tree is laid at `DEST/mc/v<VERSION>/` instead, which is
+# resolution root 1 -- what `mc install --libs-dir DEST` writes. A fixture that
+# overrides `<libs>` and then expects a library name needs it: --libs-dir
+# REPLACES `<libs>`, so a `<libs>` with no `mc/v<ver>/` in it has no library
+# tree, and a taught compiler spawned into a project's own build/ has no other
+# road to one (src/deps.mc, deps_libs_for_child).
+#
 # VERSION defaults to the one this tree bakes into the compiler, `mc_version()`
 # in src/version.mc -- `0.0.0-dev` in a checkout. Run from the repository root:
 # tools/bundle.list and the lib/ files are read relative to the working
 # directory.
 set -e
 
+mid="/lib"
+if [ "$1" = "--libs" ]; then
+    mid=""
+    shift
+fi
 dest="$1"
 if [ -z "$dest" ]; then
-    echo "usage: libroot.sh DEST [VERSION]" >&2
+    echo "usage: libroot.sh [--libs] DEST [VERSION]" >&2
     exit 1
 fi
 ver="$2"
@@ -31,15 +43,22 @@ if [ -z "$ver" ]; then
     exit 1
 fi
 
-root="$dest/lib/mc/v$ver"
+root="$dest$mid/mc/v$ver"
 rm -rf "$root"
 mkdir -p "$root"
 cp tools/bundle.list "$root/bundle.list"
 
+# Every row the blob does NOT carry, at the path the manifest names. Since M52
+# step B that is `bl_in_blob` in tools/bundle.mc read the other way round: the
+# blob keeps src/* plus prelude and user_default, and everything else lives
+# here. The two exceptions are staged as well, because they are lib/ paths and
+# a duplicate is free -- the blob answers first and this copy is never read.
 n=0
 while IFS='	' read -r name path; do
     case "$path" in
-    lib/*)
+    '' | \#*) ;;
+    src/*) ;;
+    *)
         mkdir -p "$root/${path%/*}"
         cp "$path" "$root/$path"
         n=$((n + 1))

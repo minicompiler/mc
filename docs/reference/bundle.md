@@ -1,8 +1,15 @@
 # `#include <name>`, the library inside the binary
 
-`mc` carries its standard library **and its own source** inside the executable, compressed, and
-serves them through the angle-bracket form of `#include`. That is what makes one downloaded
-binary the whole toolchain: no checkout, no include path, no install step.
+`mc` carries **its own source** inside the executable, compressed, and its standard library in a
+tree beside it — `lib/mc/v<version>/`, what a release tarball unpacks next to the binary. Both are
+served through the angle-bracket form of `#include`, and a program cannot tell which of the two
+answered: no checkout, no include path, no install step.
+
+Since M52 the blob holds **60 of the manifest's 101 rows** — every `src/` path, plus `prelude` and
+`user_default`, which are the compiler's own `#include`s. The other 41 — the libraries, the
+teaching fixtures, the two `#embed` test payloads — travel in the tree
+([§ The catalogue](#the-catalogue) says which is which). The rule is the owner's: *a row stays
+inside the binary iff the compiler itself is built from it.*
 
 ```mc
 // expect-exit: 0
@@ -19,13 +26,22 @@ i64 main() {
 }
 ```
 
-`<name>` is served by the bundle **or it is an error** — there is no fallback to the working
+`<name>` is served by the bundle, by the library tree, or by a package this project locked — **or
+it is an error** — there is no fallback to the working
 directory, on purpose: `<name>` means "a library that is not in my tree", and the answer must be a
 function of *(this binary, this project's lock, the installed packages)* and of nothing else.
 
 ```
 $ mc prog.mc -o prog.o
 prog.mc:1: unknown bundled include: no/such/module
+```
+
+A name the blob does not carry and no root answers reports the road instead, because the answer is
+provisioning and not spelling:
+
+```
+$ mc prog.mc -o prog.o
+prog.mc:1: #include <sys>: not in this compiler and mc 0.16.0's library tree was not found: run mc install
 ```
 
 `#include "path"` is unchanged: the includer's own directory first, then each `[include].paths`
@@ -44,7 +60,34 @@ byte for byte what it was. See [packages.md](packages.md) § 2.
 
 The manifest is `tools/bundle.list`, one `NAME<TAB>PATH` per line, sorted by name: 101 entries,
 plus `mc/bundle_data`, which is regenerated on demand (see below). Those are the names `<...>`
-accepts.
+accepts. **The manifest keeps every row whichever side of the cut it is on** — it is also the
+`NAME<TAB>PATH` map an installed tree and the tree beside the binary are read through, so a row
+that left the blob has to stay in it or the library is reachable by neither road.
+
+Which side a row is on, and it is the path that decides:
+
+| | rows | where it lives | who puts it there |
+|---|---|---|---|
+| **in the blob** | **60** | inside the executable, LZ-compressed | `make bundle`, from every `src/` path plus `prelude` and `user_default` |
+| **in the library tree** | **41** | `lib/mc/v<version>/` beside the binary, or `<libs>/mc/v<version>/` | the release tarball and `make` (`scripts/libroot.sh`), or `mc install` |
+
+Measured on macOS arm64, the same compiler with the 41 rows in the blob and out of it —
+`__text` and `__cstring` do **not** move, because a bundle row is data:
+
+| | binary | `__text` | `__cstring` | `__DATA,__data` | blob |
+|---|---|---|---|---|---|
+| all 101 rows in the blob | 1 400 552 | 540 924 | 31 111 | 692 576 | 678 368 |
+| 60 rows, 41 in the tree | **1 268 454** | 540 924 | 31 111 | 567 952 | 556 168 |
+
+**−132 098 B, −9.4% of the binary and −18.0% of `__DATA,__data`.** The 41 rows are 256 KB of
+source on disk; the whole tree is what a `-slim` tarball has always needed and now carries.
+
+So in the tables that follow, **everything under `lib/` except `<prelude>` and `<user_default>`,
+plus the two `tests/mc/bundle/` payloads, comes from the tree** — the system layers, `<io>`,
+`<float>` and its machines, `<i128>`, `<u128>`, `<f16>`, and every demonstration — while every
+`<mc/...>` name, `<lz>`, `<prelude>` and `<user_default>` are inside the binary. Nothing about the
+spelling changed, and no source in this repository or outside it had to move: `#include <float>` is
+`#include <float>` before and after.
 
 ### The system layer — pick exactly one
 
@@ -222,8 +265,9 @@ Known limits of `<i128>`/`<u128>`, all deliberate at M24:
 
 ### The demonstrations
 
-Everything `make check-surface` wires up is bundled too, so the demos can be reproduced from a
-downloaded binary with no checkout:
+Everything `make check-surface` wires up is in the manifest too, so the demos can be reproduced
+from a downloaded tarball with no checkout — out of the library tree beside the binary, since
+M52 (§ The catalogue):
 
 | name | file |
 |---|---|

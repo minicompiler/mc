@@ -113,7 +113,11 @@ echo "changed by --opt=1:$diff_asm"
 # allocated exactly as in any other, and a float one never reaches a v5 task.
 # macOS only, for the reason check-float.sh gives: this is where the taught
 # compiler can be built AND run.
+# M52 step B: the library tree travels beside the binary, so a taught compiler
+# built into a scratch directory needs one there -- `tests/float/*.mc` all say
+# `#include <sys>`, and since the cut that name is not in the blob.
 if [ "$(uname -s)" = "Darwin" ] && [ -f lib/mc_float.mc ]; then
+    sh scripts/libroot.sh "$d" > /dev/null
     if "$mc" --exe lib/mc_float.mc -o "$d/mc-float" > "$d/e" 2>&1; then
         for f in tests/float/*.mc; do
             [ -f "$f" ] || continue
@@ -152,6 +156,13 @@ fi
 taught_run() {                        # dir, output, run|build, then config args
     dir="$1"; out="$2"; how="$3"; shift 3
     total=$((total + 1))
+    # M52 step B: this is the TWO-STEP road (--compiler-only, then the taught
+    # compiler itself with --entry-only), so nothing forwards the library tree
+    # for us -- the taught compiler sits in the project's own build/ directory
+    # and examples/desktop/main.ui says `#include <sys>`. Naming <libs> is what
+    # a user's own script does for the same reason (docs/build.md § M52).
+    libs=""
+    [ -d build/lib ] && libs="--libs-dir $(pwd)/build/lib"
     cc=$("$mc" build "$dir" --compiler-only "$@" 2> "$d/e" | tail -1) || {
         echo "FAIL taught $dir (compiler)"; sed -n 1,3p "$d/e"
         fails=$((fails + 1)); return 0; }
@@ -160,7 +171,7 @@ taught_run() {                        # dir, output, run|build, then config args
         [ "$road" = opt ] && flag="--opt=1"
         rm -f "$dir/$out"
         # shellcheck disable=SC2086
-        "$cc" build "$dir" --entry-only $flag "$@" > /dev/null 2> "$d/e" || {
+        "$cc" build "$dir" --entry-only $flag $libs "$@" > /dev/null 2> "$d/e" || {
             echo "FAIL taught $dir ($road, entry)"; sed -n 1,3p "$d/e"
             fails=$((fails + 1)); return 0; }
         cp "$dir/$out" "$d/t-$road"

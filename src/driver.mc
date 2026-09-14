@@ -750,9 +750,15 @@ i64 drv_teach(uptr cout, uptr dir, i64 compiler_only) {
     i64 n = 6;
     // M44: --libs-dir has to reach the child, which re-reads the same TOML and
     // the same lock and resolves the entry's dependencies for itself.
-    if (dp_libs_opt != 0) {
+    // M52 step B: with no --libs-dir and nothing installed, it is told about
+    // the library tree beside THIS binary instead -- the child is a different
+    // binary in the project's own build/ directory, so roots 2 and 3 cannot
+    // reach it (deps_libs_for_child says what each case answers and why).
+    uptr libs = dp_libs_opt;
+    if (libs == 0) libs = deps_libs_for_child();
+    if (libs != 0) {
         st64(av + n * 8, "--libs-dir");
-        st64(av + n * 8 + 8, dp_libs_opt);
+        st64(av + n * 8 + 8, libs);
         n = n + 2;
     }
     // M49: a `--opt` written on the command line has to reach the child, which

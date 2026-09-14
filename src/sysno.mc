@@ -165,7 +165,18 @@
 // sandbox's own notification channel is three of them).
 #define SN_WRITEV                   94
 
-#define SN_COUNT                    95
+// M52 step B: `readlink`, which is NOT `readlinkat`. A compile that has to
+// resolve a library name asks the system where the compiler's own binary is
+// (host_self_path(), /proc/self/exe), and which call that is depends on the
+// architecture: AArch64 has no `readlink` syscall at all and both C libraries
+// issue `readlinkat`, while on x86-64 the number exists and glibc uses it.
+// Measured on the sandbox CI cell -- the trace of `mc` on ubuntu/x86_64
+// (glibc 2.39, kernel 6.17) records `readlink`, and no host reachable from the
+// development Mac could have said so (strace decodes nothing under its amd64
+// emulation). SN_ABSENT on AArch64, 89 on x86-64.
+#define SN_READLINK                 95
+
+#define SN_COUNT                    96
 
 // ---- the second column: the NAME of each index ----
 // `refused: syscall 198 (socket)` needs a name for a number, and the number is
@@ -192,5 +203,5 @@ uptr sn_names[] = {
     "readv", "fork", "vfork",
     "listen", "accept", "accept4", "sendto", "recvfrom", "sendmsg", "recvmsg",
     "setsockopt", "getsockopt", "getsockname", "getpeername", "shutdown",
-    "socketpair", "writev"
+    "socketpair", "writev", "readlink"
 };

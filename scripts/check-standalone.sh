@@ -7,7 +7,7 @@
 # `#include <name>` only — no path into this repository, no lib/, no src/:
 #
 #   1. a program that uses <sys> and <prelude> (which in turn pulls <io> in by
-#      its own relative #include, resolved by name inside the bundle);
+#      its own relative #include, resolved by name);
 #   2. a taught compiler built from <mc/core> + <user_syntax_demo>, with --exe;
 #   3. that compiler compiling <syntax_demo_test>, which uses `unless`, `enum`
 #      and `bool` — and the copied `mc` refusing the same source, because the
@@ -21,8 +21,17 @@
 #      the road -- this compiler has no library tree beside it and none
 #      installed, which is exactly what "alone" means.
 #
-# The only files copied in are the compiler and that reference object; the
-# reference is test data, not an input to any compilation.
+# The only files copied in are the compiler, that reference object and the
+# LIBRARY TREE the release tarball carries beside the binary (scripts/libroot.sh,
+# M52 step B): since the cut the blob holds the compiler's own source and the
+# libraries travel next to it, so `<sys>` and `<user_syntax_demo>` come from
+# `lib/mc/v<ver>/` here exactly as they come out of an unpacked tarball. The
+# reference object is test data, not an input to any compilation, and no path
+# into this repository is ever named.
+#
+# Case 5 therefore needs a compiler with NO tree anywhere near it, which is
+# what `alone/bin/mc` is: two levels down, so neither root 2 (its own directory)
+# nor root 3 (one above) finds the tree in $tmp.
 mc_exe="${1:-build/mc-exe}"
 ref="${2:-build/mc2.o}"
 
@@ -44,6 +53,16 @@ trap 'rm -rf "$tmp"' EXIT INT TERM
 cp "$mc_exe" "$tmp/mc"
 cp "$ref" "$tmp/ref.o"
 chmod +x "$tmp/mc"
+
+ver=$(sed -n 's/^uptr mc_version() { return "\(.*\)"; }$/\1/p' src/version.mc | head -1)
+if [ -z "$ver" ]; then
+    echo "FAIL: cannot read the version out of src/version.mc"
+    exit 1
+fi
+sh scripts/libroot.sh "$tmp" "$ver" > /dev/null
+mkdir -p "$tmp/alone/bin"
+cp "$mc_exe" "$tmp/alone/bin/mc"
+chmod +x "$tmp/alone/bin/mc"
 
 cat > "$tmp/hello.mc" <<'EOF'
 #include <sys>
@@ -130,14 +149,14 @@ else
     echo "ok <mc/host> + <mc/core> + <user_default> == src/mc.mc, byte for byte"
 fi
 
-# 5. a name that is not in the bundle. M52 D6: this compiler is alone -- no
-# library tree beside it and (HOME is empty here, on purpose, so the answer does
-# not depend on whoever ran `mc install` on this machine) none installed -- so
-# the message names the road instead of saying only that the name is unknown.
-# `unknown bundled include: <name>` is what a compiler WITH a tree says for the
-# same source, and scripts/check-libroot.sh asserts that half.
-ver=$(sed -n 's/^uptr mc_version() { return "\(.*\)"; }$/\1/p' "$here/src/version.mc" | head -1)
-msg=$(HOME="$tmp/nohome" ./mc bad.mc -o bad.o 2>&1)
+# 5. a name that is not in the bundle, asked of the copy that is really alone:
+# no library tree beside it or above it, and (HOME is empty here, on purpose, so
+# the answer does not depend on whoever ran `mc install` on this machine) none
+# installed -- so M52's D6 message names the road instead of saying only that
+# the name is unknown. `unknown bundled include: <name>` is what a compiler WITH
+# a tree says for the same source, and scripts/check-libroot.sh and
+# scripts/check-bundle.sh assert that half.
+msg=$(HOME="$tmp/nohome" ./alone/bin/mc bad.mc -o bad.o 2>&1)
 if [ $? -eq 0 ]; then
     step_fail "an unknown bundled include was accepted"
 elif ! printf '%s' "$msg" | grep -qF "#include <no/such/module>: not in this compiler and mc $ver's library tree was not found: run mc install"; then

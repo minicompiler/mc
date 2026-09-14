@@ -11,6 +11,7 @@ mprotect
 openat
 pipe2
 read
+readlinkat
 rt_sigprocmask
 set_tid_address
 unlinkat

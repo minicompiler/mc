@@ -153,7 +153,8 @@ u16 sysno_tab[] = {
      52,        // SN_GETPEERNAME
      48,        // SN_SHUTDOWN
      53,        // SN_SOCKETPAIR
-     20         // SN_WRITEV
+     20,        // SN_WRITEV
+     89         // SN_READLINK
 };
 
 // the number of SN_*, or -1 when this architecture has no such call

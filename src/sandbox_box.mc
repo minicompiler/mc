@@ -165,6 +165,30 @@ void sb_bind_ldcache() {
     if (rc < 0) sb_die_box(SBE_LIB, rc);
 }
 
+// M52 step B: the library tree, at the one place `<libs>` looks.
+//
+// `#include <sys>` is not in the blob any more (docs/specs/M52.md § 2), so a
+// compile inside the box needs the `mc` package's tree. The two roads a compiler
+// has are `<libs>` and "beside my own binary", and the second one cannot work
+// here: /mc is a single bound FILE and the box has no /proc for the compiler to
+// read its own path out of. So the box brings the tree in and mounts it where
+// `<libs>` looks -- HOME is /src (sb_env_build), hence /src/.mc/libs/mc/v<ver>/,
+// read-only like every other input, on the overlay's upper layer so the host's
+// source tree is untouched by construction.
+//
+// The host path was resolved before the unshare (sb_lib_host, src/sandbox.mc).
+// On the fallback road /src is a read-only bind, so there is nowhere to make the
+// mount point: sb_lib is cleared, and the compile then refuses the name with the
+// message that names `mc install` -- which is the truth about that box.
+void sb_bind_mclib(i64 ro_src) {
+    if (sb_lib() == 0) return;
+    if (ro_src) { set_sb_lib(0); return; }
+    uptr at = sb_lib_box();
+    sb_mkdir_p(at);
+    i64 rc = sb_bind_ro(sb_lib(), sb_bp(at + 1));
+    if (rc < 0) sb_die_box(SBE_LIB, rc);
+}
+
 // Every component of an absolute box path, as a directory on the box tmpfs.
 // `--rw /home/me/proj` needs /home and /home/me to exist before /home/me/proj
 // can be a mount point, and each one of them is a fresh empty directory on the
@@ -278,7 +302,7 @@ void sb_build_tree() {
     sb_mkdir_or_die(sb_bp(".old"));
 
     sb_bind_compiler();
-    sb_mount_src();
+    sb_bind_mclib(sb_mount_src());
     sb_bind_ro_dirs();
     sb_bind_libs();
     sb_bind_ldcache();

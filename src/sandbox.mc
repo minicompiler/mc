@@ -309,7 +309,8 @@
 #define SB_BIN     14216    // SB_MAXBIN * 8: the host paths host_which() found
 #define SB_NENV    14280    // how many --env
 #define SB_ENVN    14288    // SB_MAXENV * 8: the variable NAMES, as given
-#define SB_SIZE    14352
+#define SB_LIB     14352    // M52: the host's library tree, or 0
+#define SB_SIZE    14360
 
 #define SB_MAXPROF 128
 
@@ -1038,6 +1039,40 @@ i64 sb_parse(i64 argc, uptr argv, i64 i) {
 
 // The box path of the i-th --ro: `/roN` by default, its own absolute path with
 // --at-path. ONE function, read by the mount, by Landlock and by sb_path_ok.
+// ---- M52 step B: the library tree, inside the box ----
+// Since the cut a `#include <sys>` is not answered by the blob: it comes from
+// the `mc` package's tree, and a compiler finds that tree in `<libs>` or beside
+// its own binary (docs/reference/packages.md § 2). Inside the box neither road
+// works on its own -- the compiler is a single FILE bound at /mc and there is no
+// /proc for it to read its own path from -- so the box brings the tree in and
+// puts it where `<libs>` looks: HOME is /src (sb_env_build), so that is
+// /src/.mc/libs/mc/v<ver>/, mounted read-only like every other input.
+//
+// The host path is resolved BEFORE the unshare, in sb_go, in dp_mc_root's own
+// order and without naming one of its functions: src/sandbox.mc is
+// <mc/core_sandbox>, which scripts/check-parts.sh builds on <mc/core_min>
+// alone, and src/deps.mc is <mc/core_build>'s.
+uptr sb_lib()          { return ld64(sb_rec() + SB_LIB); }
+void set_sb_lib(uptr v) { st64(sb_rec() + SB_LIB, v); }
+
+uptr sb_lib_box() { return tm_cat("/src/.mc/libs/mc/v", mc_version()); }
+
+uptr sb_lib_try(uptr dir) {
+    if (!lex_readable(tm_cat(dir, "/bundle.list"))) return 0;
+    return dir;
+}
+
+uptr sb_lib_host() {
+    uptr rel = tm_cat("lib/mc/v", mc_version());
+    uptr d = sb_lib_try(path_join(sb_self(), rel));
+    if (d != 0) return d;
+    d = sb_lib_try(path_join(sb_self(), tm_cat("../", rel)));
+    if (d != 0) return d;
+    uptr home = host_home();
+    if (home == 0) return 0;
+    return sb_lib_try(tm_cat(tm_cat(home, "/.mc/libs/mc/v"), mc_version()));
+}
+
 uptr sb_box_ro_at(i64 i) {
     if (sb_atpath()) return sb_ro_at(i);
     return tm_cat("/ro", tm_num_str(i));
@@ -1706,6 +1741,7 @@ i64 sb_go() {
     if (n <= 0) { sb_err("cannot resolve /proc/self/exe"); return SB_EXIT_SETUP; }
     st8(sb_path() + n, 0);
     set_sb_self(xstrdup(sb_path(), n));
+    set_sb_lib(sb_lib_host());          // M52: before the mount namespace goes
 
     // stdin: the named file, or a pipe whose write end is already closed --
     // which is EOF, the documented default, and not a /dev/null the box has no

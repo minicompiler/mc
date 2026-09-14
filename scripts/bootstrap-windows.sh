@@ -331,6 +331,15 @@ if ! diff build/mc1w.asm build/mc2w.asm > build/mc-windows.asmdiff; then
 fi
 echo "  ok: identical"
 
+# M52 step B: a cross-compile below reads `#include <sys>` out of the library
+# tree beside the compiler (docs/reference/packages.md § 2), and build/mc2w.exe
+# is the compiler. A Windows runner starts from a `build/` that holds the linked
+# object and nothing else, so the tree is laid here; the chain above needs
+# nothing of it (src/mc_windows.mc has relative includes).
+if [ -f scripts/libroot.sh ] && [ -f tools/bundle.list ]; then
+    sh scripts/libroot.sh build
+fi
+
 echo ""
 echo "=== scripts/test-windows.sh --arch $larch --run-only $objdir ==="
 # The objects normally arrive in the CI artifact, already cross-compiled on

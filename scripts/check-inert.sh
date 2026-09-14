@@ -86,13 +86,21 @@ fi
 # own output did not.
 taught() {                                # dir, output, then extra config args
     dir="$1"; out="$2"; shift 2
+    # M52 step B: the two-step road (--compiler-only, then the taught compiler
+    # with --entry-only) forwards nothing, and a library name -- examples/desktop
+    # says `#include <sys>` -- now lives in the tree beside the binary, which the
+    # taught compiler in the project's own build/ has no way to reach. Naming
+    # <libs> is what a user's own script does (docs/build.md § M52).
+    libs=""
+    [ -d build/lib ] && libs="--libs-dir $(pwd)/build/lib"
     for side in pre post; do
         eval c="\$$side"
         cc=$("$c" build "$dir" --compiler-only "$@" 2> "$d/e" | tail -1) || {
             echo "FAIL taught $dir ($side, compiler)"; sed -n 1,3p "$d/e"
             fails=$((fails + 1)); return 0; }
         rm -f "$dir/$out"
-        "$cc" build "$dir" --entry-only "$@" > /dev/null 2> "$d/e" || {
+        # shellcheck disable=SC2086
+        "$cc" build "$dir" --entry-only $libs "$@" > /dev/null 2> "$d/e" || {
             echo "FAIL taught $dir ($side, entry)"; sed -n 1,3p "$d/e"
             fails=$((fails + 1)); return 0; }
         cp "$dir/$out" "$d/o-$side"
