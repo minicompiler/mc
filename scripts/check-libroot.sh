@@ -16,7 +16,7 @@
 # is the trick below, and it is what makes each case say which root answered
 # instead of asserting a name that would have worked anyway.
 #
-# Six cases:
+# Seven cases:
 #   a  no root at all: the refusal names the road, exit 1 (D6, first row)
 #   b  root 2 serves the name: the program compiles and RUNS (exit 42)
 #   c  root 3 serves it too, with the binary in a bin/ beside a lib/
@@ -26,6 +26,10 @@
 #   f  docs/bootstrap.md's claim: untar a scripts/release-assets.sh archive and
 #      the tree that came out of it is a working root -- no --libs-dir, no
 #      $HOME tree, no network
+#   g  M52 step D: a taught compiler `mc build` wrote gets a root of its own,
+#      staged beside it, and works STANDALONE -- the case the consumer measured
+#      (a [compiler] product is a second binary in the project's build/, so the
+#      parent's roots 2 and 3 are invisible to it). The staging is idempotent.
 #
 # HOME is an empty directory for every compile: the single-file CLI has no
 # --libs-dir, so HOME is what picks root 1, and a developer who ran `mc install`
@@ -171,6 +175,93 @@ else
         ok "untar and compile: the unpacked tree is a working root, no \$HOME and no network"
     else
         fail "the unpacked tarball as a root" "exit $rc: $out"
+    fi
+fi
+
+# ---------------------------------------- g. the taught compiler's own tree
+# The shape the consumer reported on 2026-09-13: `[compiler].core =
+# "<mc/core_min>"`, so the product has NO blob and `<sys>` can only come from
+# resolution road 3. It worked when `mc build` spawned it (the parent hands its
+# own root over, deps_libs_for_child) and failed when run standalone --
+# `unknown bundled include: sys`, measured on this tree before the fix.
+#
+# The module is what examples/avr/mc-avr.mc is, minus the AVR: the parts a
+# host compiler needs, and <mc/core_build> because road 3 arrives with it
+# (lex_set_libs is mc_build_init's line; without that part the product cannot
+# read a tree at all, which is measured too -- it is why this module names it).
+mkdir -p "$tmp/teach"
+cat > "$tmp/teach/mod.mc" <<'EOF'
+#include <mc/core_machines>
+#include <mc/core_writers>
+#include <mc/core_build>
+i64 main(i64 argc, uptr argv, uptr envp) {
+    host_init(envp);
+    mc_machines_init();
+    mc_writers_init();
+    mc_build_init();
+    return mc_main(argc, argv, envp);
+}
+void user_init() { }
+EOF
+cat > "$tmp/teach/mc.toml" <<'EOF'
+[project]
+name  = "taught"
+entry = "prog.mc"
+out   = "build/prog.o"
+kind  = "obj"
+
+[compiler]
+core    = "<mc/core_min>"
+modules = ["mod.mc"]
+out     = "build/taught"
+EOF
+cat > "$tmp/teach/prog.mc" <<'EOF'
+#include <sys>
+i64 main() { return 42; }
+EOF
+out=$(HOME="$tmp/home" "$mc" build "$tmp/teach" --compiler-only 2>&1); rc=$?
+if [ "$rc" != 0 ]; then
+    fail "mc build --compiler-only" "exit $rc: $out"
+else
+    staged=0
+    if [ -f "$tmp/teach/build/lib/mc/v$ver/bundle.list" ]; then
+        staged=1
+        n=$(find "$tmp/teach/build/lib/mc/v$ver" -type f | wc -l | tr -d ' ')
+        ok "the product carries lib/mc/v$ver/ beside it ($n files)"
+    else
+        fail "the staged tree" "no $tmp/teach/build/lib/mc/v$ver/bundle.list"
+    fi
+    # standalone: not `mc build`, no --libs-dir, an empty HOME. The product has
+    # no blob, so a success here is road 3 through the staged tree and nothing
+    # else -- with the tree moved away the same command is `not bundled in this
+    # compiler and mc <ver> is not installed`.
+    rm -f "$tmp/teach/build/prog.o" "$tmp/teach/build/prog"
+    out=$(HOME="$tmp/home" "$tmp/teach/build/taught" "$tmp/teach/prog.mc" \
+              -o "$tmp/teach/build/prog.o" 2>&1); rc=$?
+    if [ "$rc" = 0 ]; then
+        out=$(sh scripts/link.sh "$tmp/teach/build/prog" "$tmp/teach/build/prog.o" 2>&1); rc=$?
+        if [ "$rc" = 0 ]; then "$tmp/teach/build/prog"; rc=$?; fi
+    fi
+    if [ "$rc" = 42 ]; then
+        ok "the product run STANDALONE compiles #include <sys>, exit 42"
+    else
+        fail "the product standalone" "exit $rc: $out"
+    fi
+    # idempotent: a second build rewrites nothing. `find -newer` is the test --
+    # the bytes are identical by construction, so what has to be proved is that
+    # no file was WRITTEN, and a marker laid between the two builds says it.
+    if [ "$staged" = 0 ]; then
+        fail "the staging is idempotent" "nothing was staged to compare"
+    else
+        sleep 1
+        touch "$tmp/marker"
+        HOME="$tmp/home" "$mc" build "$tmp/teach" --compiler-only > /dev/null 2>&1
+        touched=$(find "$tmp/teach/build/lib" -type f -newer "$tmp/marker" | wc -l | tr -d ' ')
+        if [ "$touched" = 0 ]; then
+            ok "a second build restages nothing: 0 of $n files rewritten"
+        else
+            fail "the staging is not idempotent" "$touched files rewritten"
+        fi
     fi
 fi
 

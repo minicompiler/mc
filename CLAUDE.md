@@ -6493,6 +6493,106 @@ agents (`.claude/agents/`): `stage0-dev` (C23), `mc-dev` (`.mc` code), `reviewer
   `docs/build.md` § M14/M44, `docs/guide/25-packages.md` § 6, `docs/specs/M52.md` (§ 11 row 3
   LANDED + § Implementation notes -- step C, nine notes) and `docs/plan.md`'s M52 row marked done
   with the measured numbers.
+- M52 step D done (`docs/specs/M52.md` § 7 D12 + § Implementation notes -- step D): **`mc build`
+  stages the library tree beside the taught compiler it writes**, so a `[compiler]` product is as
+  self-sufficient as an unpacked release tarball. `stage0/` untouched (2848/3000). The gap was the
+  consumer's (teko's) dry run against `main` 62f0cdd/21d081b and it is real: a `[compiler]` product
+  is a SECOND binary in the project's own `build/`, so roots 2 and 3 -- the tree a release carries
+  beside `mc`, and the one `make` lays beside `build/mc1` -- are relative to IT and invisible.
+  Spawned by `mc build` it works (the parent hands its root over, `deps_libs_for_child`); run
+  STANDALONE it did not -- `build/teko --entry-only ...`, teko's own `bootstrap.sh` and
+  `check-docs.sh`, **3 of 64 fixtures**, `lib/rt.tk:40: unknown bundled include: sys`; with
+  `--libs-dir` or a copied tree, 64/64 and FIXPOINT OK.
+  **Reproduced here in both shapes before a line was written**, with `build/mc1` of 21d081b and an
+  empty `$HOME`: `examples/avr`'s product (`core = "<mc/core_min>"`, no blob) answers
+  `#include <sys>: not bundled in this compiler and mc 0.0.0-dev is not installed: run mc install`
+  and `examples/lang`'s (the default `<mc/core>`, with a blob) answers
+  `#include <sys>: not in this compiler and mc 0.0.0-dev's library tree was not found: run mc
+  install`, both exit 1. (`make check-lang` is green today for a different reason than adjacency,
+  and that was checked: `examples/lang`'s `.lx` sources name **no** bundled library at all.)
+  Decision **(a)**, the owner's: `mc build` stages `<dir of [compiler].out>/lib/mc/v<version>/`
+  from the root the RUNNING `mc` resolved for itself, by the same partial-tree rule
+  `scripts/libroot.sh` lays the release tarball with -- `bundle.list` plus every row whose path is
+  not under `src/`, only the files that are there. **44 files**, the same count and bytes
+  `sh scripts/libroot.sh` writes. Rejected: **(b)** baking the builder's absolute root into the
+  binary (a path in the object, against `docs/determinism.md`) and **(c)** `--libs-dir` on every
+  invocation (it pushes the contract onto every consumer's scripts and breaks a user who is handed
+  `build/teko`). **No flag** -- it is the contract.
+  Staging from the BLOB was weighed and refused twice over: `src/driver.mc` is `<mc/core_build>`
+  and `bundle_read` is `<mc/core_bundle>` (step C note 1's split -- it would need a fourth function
+  pointer), and after step B the blob keeps `src/*` plus `prelude`/`user_default`, so a binary with
+  no root has no library to stage anyway. Source is therefore the resolved root, and a running `mc`
+  that found none stages nothing and the product inherits the same refusal.
+  **`deps_libs_for_child` is kept**: with the staging in place the spawned child would find its own
+  root 2, but the parent's `--libs-dir` still WINS (root 1 beats root 2) and it is what keeps the
+  child compiling against the same bytes the parent did. It is also why the staging changes no
+  artefact -- on the `mc build` road the staged tree is never read.
+  **One function, and the frozen seed is why.** The first draft was five (three readers in
+  `src/deps.mc` plus a `drv_stage_file` helper) and it turned `make check` red where nothing else
+  in this change goes: `scripts/check-asm.sh` compiles `lib/mc_i128.mc` and `lib/mc_u128.mc` with
+  `build/mc0`, and those are `#include "../src/core.mc"` plus a module -- **2044 of the seed's
+  `MAXFUNCS` 2048 on `main`**, so five more is 2049 and `build/mc0` answers `mc: too many
+  functions`, `176/178 files identical`. `stage0/` is frozen, so the budget gave: it is now
+  `void drv_stage_libroot(uptr cbin)` alone, reading `src/deps.mc`'s already-parsed map through
+  that file's own `#define`s -- **2045, three of headroom**. Worth knowing for the next `src/`
+  milestone: that ceiling, not `check-limits`' rows (which measure `src/mc_seed.mc`), is the tight
+  one.
+  Cost: **67 added lines in `src/`, 34 of them neither comment nor blank**, all in
+  `src/driver.mc`, one new function, **zero new globals** (`check-limits` reports the same
+  `globals 268/512, 52%` row).
+  Gate: `scripts/check-libroot.sh` case (g), where the other roots are proved -- the consumer's
+  shape reduced to what runs in seconds (`core = "<mc/core_min>"`, a module that is
+  `examples/avr/mc-avr.mc` minus the AVR: `<mc/core_machines>`, `<mc/core_writers>`,
+  `<mc/core_build>`, a `main()` and an empty `user_init()`; **no `<mc/core_bundle>`**, so the
+  product has no blob and a successful `#include <sys>` is road 3 through the staged tree and
+  nothing else). Three assertions: the tree is beside it (44 files), the product run standalone
+  compiles and RUNS the program (exit 42) with an empty `$HOME` and no `--libs-dir`, and a second
+  build rewrites **0 of 44** files (`find -newer` against a marker, not a timestamp compare).
+  `<mc/core_build>` is in that module list for a measured reason: without it `mc_build_init()`
+  never runs, `lex_set_libs` is never called and the product has no road 3 at all -- the first
+  draft of the fixture left it out and answered `unknown bundled include: sys` with the tree
+  sitting beside it. **Measured teeth**: against `build/mc1` of 21d081b the script is **7/10 with
+  three failures** (the staged tree, the standalone product, and the idempotence case, which
+  refuses to pass vacuously when nothing was staged), exit 1; with this branch **10/10**.
+  -- `make bundle` re-run BEFORE bootstrapping (60 files, raw 1241573 -> LZ 562533, blob
+  563307 B). `make check` green end to end (**RC 0, zero FAIL**): `budget` 2848/3000, `test`
+  32/32, `check-lex`/`check-ast`/`check-asm` 178/178 (4 skipped), `check-obj` **32/32 identical to
+  the frozen seed**, `check-bundle`, `bootstrap` at BOTH fixed points (`mc2.o == mc3.o`
+  1442552 B, `mc2o.o == mc3o.o` 1384440 B; both `--dump-asm` diffs between `mc1` and `mc2`
+  **empty**), `check-surface` 32/32, `check-opt`, `test-exe` 32/32, `check-mc`,
+  `check-standalone`, `check-parts`, **`check-libroot` 10/10**, `check-toml`, `check-build`,
+  `check-pkg`, `check-tool`, `check-sysroots`, `check-stubs`, `check-limits` **17/17 under 90%**,
+  `check-minimal`, `test-linux`/`test-linux-x86_64` and the four `--exe` cells, `test-windows`/
+  `test-windows-x86_64`, `check-examples`, `check-lang`, `check-conc`, `check-desktop`,
+  `check-float`, `check-wide`, `check-kernel`, `check-avr`, `test-sandbox` 73 ok / 0 failed /
+  1 skipped, `check-docs`, `site` 99 pages + `check-site` + `check-site-linux` 21/21.
+  `scripts/check-inert.sh build/mc1.pre build/mc1` (pre = a `mc1` built from `origin/main`
+  21d081b): **33 objects identical on the plain road, 33 with `--opt=1`**, plus byte-identical
+  artefacts for `examples/api`, `lang`, `conc`, `desktop` and `kernel` -- the staging writes files
+  BESIDE the product and never into it.
+  **The ten goldens rewritten once**, each only after its own criterion: `mc2.sha256`
+  `a983077b...6989e2` -> `8543f340c80f0d5bbae638ad2588940ad2149e5ce9146828a8ba6bb9e95a8ab3` and
+  `mc2-opt.sha256` -> `54f862f1a35b6b94f992d733086c82a502534f05dc5c73872baaeacc2cfca007`, both
+  after the two empty `--dump-asm` diffs and `cmp build/mc2.o build/mc3.o` /
+  `cmp build/mc2o.o build/mc3o.o`; the four Linux ones deleted and re-recorded by
+  `make check-linux-host` (Docker, both architectures, both libcs, each after its own
+  `mc2l.o == mc3l.o` and with the cross proof green) -- `mc2-linux-arm64`
+  `e3191996c7b9637688216bdf003dd6fc1d59d3c77087ff4c142c9650077801ef`, `mc2-linux-arm64-opt`
+  `681ff98412e578a367164e3e59e9b6738bf1c9300a0776466743d1c8bf13e5f1`, `mc2-linux-x86_64`
+  `eeb8f0e5b563f66f0e0aeb86f68ed0bd50169987616f65157488b1bad676cf58`, `mc2-linux-x86_64-opt`
+  `41a4b32c7ea86fdf9f956a018ba652f068ad2b7af497497051f27f1802359679`; and the four Windows ones
+  cross-computed per `tests/golden/README.md` -- `mc2-windows-arm64`
+  `43aef1cf92554f1e27679dfea7fa506e0229db682957f675422f6b3b1720ec98` (1477619 B),
+  `mc2-windows-arm64-opt` `d03e9be08b6aadeffc3aebd2548cebb1384a8b97f4085f7279814eb46de0ff13`
+  (1418915 B), `mc2-windows-x86_64`
+  `25a3852fe4350763b657ac18a6f81466d8d5bfa783edb155c207ef8ac4f878a0` (1533299 B),
+  `mc2-windows-x86_64-opt` `9d830c2656cbc7e2988df16fa96f2acc942535dbc091f7a88aa106ab8a08c6d1`
+  (1461251 B); `build/mc2` writes the two plain Windows objects byte for byte as `build/mc1` does.
+  Docs: `docs/build.md` § `[compiler]` (a new "The product is self-sufficient" subsection),
+  `docs/reference/toml.md` (`compiler.out`'s row and a paragraph), `docs/reference/packages.md`
+  § 2 (root 2 is now also `mc build` beside a taught compiler; the `--libs-dir` workaround
+  paragraph rewritten), `docs/specs/M52.md` (§ 7 D12 with the three weighed shapes, and
+  § Implementation notes -- step D, ten notes).
 - Next: the **site + registry server, M47 S4-S6**, in
   `minicompiler/mc-registry`; then **M42 step 2** (PE `--exe`, CI-gated on the Windows runners).
   **M46** only on the owner's request; **M43 Layer 2** after 1.0.0. M13 and M18 stay in the backlog

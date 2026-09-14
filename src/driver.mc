@@ -716,6 +716,71 @@ void drv_entry(uptr entry, uptr out, uptr kind) {
     drv_link(drv_path(obj), drv_path(out));
 }
 
+// ---- M52 step D: the library tree beside the taught compiler ----
+// A [compiler] product is a SECOND binary, written into the project's own
+// build/ directory, so its host_self_path() is not this one's and roots 2 and 3
+// -- the library tree a release carries beside `mc`, and the one `make` lays
+// beside build/mc1 -- are invisible to it. Spawning it works because the parent
+// hands the root over (deps_libs_for_child); running it STANDALONE did not, and
+// answered `lib/rt.tk:40: unknown bundled include: sys` on a product with a
+// blob, or the `library tree was not found` sentence on a <mc/core_min> one.
+// Both shapes were measured on this tree before the fix.
+//
+// So the product gets a root 2 of its own: <dir of [compiler].out>/lib/mc/
+// v<version>/, staged from the root the RUNNING mc resolved for itself
+// (dp_mc_load, roots 1/2/3). The same partial-tree rule scripts/libroot.sh
+// applies for the release tarball -- `bundle.list` plus every row whose path is
+// not under src/, and only the files that are actually there -- so a taught
+// compiler leaves `mc build` as self-sufficient as an unpacked tarball.
+//
+// It is the contract and not an option: there is no flag. When the running mc
+// found no root at all there is nothing to stage (every library name is out of
+// its own reach too) and the product inherits the same refusal.
+//
+// It is ONE function, reading src/deps.mc's already-parsed map through that
+// file's own #defines, and that is deliberate: lib/mc_i128.mc compiles under
+// the frozen C seed at 2044 of its 2048 functions (scripts/check-asm.sh), so a
+// family of accessors here would be four lines of `mc` paid for out of the one
+// budget this repository cannot raise.
+void drv_stage_libroot(uptr cbin) {
+    dp_mc_load();                              // cached; the map, or nothing
+    uptr st = dp_state();
+    uptr from = ld64(st + DP_MCDIR);
+    if (from == 0) return;
+    i64 n = ld64(st + DP_MCN);
+    uptr paths = ld64(st + DP_MCPATH);
+    uptr root = tm_cat(tm_cat(tm_cat(drv_dirname(cbin), "/lib/mc/v"), mc_version()), "/");
+    u8 b[BUF_SIZE];
+    i64 i = 0;
+    while (i <= n) {
+        uptr rel = "bundle.list";              // i == n is the map itself
+        if (i < n) rel = ld64(paths + i * 8);
+        // every row the blob of a full binary carries is a src/ path, and a
+        // release stages none of them: the tree beside a binary is the library
+        // half, which is the rule scripts/libroot.sh writes the same way.
+        if (i == n || !mem_eq(rel, "src/", 4)) {
+            uptr sp = dep_in(from, rel);
+            if (lex_readable(sp)) {
+                i64 len = 0;
+                uptr p = read_file(sp, &len);
+                uptr dp = dep_in(root, rel);
+                i64 old = 0;
+                uptr q = 0;
+                if (lex_readable(dp)) q = read_file(dp, &old);
+                // a file whose bytes already match is left alone, so a rebuild
+                // rewrites nothing and two builds of one tree write one tree
+                if (q == 0 || old != len || !mem_eq(p, q, len)) {
+                    buf_init(b);
+                    buf_put(b, p, len);
+                    drv_mkdirs(dp);
+                    write_file(dp, b);
+                }
+            }
+        }
+        i = i + 1;
+    }
+}
+
 // builds the taught compiler and hands the entry over to it. Under --limits the
 // TWO compilations each report their own tables, the compiler's first: the
 // parent's is in this process, the entry's in the child, which gets the same
@@ -748,6 +813,9 @@ i64 drv_teach(uptr cout, uptr dir, i64 compiler_only) {
         drv_step("link", cobj, cbin);
         drv_link(drv_path(cobj), drv_path(cbin));
     }
+    // M52 step D: the product is self-sufficient from here on -- its own
+    // root 2, beside it, whoever runs it and from wherever.
+    drv_stage_libroot(drv_path(cbin));
     i64 rc = drv_finish(tm_cat(cout, ".mc"));
     // M21.5: --compiler-only stops here and prints the path of the binary it
     // just wrote. A test.sh that runs the taught compiler itself, and the LSP,
