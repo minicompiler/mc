@@ -90,7 +90,7 @@ check-lex: $(REF)
 check-ast: $(REF)
 	scripts/check-ast.sh $(REF)
 
-mc1: build/mc1 $(LIBROOT)
+mc1: build/mc1
 
 # M52 step A (D5): the library root, beside the binary. Since M52 a compiler
 # resolves a `#include <name>` its blob cannot answer from
@@ -126,7 +126,7 @@ build/mc_seed: build/mc0 $(MCSRC)
 	build/mc0 src/mc_seed.mc -o build/mc_seed.o
 	scripts/link.sh build/mc_seed build/mc_seed.o
 
-build/mc1: build/mc_seed $(MCSRC)
+build/mc1: build/mc_seed $(MCSRC) | $(LIBROOT)
 	@mkdir -p build
 	build/mc_seed src/mc.mc -o build/mc1.o
 	scripts/link.sh build/mc1 build/mc1.o
