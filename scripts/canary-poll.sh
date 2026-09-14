@@ -119,7 +119,25 @@ while :; do
     # `curl -f` is non-zero on the 404 raw.githubusercontent.com answers while
     # the file does not exist yet, which is the ordinary case for most of the
     # wait; `|| body=` turns that into "keep polling" without tripping `set -e`.
-    body=$(curl -fsSL --max-time 30 "$url" 2>/dev/null) || body=
+    # Two roads for one file. raw.githubusercontent.com sits behind a CDN
+    # that caches a 404 for minutes AFTER the file appears (measured on
+    # 0.17.0: the API served the verdict while raw still answered 404), so the
+    # raw fetch carries a cache-busting query -- raw ignores the query for
+    # content but the CDN keys on it -- and when it still answers nothing the
+    # contents API is asked directly (`?ref=` is not negatively cached). The
+    # API is public; the job's GITHUB_TOKEN, when present, only lifts the
+    # unauthenticated 60/h ceiling, which ninety one-minute polls would hit.
+    body=$(curl -fsSL --max-time 30 "$url?t=$(date +%s)" 2>/dev/null) || body=
+    if [ -z "$body" ] && [ -z "$CANARY_URL" ]; then
+        api="https://api.github.com/repos/$repo/contents/$version.json?ref=$branch"
+        tok=${GITHUB_TOKEN:-${GH_TOKEN:-}}
+        if [ -n "$tok" ]; then
+            body=$(curl -fsSL --max-time 30 -H "Accept: application/vnd.github.raw+json" \
+                   -H "Authorization: Bearer $tok" "$api" 2>/dev/null) || body=
+        else
+            body=$(curl -fsSL --max-time 30 -H "Accept: application/vnd.github.raw+json" "$api" 2>/dev/null) || body=
+        fi
+    fi
     if [ -n "$body" ]; then
         status=$(printf '%s' "$body" | jq -r '.status // empty' 2>/dev/null) || status=
         got=$(printf '%s' "$body" | jq -r '.version // empty' 2>/dev/null) || got=
