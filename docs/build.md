@@ -193,6 +193,39 @@ at, so redundant components do not inflate it: `out = "./build/mc-api"`, `"build
 and every module include pointed one directory too high.) The `..` and leading-`/` checks still
 scan the string **as written** — normalizing first would silently swallow a `..`.
 
+#### The product is self-sufficient: the library tree beside it
+
+A `[compiler]` product is a **second binary**, written into the project's own `build/`, so its
+`host_self_path()` is not `mc`'s: roots 2 and 3 of the library search
+([`reference/packages.md`](reference/packages.md) § 2) — the tree a release carries beside `mc`,
+and the one `make` lays beside `build/mc1` — are invisible to it. Before M52 step D that only
+showed up when the product was run **standalone**, outside the `mc build` that wrote it: the
+parent hands its own root over to the child it spawns, so `mc build DIR` worked and
+`build/mine --entry-only DIR` answered `lib/rt.tk:40: unknown bundled include: sys`.
+
+So `mc build` now **stages a library root of its own beside the product**:
+
+```
+<dir of [compiler].out>/lib/mc/v<version>/
+    bundle.list
+    lib/...          the library files, and nothing of src/
+```
+
+staged from the root the running `mc` resolved for itself, by the same partial-tree rule
+[`../scripts/libroot.sh`](../scripts/libroot.sh) uses for the release tarball. A taught compiler
+therefore leaves `mc build` as self-sufficient as an unpacked release: run it from anywhere, by
+anyone, with no `--libs-dir` and no `$HOME`.
+
+There is **no flag**: it is the contract. Two consequences worth knowing:
+
+- a file whose bytes already match is left alone, so a rebuild rewrites nothing and two builds of
+  one tree write one tree;
+- when the running `mc` found no root at all there is nothing to stage — every library name is out
+  of its own reach too — and the product inherits the same refusal.
+
+Moving the product away from its `build/` directory loses the tree, exactly as copying `mc` out of
+a release tarball does ([`bootstrap.md`](bootstrap.md)); `mc install` is the answer in both cases.
+
 ### `[linker]` — handing off to an external linker
 
 Without `[linker]`, `kind = "exe"` uses the built-in `macho-exe` backend: no `ld`, ad-hoc

@@ -174,7 +174,7 @@ exit 1. `kind = "exe"` and no `[linker]` is the shape such a target is for.
 | key | type | default | meaning |
 |---|---|---|---|
 | `compiler.modules` | array of strings | — | files `#include`d in order, after the core. Its presence is what turns on this whole step |
-| `compiler.out` | string | `build/mc-<project.name>` | where the taught compiler is written. Must be **relative** and contain no `..` |
+| `compiler.out` | string | `build/mc-<project.name>` | where the taught compiler is written. Must be **relative** and contain no `..`. Its directory also receives `lib/mc/v<version>/`, the library root the product resolves `<name>` through when it is run standalone (M52 step D) |
 | `compiler.core` | string | `<mc/core>` from the bundle | pin a checkout of `src/core.mc` instead of the copy inside the binary |
 
 `mc build` writes `<compiler.out>.mc` — a generated file, next to the compiler — containing the
@@ -196,6 +196,13 @@ The generated file lives inside `build/`, so each `#include` gets one `../` per 
 between the config and `[compiler].out` — counted on the **normalised** path, so `./build/x`,
 `build/./x` and `build//x` all count as one level. The `..` and leading-`/` checks run on the
 string as written, because normalising first would swallow a `..`.
+
+Beside the binary it writes, `mc build` also stages `lib/mc/v<version>/` — `bundle.list` plus the
+library files, the same partial tree a release tarball carries beside `mc`. A `[compiler]` product
+is a second binary in the project's own `build/`, so the roots the parent reads
+([`packages.md`](packages.md) § 2) cannot be reached from it; with the tree beside it, the product
+resolves `#include <sys>` run standalone, by anyone, with no `--libs-dir` and no `$HOME`. Staging
+is idempotent (a byte-identical file is left alone) and there is no flag for it.
 
 Errors: `missing key: compiler.modules`, `must be a relative path: compiler.out`,
 `must not contain ..: compiler.out`, `missing key: compiler.out` (when there is no

@@ -71,7 +71,7 @@ included.
 | order | root | who puts it there |
 |---|---|---|
 | 1 | `<libs>/mc/v<version>/` — `--libs-dir DIR` or `$HOME/.mc/libs` | `mc install`, `mc upgrade` |
-| 2 | `<the directory of the binary>/lib/mc/v<version>/` | a release tarball, and `make` beside `build/mc1` |
+| 2 | `<the directory of the binary>/lib/mc/v<version>/` | a release tarball, `make` beside `build/mc1`, and `mc build` beside a taught compiler it writes |
 | 3 | `<the directory of the binary>/../lib/mc/v<version>/` | a packager: `/usr/local/bin/mc` finds `/usr/local/lib/mc/v<version>/` |
 
 `<libs>` is first, so an explicit `mc install` still wins over the copy that shipped — the same
@@ -106,11 +106,14 @@ Roots 2 and 3 are relative to **the binary doing the compiling**, and two shapes
 somewhere else:
 
 * **A taught compiler** (`[compiler]` in `mc.toml`, [../build.md](../build.md) § `[compiler]`) is
-  written into the project's own `build/` directory. When `mc build` **spawns** it, the parent
-  passes its own `<libs>` along, so nothing has to be said; on the two-step road
-  (`mc build --compiler-only`, then that compiler with `--entry-only`) nothing forwards anything,
-  and the second command names the tree itself: `--libs-dir <prefix>/lib`, where `<prefix>/lib`
-  is the directory that holds `mc/v<version>/`.
+  written into the project's own `build/` directory, so the tree beside `mc` is not beside it.
+  Since M52 step D it gets a **root 2 of its own**: `mc build` stages
+  `<dir of [compiler].out>/lib/mc/v<version>/` — the same partial tree a release carries — beside
+  the binary it writes. So the product is self-sufficient on every road: spawned by `mc build`
+  (where the parent also passes its `<libs>` along), or run standalone with `--entry-only`, from a
+  `bootstrap.sh`, or by a user who was handed the binary, with no `--libs-dir` and no `$HOME`.
+  Moving it out of its `build/` directory loses the tree, exactly as copying `mc` out of a tarball
+  does; `--libs-dir <prefix>/lib` and `mc install` are the two ways back.
 * **Inside `mc sandbox`** the compiler is a single file bound at `/mc` and the box has no `/proc`
   for it to read its own path from, so the box mounts the tree where `<libs>` looks instead
   ([sandbox.md](sandbox.md) § The tree).
