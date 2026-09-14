@@ -6220,6 +6220,147 @@ agents (`.claude/agents/`): `stage0-dev` (C23), `mc-dev` (`.mc` code), `reviewer
   the real line count + nine implementation notes).
   Not in this step: **B**, the cut (`tools/bundle.mc`'s predicate, -140 300 B) and **C**,
   `mc build --sync`.
+- M52 step B ✔ (`docs/specs/M52.md` § 2 D1, § 11 row 2 + its new § Implementation notes -- step B):
+  **the cut -- 41 of the 101 manifest rows leave the blob for the tree beside the binary.**
+  `stage0/` untouched (2848/3000, `git diff main -- stage0/` empty). The rule is the owner's, as one
+  predicate in `tools/bundle.mc` (`bl_in_blob`, 8 code lines): **a row is in the blob iff its path
+  is under `src/`, plus `prelude` and `user_default`** -- the two files `src/` itself `#include`s,
+  which resolve by name inside the blob. `tools/bundle.list` keeps all 101 rows (it is the
+  `NAME<TAB>PATH` map the tree is read through) and the root `mc.toml`'s `files` are unchanged: the
+  blob shrinks, the package does not. `bl_verify` still runs over all 101 before `bl_cut` compacts
+  to 60, so sorted/unique/no-shared-last-component still cover the whole map.
+  * **Measured, the cut in isolation** (macOS arm64, the same compiler with the 41 rows in and out;
+    `build/mc1 --exe src/mc.mc`):
+
+    | | binary | `__text` | `__cstring` | `__DATA,__data` | blob |
+    |---|---|---|---|---|---|
+    | all 101 rows | 1 400 552 | 540 924 | 31 111 | 692 576 | 678 368 |
+    | 60 rows | **1 268 454** | **540 924** | **31 111** | 567 952 | 556 168 |
+
+    **−132 098 B, −9.4% of the binary and −18.0% of `__DATA,__data`, with `__text` and `__cstring`
+    byte-identical** -- a bundle row is data. (§ 1.2 predicted −140 300 against the tree it was
+    written on; the shape is exactly what it said.) The branch's final binary is **1 285 334 B**
+    (`__text` 542 272, +1 348 for the nine new functions below; `__DATA,__data` 570 352, blob
+    558 552), and `make bundle` reports 60 files, raw 1 231 666 -> LZ 557 778.
+  * **Two roads a library name could not reach any more, and both are fixed at the root** -- the
+    deviation from the step table's "~0 lines in `src/`", **52 code lines** in five files, no new
+    global (`mc limits src/mc.mc` says `globals 446/512` before and after).
+    (a) `mc build` with a `[compiler]` writes a taught compiler into the project's own `build/` and
+    spawns it there, where roots 2 and 3 -- both relative to `host_self_path()` -- are invisible.
+    Measured before the fix: `mc build examples/desktop --config ui.toml` answered
+    `main.ui:16: #include <sys>: not in this compiler and mc 0.0.0-dev's library tree was not
+    found: run mc install`, with the tree beside `build/mc1` all along -- a regression for every
+    user with a `[compiler]` and a library include. `deps_libs_for_child()` (`src/deps.mc`, +18
+    code) answers the `<libs>` a child must be told about (0 when `--libs-dir` was given, already
+    forwarded; 0 when root 1 answered, since the child inherits `HOME`; else the tree beside THIS
+    binary) and `drv_teach` passes it as `--libs-dir` (+4). `dp_mc_root` became
+    `dp_beside_libs` + `dp_root_in`, so "beside the binary" has one definition.
+    The **two-step** road (`--compiler-only`, then that compiler with `--entry-only`) forwards
+    nothing by construction and the caller names `--libs-dir` itself -- `scripts/check-opt.sh`,
+    `scripts/check-inert.sh`, and `docs/build.md` § M52 for a user's own script.
+    (b) **The sandbox**: `make test-sandbox` came back **51 ok, 22 failed**, every case whose
+    program says `#include <sys>` (`refused: syscall 78 (readlinkat)` -- the compiler asking where
+    its own binary is). Inside the box neither beside-the-binary root can work (`/mc` is a single
+    bound FILE and there is no `/proc`), so the box mounts the tree where `<libs>` looks: `HOME` is
+    `/src`, hence **`/src/.mc/libs/mc/v<ver>/`**, bound read-only on the overlay's upper layer and
+    granted read-only by Landlock (a mount of its own, so the `/src` rule does not reach it), with
+    the host path resolved before the unshare in `dp_mc_root`'s order and without naming one of its
+    functions -- `src/sandbox.mc` is `<mc/core_sandbox>`, which `check-parts` builds on
+    `<mc/core_min>` alone. +30 code lines, one APPENDED field (`SB_LIB`, so no offset moved). On
+    the overlay fallback road `/src` is read-only and there is nowhere for the mount point: the
+    field is cleared and a library name gets the sentence that names `mc install`, which is the
+    truth about that box. After it: **73 ok, 0 failed, 1 skipped**.
+    `readlinkat` joined the four compile profiles, **measured with
+    `sh scripts/sandbox-trace.sh --union`** on Ubuntu 26.04 (aarch64, glibc 2.43, Lima) and Alpine
+    3 (aarch64, musl) -- the trace runs OUTSIDE the box, where the compiler does take that road --
+    and `--check` is green there. The two x86-64 rows carry the same name, unmeasurable from this
+    Mac (`strace` decodes nothing under its amd64 emulation); one residual on record in
+    `docs/reference/sandbox.md` § The profiles: musl on x86-64 implements `readlink()` with the
+    `readlink` syscall, which no `SN_*` covers, so on such a host a box with **no** tree says
+    `refused: syscall 89 (readlink)` instead of the sentence -- one `--union` run there fixes it.
+  * **The gates.** `scripts/libroot.sh` stages every non-`src/` row (43 files: the 41 plus the two
+    exceptions, which ride along for free because the blob answers them first) and gained a
+    `--libs DIR` mode that lays the same tree at `DIR/mc/v<ver>/` -- root 1's shape, what
+    `mc install --libs-dir` writes. `check-bundle` **+1 case**: the 60 names the generator reports
+    `diff`ed against the predicate restated over the manifest in `awk`, then each of the other 41
+    offered to the real compiler (root 2 beside it) with neither refusal allowed to appear, then
+    the same compiler alone in an empty directory refusing `<sys>` -- § 10.7's literal form, which
+    step A could only prove with a synthetic row. `check-pkg` **186/186**: every fixture `<libs>`
+    is laid whole (`--libs-dir` REPLACES `<libs>`, and `tests/pkg/app`/`app-float` both say
+    `#include <sys>`), § 15's bundle-less probe moved to a `$tmp/none` that really is empty,
+    § 18's "nothing was fetched" now says "nothing but the `mc` tree", and the new § 37 is the D6
+    table on a real name (roots 2 and 3 each compile, link and RUN a `<sys>` program; with neither,
+    the refusal is exact). `check-standalone` stages the tree beside the copied binary -- cases 1-3
+    through root 2, case 4 (`<mc/host>` + `<mc/core>` + `<user_default>` == `src/mc.mc`, byte for
+    byte) untouched, and case 5 moved to `alone/bin/mc`, two levels down so that neither root can
+    see the tree. **`check-docs` needed no line**, against the step table's guess: its fences are
+    compiled by `build/mc1` (root 2 beside it) and its `taught=DIR` fences go through `mc build`,
+    which forwards it.
+  -- `make bundle` re-run BEFORE bootstrapping (60 files, blob 558 552 B). `make check` green end
+  to end (**RC 0, zero FAIL**): `budget` 2848/3000, `test` 32/32, `check-lex` 177/177 (5 skipped),
+  `check-ast`/`check-asm` 178/178, `check-obj` **32/32 identical to the frozen seed**,
+  `check-bundle` (60/41 + the refusal, lz round trip 125 cases), `bootstrap` at BOTH fixed points
+  (`mc2.o == mc3.o`, `mc2o.o == mc3o.o`) with the cross-road identity and **both `--dump-asm` diffs
+  between `mc1` and `mc2` empty**, `check-surface` 32/32 + 154 ok, `check-opt` 75/75, `test-exe`
+  32/32, `check-mc` 22/22, `check-standalone`, `check-parts`, `check-libroot` 7/7, `check-toml`
+  10/10, `check-build` 55/55, **`check-pkg` 186/186**, `check-tool` 27/27, `check-sysroots`
+  (13 rows), `check-stubs` 9/9, `check-limits` 17/17 seed limits under 90%, `check-minimal`,
+  `test-linux` 55/55 and `test-linux-x86_64` 51/51, the four `--exe` cells 58/58 + 58/58 + 54/54 +
+  54/54, `test-windows` 56/56 and `test-windows-x86_64` 52/52 objects cross-compiled +
+  `test-windows-x86_64-exe` 24/24, `check-examples`, `check-lang` 18, `check-conc` 21,
+  `check-desktop`, `check-float` (five legs + the four sweeps), `check-wide`, `check-kernel`
+  (QEMU 11.0.1), `check-avr`, **`test-sandbox` 73 ok / 0 failed / 1 skipped**, `check-docs`
+  (206 symbols, 49 flags, 35 TOML keys, 10 directives, 52 samples, 514 links), `site` 99 pages +
+  `check-site` + `check-site-linux` 21/21.
+  `scripts/check-inert.sh <mc1 from main 5c8bc3d> build/mc1`: **33 objects identical on the plain
+  road and 33 with `--opt=1`** (`tests/*.mc` AND `src/mc.mc` -- the script compiles one tree with
+  both compilers, so this is the strongest form) plus byte-identical artefacts for `examples/api`,
+  `lang`, `conc`, `desktop` and `kernel`. The compiler's own body is confined as well: compiling
+  main's `src/mc.mc` and this tree's with the same compiler gives **9 added function labels, 0
+  removed, and 12 of 1935 shared functions differing** -- the six that were edited (`dp_mc_root`,
+  `drv_teach`, `sb_go`, `sb_build_tree`, `sb_landlock_apply`, `sb_rec`) and the six `bundle_*`
+  readers, whose immediates are the blob's own count going from 101 to 60.
+  **One more thing a foreign host needed**, found by `make check-linux-host` and true of every CI
+  Linux and Windows leg: those hosts start from a `build/` that holds the compiler and nothing else
+  (`scripts/check-linux-host.sh` untars the checkout EXCLUDING `build/`; a CI leg links the object
+  it was handed), so the tree has to be laid there before the suite runs. `libroot` is now the
+  first prerequisite of the Linux and Windows `check` subsets in the `Makefile`, and
+  `scripts/bootstrap-linux.sh` and `scripts/bootstrap-windows.sh` lay it themselves right before
+  they run the suite -- the chain above it needs nothing of it, since `src/mc_linux.mc` and
+  `src/mc_windows.mc` have relative includes only. Measured before the fix: 12 FAILs per cell, all
+  of them `tests/mc/09[7-9]`/`10[01]` (the M49 tests, the only ones in that corpus that say
+  `#include <sys>`).
+  `make check-linux-host` **RC 0 over all four cells** (aarch64 musl 55/55 + `check-mc` 18/18 +
+  `test-exe` 31/31, aarch64 gnu 56/56 native, x86_64 musl 51/51 + 17/17 + 29/29, x86_64 gnu 52/52
+  native), each after its own plain AND optimized fixed point, its own cross-road identity, and the
+  cross proof (`mc2l --backend=macho src/mc.mc` byte for byte the macOS `build/mc2.o`) green in all
+  four.
+  **The ten goldens rewritten once**, each only after its own criterion -- `mc2.sha256`
+  `61846ac0...96b140` -> `de14cda059265cabe594639250ade4bfeaf29e91c042a147bef7843de26dd14d` and
+  `mc2-opt.sha256` `5f21465033fef708c5397f5c9dc6ed22793b4d8a812935f14306c886927db595` (both by
+  `scripts/bootstrap.sh`, after the two empty `--dump-asm` diffs and the two `cmp`s); the four Linux
+  ones deleted and re-recorded by `make check-linux-host` --
+  `mc2-linux-arm64.sha256` `2304752f530622b45b9f61b171d2718a63f8602e3c2199404eeea7379763e900`,
+  `mc2-linux-arm64-opt.sha256`
+  `ef5c5cc127c3ae0e894d159298a5d700771141ac22e8b22d0d4374637c88d0cd`,
+  `mc2-linux-x86_64.sha256` `7b6a9b91b8bfd5168a1f8985eca66a2b242a8c2836d6fbceaa0d072f6335ba39`,
+  `mc2-linux-x86_64-opt.sha256`
+  `2b5c447dd19b5b9f78940ee731043a36874c0586269cb4a164cc8dae1513b17b`, each recorded in its musl
+  cell and re-verified by the gnu cell of the same architecture; the four Windows ones
+  cross-computed on macOS per `tests/golden/README.md` --
+  `mc2-windows-arm64.sha256` `7659d7c08cb0bfdfcb3b40e60377b9227304ce520195776017119654f20d8331`
+  (1 469 865 B), `mc2-windows-arm64-opt.sha256`
+  `078ca095b3150c6691c79bdbd2d95be14a3fe6f38a2816f423f8ab06b6f92379` (1 411 349 B),
+  `mc2-windows-x86_64.sha256`
+  `573f133f9a4d84c8e40d93b7e8cbf9d574e2b922f265a5f7e6488bfed6648328` (1 525 113 B),
+  `mc2-windows-x86_64-opt.sha256`
+  `35a00019c9c15f34bac902c18ac2c306e32ed9da10e381c0aa924171f835d88d` (1 453 353 B).
+  Docs: `docs/reference/bundle.md` (the catalogue split in two with the measured table, and what
+  the headline claim is now), `docs/reference/packages.md` § 2 (step 3 is every library name; a new
+  § on a compiler that cannot see the tree beside `mc`), `docs/build.md` § M52 (new),
+  `docs/reference/sandbox.md` (§ The tree, § The profiles), `docs/bootstrap.md`;
+  `docs/reference/diagnostics.md` needed no change -- step A had already written all three
+  sentences.
 - Next: the **site + registry server, M47 S4-S6**, in
   `minicompiler/mc-registry`; then **M42 step 2** (PE `--exe`, CI-gated on the Windows runners).
   **M46** only on the owner's request; **M43 Layer 2** after 1.0.0. M13 and M18 stay in the backlog

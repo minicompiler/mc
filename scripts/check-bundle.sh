@@ -20,6 +20,22 @@
 #      be committed as a release build (docs/ci.md § Versioning)
 mc="${1:-build/mc1}"
 
+# M52 step B: which rows the blob is supposed to carry, computed from the
+# manifest and NOT from the generator -- the predicate of tools/bundle.mc
+# (bl_in_blob) read the other way round, so a generator that admitted or
+# dropped the wrong row is caught here and not in a size report.
+#
+#   in the blob  <=>  the path is under src/  or  the name is prelude or user_default
+#
+# Everything else travels in the library tree beside the binary (root 2 of
+# docs/reference/packages.md § 2, laid by scripts/libroot.sh).
+blob_rows() {
+    awk -F'\t' '/^[a-z]/ { if ($2 ~ /^src\// || $1 == "prelude" || $1 == "user_default") print $1 }' tools/bundle.list
+}
+tree_rows() {
+    awk -F'\t' '/^[a-z]/ { if ($2 !~ /^src\// && $1 != "prelude" && $1 != "user_default") print $1 }' tools/bundle.list
+}
+
 if [ ! -x "$mc" ]; then
     echo "FAIL: compiler '$mc' not found or not executable"
     exit 1
@@ -101,12 +117,75 @@ if ! "$mc" --dump-ast "$tmp/bd.mc" > "$tmp/bd.ast" 2>&1; then
 fi
 blobs=$(grep -c '^  BLOB ' "$tmp/bd.ast")
 ints=$(grep -c '^  INT '  "$tmp/bd.ast")
-want=$(( $(grep -c '^[a-z]' tools/bundle.list) * 4 ))
+want=$(( $(blob_rows | wc -l) * 4 ))
 if [ "$blobs" != "1" ] || [ "$ints" != "$want" ]; then
     echo "FAIL: <mc/bundle_data> is not the #embed form ($blobs BLOB, $ints INT, expected 1 and $want)"
     exit 1
 fi
 echo "ok <mc/bundle_data> is one #embed node plus the $want-value index"
+
+# ---------------------------------------------------------------- M52 step B
+# The cut: the blob carries the compiler's own source and nothing else, and
+# every row that left it is served by the library tree beside the binary.
+#
+# Two halves, and they measure different things. The first compares the
+# GENERATOR's own report (one line per row it put in the blob) with the
+# predicate restated over the manifest above -- 60 rows here, named, so a row
+# that moved in either direction is a diff and not a byte count. The second is
+# behavioural: each of the other 41 names is offered to the real compiler,
+# which has root 2 beside it (build/lib/mc/v<ver>/, laid by the Makefile), and
+# the include has to RESOLVE. It need not compile -- most of those files are
+# compiler modules that mean nothing on their own -- so what is asserted is
+# that neither refusal appears. Then the same name with the tree moved aside
+# must be refused, which is what proves the library really did leave the blob.
+"build/bundle$hostexe" tools/bundle.list "$tmp/c.mc" > "$tmp/gen.out" 2>&1
+sed -n 's/^  \([a-z][^ ]*\)  *[0-9].*/\1/p' "$tmp/gen.out" | sort > "$tmp/got"
+blob_rows | sort > "$tmp/want"
+if ! diff "$tmp/want" "$tmp/got" > "$tmp/blobdiff"; then
+    echo "FAIL: the blob does not hold the rows the predicate admits" >&2
+    echo "  < expected (tools/bundle.list), > generated (tools/bundle.mc):" >&2
+    sed -n '1,20p' "$tmp/blobdiff" >&2
+    exit 1
+fi
+echo "ok the blob holds exactly the $(blob_rows | wc -l | tr -d ' ') rows the predicate admits (src/, prelude, user_default)"
+
+ver=$(sed -n 's/^uptr mc_version() { return "\(.*\)"; }$/\1/p' src/version.mc | head -1)
+root="build/lib/mc/v$ver"
+if [ ! -f "$root/bundle.list" ]; then
+    echo "FAIL: no library root at $root (run 'make libroot')" >&2
+    exit 1
+fi
+mkdir -p "$tmp/home"
+bad=0
+n=0
+for name in $(tree_rows); do
+    n=$((n + 1))
+    printf '#include <%s>\n' "$name" > "$tmp/inc.mc"
+    out=$(HOME="$tmp/home" "$mc" "$tmp/inc.mc" -o "$tmp/inc.o" 2>&1)
+    case "$out" in
+    *"not in this compiler"* | *"unknown bundled include"* | *"not bundled in this compiler"*)
+        echo "FAIL: <$name> left the blob and root 2 does not serve it: $out" >&2
+        bad=$((bad + 1))
+        ;;
+    esac
+done
+[ "$bad" = 0 ] || exit 1
+echo "ok the other $n names resolve through root 2 ($root)"
+
+# and with the tree moved aside, a library name is refused -- the literal form
+# of M52 § 10.7 that step A could only prove with a synthetic row.
+mkdir -p "$tmp/alone"
+cp "$mc" "$tmp/alone/mc"
+chmod +x "$tmp/alone/mc"
+printf '#include <sys>\ni64 main() { return 42; }\n' > "$tmp/sys.mc"
+out=$(HOME="$tmp/home" "$tmp/alone/mc" "$tmp/sys.mc" -o "$tmp/sys.o" 2>&1); rc=$?
+want="#include <sys>: not in this compiler and mc $ver's library tree was not found: run mc install"
+if [ "$rc" = 1 ] && printf '%s' "$out" | grep -qF "$want"; then
+    echo "ok with no library root, <sys> is refused: $(printf '%s' "$out" | sed 's|^.*sys.mc:1: ||')"
+else
+    echo "FAIL: <sys> with no root: exit $rc: $out" >&2
+    exit 1
+fi
 
 # src/lz.mc on its own: synthetic buffers from a deterministic LCG (pure random
 # bytes, runs, a 4-letter alphabet, a repeating pattern; sizes 0 to 256 KiB) and

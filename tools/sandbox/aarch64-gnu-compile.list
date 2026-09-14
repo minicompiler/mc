@@ -15,6 +15,7 @@ munmap
 openat
 prlimit64
 read
+readlinkat
 rseq
 rt_sigaction
 rt_sigprocmask

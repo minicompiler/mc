@@ -681,13 +681,18 @@ check-skipped:
 	@echo "check-opt: SKIPPED (its corpus is linked and run through the macOS host toolchain)"
 endif
 
+# M52 step B: `libroot` FIRST on a foreign host. The library tree beside the
+# binary is where `#include <sys>` comes from since the cut, and a Linux or
+# Windows checkout gets `build/` with the compiler in it and nothing else --
+# scripts/check-linux-host.sh untars the tree EXCLUDING build/, and a CI leg
+# links the object it was handed. On macOS `mc1` already depends on it.
 ifeq ($(HOST),Linux)
-check: budget bootstrap-linux check-lex check-ast check-asm check-obj check-bundle check-mc test-exe check-toml check-tool check-sysroots check-limits check-shim test-sandbox check-skipped
+check: libroot budget bootstrap-linux check-lex check-ast check-asm check-obj check-bundle check-mc test-exe check-toml check-tool check-sysroots check-limits check-shim test-sandbox check-skipped
 else ifneq (,$(WINHOST))
 # M38: the Windows subset. Everything not here needs `mc` plus something this
 # host does not have -- the C seed, the Mach-O direct-executable backend, GTK4,
 # Docker or python3 -- and `check-skipped` prints the reason for each one.
-check: budget bootstrap-windows check-lex check-ast check-asm check-obj check-bundle check-mc check-toml check-sysroots check-limits check-skipped
+check: libroot budget bootstrap-windows check-lex check-ast check-asm check-obj check-bundle check-mc check-toml check-sysroots check-limits check-skipped
 else
 check: budget test check-lex check-ast check-bundle check-asm check-obj bootstrap check-surface check-opt test-exe check-mc check-standalone check-parts check-libroot check-toml check-build check-pkg check-tool check-sysroots check-stubs check-limits check-minimal test-linux test-linux-x86_64 test-windows test-windows-x86_64 test-windows-x86_64-exe check-examples check-lang check-conc check-desktop check-float check-wide check-kernel check-avr check-docs site check-site check-site-linux test-linux-exe test-linux-x86_64-exe test-sandbox
 endif

@@ -57,10 +57,14 @@ Step 1 exists only where a lock was read, which is `mc build`. The single-file C
 (`mc x.mc -o x.o`) has no project and therefore no step 1: `<geo/geo.mc>` there is
 `unknown bundled include: geo/geo`, and `--include=DIR` plus a quote include is the hand road.
 
-Step 3 is reached only on a bundle miss. For a binary that carries the blob — the full flavour —
-that means a name nobody ships, so a full `mc` behaves exactly as it did before packages existed
-unless a lock says otherwise. For **`mc-slim`** ([bundle.md](bundle.md) § The slim flavour) it
-means every `<name>` there is, which is what `mc install` ([cli.md](cli.md) § 3e) is for.
+Step 3 is reached on a bundle miss, and since M52 that is **every library name**: the blob holds
+the compiler's own source and the 41 library rows live in the tree
+([bundle.md](bundle.md) § The catalogue). So `#include <sys>` is a step-3 answer for the full
+flavour too, and a binary copied out of a tarball without the `lib/` directory beside it is a
+compiler that can compile no program that uses the standard library — which is what the sentence in
+§ 2b says, and what `mc install` ([cli.md](cli.md) § 3e) fixes. For **`mc-slim`**
+([bundle.md](bundle.md) § The slim flavour) step 3 means every `<name>` there is, `<mc/core>`
+included.
 
 **Step 3 has three roots**, tried in this order (M52):
 
@@ -95,6 +99,25 @@ What a root holds is the repository layout, and an installed one has one extra f
 `<mc/core>` is `src/core.mc`. The repository keeps that file under `tools/`, and the copy at the
 root is deliberately **not** in `[package].files` — it must not move the tree hash the registry
 published.
+
+### A compiler that cannot see the tree beside `mc`
+
+Roots 2 and 3 are relative to **the binary doing the compiling**, and two shapes put that binary
+somewhere else:
+
+* **A taught compiler** (`[compiler]` in `mc.toml`, [../build.md](../build.md) § `[compiler]`) is
+  written into the project's own `build/` directory. When `mc build` **spawns** it, the parent
+  passes its own `<libs>` along, so nothing has to be said; on the two-step road
+  (`mc build --compiler-only`, then that compiler with `--entry-only`) nothing forwards anything,
+  and the second command names the tree itself: `--libs-dir <prefix>/lib`, where `<prefix>/lib`
+  is the directory that holds `mc/v<version>/`.
+* **Inside `mc sandbox`** the compiler is a single file bound at `/mc` and the box has no `/proc`
+  for it to read its own path from, so the box mounts the tree where `<libs>` looks instead
+  ([sandbox.md](sandbox.md) § The tree).
+
+`--libs-dir DIR` **replaces** `<libs>`, so a directory named that way is expected to be a whole
+one: packages under `DIR/<pack>/v<ver>/` *and* the compiler's own library tree under
+`DIR/mc/v<version>/`. `mc install --libs-dir DIR` writes the second.
 
 ## 2b. When nothing answered
 

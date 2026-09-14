@@ -2019,6 +2019,66 @@ prog.mc:1: #include <prelude>: not bundled in this compiler and mc 0.16.0 is not
 ([reference/bundle.md](reference/bundle.md) § The slim flavour,
 [reference/cli.md](reference/cli.md) § 3e).
 
+## M52 — the standard library travels beside the binary
+
+The blob inside `mc` holds **the compiler's own source**: every `src/` path of
+`tools/bundle.list`, plus `prelude` and `user_default`, which are the two files `src/` itself
+`#include`s. That is 60 of the manifest's 101 rows. The other 41 — `<sys>`, `<io>`, `<float>` and
+its machines, `<i128>`, `<u128>`, `<f16>`, the system layers, every teaching fixture and the two
+`#embed` payloads — live in a tree next to the executable:
+
+```
+mc-0.16.0-macos-arm64/
+    mc
+    lib/mc/v0.16.0/bundle.list      the NAME<TAB>PATH map
+    lib/mc/v0.16.0/lib/…            the library sources
+```
+
+`make` lays the same tree beside `build/mc1` (`scripts/libroot.sh`, one definition read by the
+`Makefile` and by `scripts/release-assets.sh`), so nothing in this repository needs a flag.
+**No `#include` spelling changed**: `<float>` is `<float>` before and after, and the object a
+program compiles to is byte for byte the one it compiled to before — a library's bytes are the same
+bytes whichever road hands them over.
+
+Measured (macOS arm64, the same compiler with the 41 rows in and out):
+
+| | binary | `__text` | `__DATA,__data` | blob |
+|---|---|---|---|---|
+| all 101 rows in the blob | 1 400 552 | 540 924 | 692 576 | 678 368 |
+| 60 rows, 41 in the tree | **1 268 454** | 540 924 | 567 952 | 556 168 |
+
+**−9.4% of the binary, −18.0% of `__DATA,__data`, and not one byte of `__text`** — a bundle row is
+data, so nothing about the code moves.
+
+Where the tree is looked for, in order, is
+[reference/packages.md § 2](reference/packages.md#2-the-resolution-order): `<libs>` (that is
+`--libs-dir DIR` or `$HOME/.mc/libs`, what `mc install` writes), then `lib/mc/v<version>/` beside
+the binary, then one directory up for a packager who puts `mc` in `bin/`. A binary copied out of a
+tarball **without** the `lib/` directory compiles no program that uses the library, and says so:
+
+```
+prog.mc:1: #include <sys>: not in this compiler and mc 0.16.0's library tree was not found: run mc install
+```
+
+### A taught compiler, and `--libs-dir`
+
+A `[compiler]` section makes `mc build` write a second compiler into the project's own `build/`
+directory, and roots 2 and 3 are relative to **the binary doing the compiling** — so that compiler
+cannot see the tree beside `mc`. When `mc build` spawns it (the ordinary road, one command) the
+parent passes its own `<libs>` down and there is nothing to do. On the **two-step** road the second
+command has to name it:
+
+```
+$ mc build DIR --compiler-only
+DIR/build/mc-mine
+$ DIR/build/mc-mine build DIR --entry-only --libs-dir <prefix>/lib
+```
+
+where `<prefix>/lib` is the directory that holds `mc/v<version>/` — `build/lib` in this
+repository, `<install prefix>/lib` for a release. `examples/lang/test.sh`,
+`examples/kernel/test.sh` and `scripts/check-opt.sh` are the three scripts here that take that
+road, and each one names it.
+
 ## Limits of M14, M15, M16 and M23
 
 - **`[target]` defaults to the host.** With no `[target]` section at all, `os` and `arch` are what

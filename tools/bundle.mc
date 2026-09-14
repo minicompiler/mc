@@ -117,11 +117,59 @@ void bl_verify() {
     }
 }
 
+// M52 step B (docs/specs/M52.md § 2, D1): which rows go into the BLOB.
+//
+//   in the blob  <=>  the path is under src/  or  the name is prelude or user_default
+//
+// The owner's rule is "a row stays iff the compiler itself is built from it",
+// and by construction that is the path: src/*.mc IS the compiler's source. The
+// two exceptions are the compiler's own `#include`s -- sixteen files under src/
+// include ../lib/prelude.mc and src/user.mc includes ../lib/user_default.mc,
+// and inside the blob those relative includes resolve by name (M15's
+// last-component fallback). Drop either and `<mc/core>` is broken, which
+// scripts/check-standalone.sh reports at once.
+//
+// Everything else -- the libraries, the teaching fixtures, the two #embed test
+// payloads -- travels in the library tree beside the binary (scripts/libroot.sh
+// lays it; resolution root 2, M52 step A) and not inside the binary.
+// tools/bundle.list keeps all of its rows either way: it is the NAME<TAB>PATH
+// map an installed tree reads, so a row that left the blob must still be in it
+// or the library is unreachable by either road.
+i64 bl_in_blob(uptr name, uptr path) {
+    if (str_eq(name, "prelude")) return 1;
+    if (str_eq(name, "user_default")) return 1;
+    return mem_eq(path, "src/", 4);
+}
+
+// Drop every row the predicate refuses, keeping manifest order. bl_verify has
+// already run over ALL of them, so the sorted-and-unique invariants still cover
+// the whole map; from here on bl_count is the number of rows in the blob.
+void bl_cut() {
+    i64 w = 0;
+    i64 i = 0;
+    loop {
+        if (i >= bl_count) break;
+        if (bl_in_blob(bl_name_at(i), bl_path_at(i))) {
+            st64(bl_name + w * 8, bl_name_at(i));
+            st64(bl_path + w * 8, bl_path_at(i));
+            w = w + 1;
+        }
+        i = i + 1;
+    }
+    out_str(1, "bundle: ");
+    out_num(1, bl_count - w);
+    out_str(1, " of ");
+    out_num(1, bl_count);
+    out_str(1, " rows leave the blob for the library tree\n");
+    bl_count = w;
+}
+
 void bl_report(uptr name, i64 raw, i64 c) {
     out_str(1, "  ");
     out_str(1, name);
     i64 pad = 20 - cstrlen(name);
-    loop {
+    if (pad < 1) pad = 1;                  // a name past the column still gets
+    loop {                                 // one space: the report is parsed
         if (pad <= 0) break;
         out_str(1, " ");
         pad = pad - 1;
@@ -141,6 +189,7 @@ i64 main(i64 argc, uptr argv) {
     uptr out = ld64(argv + 16);
     bl_load(list);
     bl_verify();
+    bl_cut();
 
     u8 blob[BUF_SIZE];
     buf_init(blob);

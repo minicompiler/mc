@@ -349,6 +349,11 @@ i64 sb_landlock_apply() {
     // (newfstatat)`. Measured on the VPS; AArch64's loader hid it, because its
     // fallback finds libc in the first default directory it tries.
     if (rc >= 0) rc = sb_ll_rule(rs, "/etc/ld.so.cache", LL_READ_FILE);
+    // M52 step B: the `mc` package's library tree, mounted inside /src but a
+    // mount of its own, so the /src rule above does not reach it. sb_lib is 0
+    // when there is none and when the box could not mount it, which is what
+    // keeps this rule from naming a path that is not there.
+    if (rc >= 0 && sb_lib() != 0) rc = sb_ll_rule(rs, sb_lib_box(), LL_READ_ONLY);
     i64 i = 0;
     while (i < sb_nro() && rc >= 0) {
         rc = sb_ll_rule(rs, sb_box_ro_at(i), LL_READ_ONLY);

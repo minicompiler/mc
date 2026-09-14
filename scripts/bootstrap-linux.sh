@@ -372,6 +372,17 @@ else
     echo "=== M49 -- the optimized road: SKIPPED (build/mc1l does not accept --opt=) ==="
 fi
 
+# M52 step B: the suite below compiles programs that say `#include <sys>`, and
+# since the cut that name comes from the library tree beside the binary
+# (docs/reference/packages.md § 2). The compiler that just came out is
+# build/mc2l, so the tree has to be under build/ -- and a foreign host starts
+# from a `build/` that holds the seed and nothing else: scripts/check-linux-host.sh
+# untars the checkout WITHOUT it, and a CI leg links the object it was handed.
+# The chain above needs nothing of this: src/mc_linux.mc has relative includes.
+if [ -f scripts/libroot.sh ] && [ -f tools/bundle.list ]; then
+    sh scripts/libroot.sh build
+fi
+
 echo ""
 if [ "$use_exe" = "1" ]; then
     # the whole suite through the compiler that just came out, with no linker
