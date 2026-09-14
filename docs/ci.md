@@ -159,7 +159,9 @@ Runs `make check` unchanged: `budget`, `test`, `check-lex`, `check-ast`, `check-
 `test-exe`, `check-mc`, `check-standalone`, `check-toml`, `check-build`, `check-sysroots`,
 `check-stubs`, `check-limits`,
 `test-linux`, `test-linux-x86_64`, `test-windows`, `test-windows-x86_64`, `check-examples`,
-`check-lang`, `check-docs`,
+`check-lang`, `check-docs`, `check-freeze` (M53: the recorded public surface,
+[../tests/golden/surface.txt](../tests/golden/surface.txt), against what
+`scripts/surface-extract.sh` reads out of the tree),
 `site` and `check-site`. No environment variable is passed and the `Makefile` is not touched: the
 three cross-target suites already guard themselves, `check-stubs` skips whichever of its two
 linker cases is missing a linker, and `check-site` skips `checkhtml.py`/`contrast.py` when

@@ -491,6 +491,19 @@ check-avr: build/mc1
 check-docs: build/mc1
 	scripts/check-docs.sh build/mc1
 
+# M53 step A: the surface freeze. scripts/surface-extract.sh prints the seven
+# kinds; this gate compares that against tests/golden/surface.txt and fails on
+# any difference -- a removal because it is a MAJOR, an addition because every
+# surface change costs one committed line in the same pull request. It needs no
+# compiler (it is grep over src/), so it runs on every host.
+check-freeze:
+	sh scripts/check-freeze.sh
+
+# Re-record tests/golden/surface.txt. A named act, not the hash goldens'
+# delete-and-rerun: this file's content is the review artefact.
+record-surface:
+	sh scripts/check-freeze.sh --record
+
 # M27: the documentation site. `mc build site` compiles site/gen/*.mc into
 # build/mcsite; running it renders docs/ into site/public. Since 0.15.1 mcsite
 # is host-neutral: site/mc.toml carries no [target] and picks its host layer
@@ -687,14 +700,14 @@ endif
 # scripts/check-linux-host.sh untars the tree EXCLUDING build/, and a CI leg
 # links the object it was handed. On macOS `mc1` already depends on it.
 ifeq ($(HOST),Linux)
-check: libroot budget bootstrap-linux check-lex check-ast check-asm check-obj check-bundle check-mc test-exe check-toml check-tool check-sysroots check-limits check-shim test-sandbox check-skipped
+check: libroot budget bootstrap-linux check-lex check-ast check-asm check-obj check-bundle check-mc test-exe check-toml check-tool check-sysroots check-limits check-freeze check-shim test-sandbox check-skipped
 else ifneq (,$(WINHOST))
 # M38: the Windows subset. Everything not here needs `mc` plus something this
 # host does not have -- the C seed, the Mach-O direct-executable backend, GTK4,
 # Docker or python3 -- and `check-skipped` prints the reason for each one.
-check: libroot budget bootstrap-windows check-lex check-ast check-asm check-obj check-bundle check-mc check-toml check-sysroots check-limits check-skipped
+check: libroot budget bootstrap-windows check-lex check-ast check-asm check-obj check-bundle check-mc check-toml check-sysroots check-limits check-freeze check-skipped
 else
-check: budget test check-lex check-ast check-bundle check-asm check-obj bootstrap check-surface check-opt test-exe check-mc check-standalone check-parts check-libroot check-toml check-build check-pkg check-tool check-sysroots check-stubs check-limits check-minimal test-linux test-linux-x86_64 test-windows test-windows-x86_64 test-windows-x86_64-exe check-examples check-lang check-conc check-desktop check-float check-wide check-kernel check-avr check-docs site check-site check-site-linux test-linux-exe test-linux-x86_64-exe test-sandbox
+check: budget test check-lex check-ast check-bundle check-asm check-obj bootstrap check-surface check-opt test-exe check-mc check-standalone check-parts check-libroot check-toml check-build check-pkg check-tool check-sysroots check-stubs check-limits check-minimal test-linux test-linux-x86_64 test-windows test-windows-x86_64 test-windows-x86_64-exe check-examples check-lang check-conc check-desktop check-float check-wide check-kernel check-avr check-docs check-freeze site check-site check-site-linux test-linux-exe test-linux-x86_64-exe test-sandbox
 endif
 
 budget:
@@ -734,7 +747,7 @@ bench-cell: build/mc1
 .PHONY: check-tool check-linux-host check-skipped check-shim test-sandbox sandbox-trace sandbox-trace-check mc-linux-gnu mc-linux-x86_64-gnu
 .PHONY: bootstrap-windows mc-windows mc-windows-x86_64 mc-windows-obj mc-windows-x86_64-obj
 .PHONY: libroot check-libroot
-.PHONY: all stage0 stage0-san test check-lex check-ast check-asm check-obj mc1 mc-seed bootstrap check-surface test-exe bundle check-bundle check-mc check-standalone check-parts check-toml check-build check-pkg check-sysroots check-stubs check-limits sysroot-linux sysroot-linux-x86_64 sysroot-windows sysroot-windows-x86_64 test-linux test-linux-x86_64 test-windows test-windows-x86_64 test-windows-exe test-windows-x86_64-exe check-examples check-lang check-conc check-docs site check-site check budget clean check-desktop check-minimal mcrt-windows mcrt-windows-x86_64 check-float check-wide check-kernel check-avr check-opt test-linux-exe test-linux-x86_64-exe bench bench-cell
+.PHONY: check-freeze record-surface all stage0 stage0-san test check-lex check-ast check-asm check-obj mc1 mc-seed bootstrap check-surface test-exe bundle check-bundle check-mc check-standalone check-parts check-toml check-build check-pkg check-sysroots check-stubs check-limits sysroot-linux sysroot-linux-x86_64 sysroot-windows sysroot-windows-x86_64 test-linux test-linux-x86_64 test-windows test-windows-x86_64 test-windows-exe test-windows-x86_64-exe check-examples check-lang check-conc check-docs site check-site check budget clean check-desktop check-minimal mcrt-windows mcrt-windows-x86_64 check-float check-wide check-kernel check-avr check-opt test-linux-exe test-linux-x86_64-exe bench bench-cell
 
 # M32: examples/desktop -- a GTK4 application written in mc, and the same
 # application with its widget tree written in a UI language taught by ui.mc.

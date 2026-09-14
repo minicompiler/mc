@@ -1557,3 +1557,11 @@ of `mc`, in `<mc/core_min>`, so that a recreated compiler writes a five-line
   client like everyone else;
 * with no machine registered it says `no machine registered` before it lowers
   anything.
+
+## 8. Stability
+
+Every name on this page is in the recorded public surface
+([`../../tests/golden/surface.txt`](../../tests/golden/surface.txt), 420 entries, compared on
+every `make check` by `check-freeze`); what a PATCH, a MINOR and a MAJOR may move — and the
+deprecation lane that replaces a dry rename — is [`../specs/M53.md`](../specs/M53.md) § 5 until
+this section is written in full (M53 step B).
