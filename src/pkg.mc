@@ -1477,6 +1477,31 @@ i64 pkg_sync() {
     return 0;
 }
 
+// ---- the sync step of `mc build --sync` (M52 D7) ----
+// The SAME pkg_sync above: same plan, same [[permission]] consent, same --yes,
+// same refusals. What this adds is the answer `mc build` needs and `mc pkg
+// sync` does not -- may the build go on?
+//
+// pkg_sync returns 0 both when the lock is ready and when it printed a plan it
+// did not run, because for `mc pkg sync` those are the same outcome: it said
+// what it would do. For a build they are not. Without --yes, a plan that was
+// printed and not executed means the lock was not rewritten, so the build would
+// either read a stale lock or refuse; and a permission set nobody has accepted
+// must not be walked past by a build any more than by a sync. Both answer -1:
+// the plan is on the screen, and nothing else happens.
+//
+// A project with no [deps] and no [tools] is `sync: no dependencies` and 0 --
+// the lock is written empty and the build follows, which is what a no-op sync
+// has to mean.
+i64 pkg_sync_for_build(uptr dir, uptr cfg, i64 yes) {
+    pkg_open_config(dir, cfg);
+    if (yes) pk_set_yes(1);
+    i64 rc = pkg_sync();
+    if (rc != 0) return rc;
+    if (!pk_yes() && (pk_nplan() > 0 || pkg_perm_ask())) return -1;
+    return 0;
+}
+
 // ---- list ----
 // One line per lock row: name, version, the first 12 characters of the hash,
 // and which road served it. No absolute path anywhere, which is what makes it a

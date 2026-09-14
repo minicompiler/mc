@@ -11,7 +11,7 @@ prints one more line; `mc` with no argument prints it and exits 1:
 usage: mc [--dump-tokens|--dump-ast|--dump-asm|--dump-syms|--dump-rules|--dump-machine] [--backend=NAME|--exe] [--machine=NAME] [--include=DIR] [--opt=N|-O] [--libc=gnu|musl] [--interp=PATH] [--link=dynamic|static] source.mc [-o out]
        mc --host
        mc --version
-usage: mc build [DIR] [--config FILE] [--compiler-only] [--limits|--fix-limits] [--sysroot-dir DIR] [--libs-dir DIR]
+usage: mc build [DIR] [--config FILE] [--sync [--yes]] [--compiler-only] [--limits|--fix-limits] [--sysroot-dir DIR] [--libs-dir DIR]
        mc limits [DIR|FILE.mc]
        mc sysroot list|path <target>|fetch <target> [--yes] [--sysroot-dir DIR]
        mc sysroot stub [DIR] [--config FILE]
@@ -241,7 +241,7 @@ symbol name; the source file is required only because `user_init()` runs after `
 ## 2. `mc build` — the project driver
 
 ```
-mc build [DIR] [--config FILE] [--entry-only] [--compiler-only] [--limits | --fix-limits] [--sysroot-dir DIR] [--libs-dir DIR]
+mc build [DIR] [--config FILE] [--sync [--yes]] [--entry-only] [--compiler-only] [--limits | --fix-limits] [--sysroot-dir DIR] [--libs-dir DIR]
 ```
 
 `DIR` defaults to `.`, the config to `DIR/mc.toml`. Every path inside the file is relative to the
@@ -253,6 +253,8 @@ thing as `mc build` from inside `examples/api`. Every key is in [toml.md](toml.m
 | `--config FILE` | use FILE instead of `DIR/mc.toml`. Missing argument: `mc: --config requires an argument`. |
 | `--entry-only` | skip the `[compiler]` step and compile `[project].entry` with the running binary. This is the flag `mc build` passes to the taught compiler it just built — you rarely type it. |
 | `--compiler-only` | build the taught compiler from `[compiler].modules`, print its path on stdout and stop — no spawn, no entry. This is the flag a `test.sh` wants when it drives the taught compiler over its own suite, and the one an editor server needs. Without a `[compiler].modules` it is an error (`missing key: compiler.modules`), not a silent full build; together with `--entry-only` it is `mc: --entry-only and --compiler-only are exclusive`. |
+| `--sync` | run the sync step of [`mc pkg sync`](packages.md) first, and then build. **This is the only road from a build to the network** — without it `mc build` opens no socket and spawns no downloader, whatever the project says. Without `--yes` it prints the plan and stops: no lock is written and nothing is built (exit 0). On a project with no `[deps]` and no `[tools]` it is `sync: no dependencies`, an empty lock, and the build. The registry is `[registry].url` or the default — `mc build` has no `--registry` flag. On a compiler assembled without `<mc/core_pkg>` the flag is `mc: --sync needs the package half of this compiler: mc pkg is not in it`, exit 1. |
+| `--yes` | with `--sync`: accept the plan and the `[[permission]]` sets it printed, exactly as for `mc pkg sync --yes`. On its own it is `mc: --yes applies to --sync: mc build downloads nothing without it`. |
 | `--limits` | after the build, print the table report and return a verdict (see below). |
 | `--fix-limits` | the same report, and rewrite **only** the `[limits]` section of `mc.toml` with the smallest tolerance that would have avoided `grew` and `tight`. |
 | `--libs-dir DIR` | where an installed package lives, instead of `$HOME/.mc/libs`. It is the second road a `#include <pack/file.mc>` takes, after a vendored `deps/<pack>/`, and it is also where the installed `mc` package is looked for. CI passes it so that no job depends on `HOME`, exactly as `--sysroot-dir` does. Missing argument: `mc: --libs-dir requires an argument`. See [packages.md](packages.md). |
@@ -269,6 +271,19 @@ compile main.mc -> build/api
 
 One line per step, always `what from -> to`. The steps are `compiler` (a `[compiler]` section
 was present), `compile` and `link` (a `[linker]` section was present).
+
+With `--sync` the sync's own lines come first, and there is exactly one set of them however many
+compilers the build runs: a project with a `[compiler]` section builds a taught compiler and spawns
+it with `--entry-only`, and `--sync` is not passed on — the parent synced, and the child compiles
+the entry from the lock the parent wrote.
+
+```
+$ mc build --sync --yes
+fetch  plot 1.0.0     https://.../plot-1.0.0.tar.gz
+fetch  mathx 1.1.0    https://.../mathx-1.1.0.tar.gz
+lock   mc.lock (2 packages)
+compile main.mc -> build/sync
+```
 
 ## 3. `mc limits` — the table report
 

@@ -65,7 +65,8 @@ cleanup() {
            "$here/tests/pkg/app-float/build" "$here/tests/pkg/app-bad/build" \
            "$here/tests/pkg/app-extra/build" "$here/tests/pkg/std/build" \
            "$here/tests/pkg/sync/build" "$here/tests/pkg/sync/deps" \
-           "$here/tests/pkg/sync/mc.lock" "$here/tests/pkg/major/build" \
+           "$here/tests/pkg/sync/mc.lock" "$here/tests/pkg/sync/reg.toml" \
+           "$here/tests/pkg/sync/reg-teach.toml" "$here/tests/pkg/major/build" \
            "$here/tests/pkg/major/mc.lock" "$here/tests/pkg/add/build" \
            "$here/tests/pkg/add/mc.lock" "$here/tests/pkg/add/deps" \
            "$here/tests/pkg/perm/build" "$here/tests/pkg/perm/deps" \
@@ -2187,6 +2188,112 @@ if [ "$rc" != 0 ] && printf '%s' "$out" | grep -qF "$want"; then
 else
     fail "the refusal with neither root" "exit $rc: $out"
 fi
+
+# ---- 38. M52 step C: `mc build --sync`, the one road from a build to network --
+# D7. `mc build --sync` is pkg_sync followed by the build: the same plan, the
+# same --yes, the same refusals. Five questions are asked of it here, and the
+# sixth -- a compiler assembled without <mc/core_pkg> -- is check-parts', which
+# is the script that reasons about parts.
+#
+#   a  plain `mc build` on an unsynced project still refuses, with its run: line
+#   b  `--sync` without `--yes` prints the plan and stops: no lock, no build
+#   c  `--sync --yes` fetches, writes the lock and builds, in one command
+#   e  and afterwards a plain `mc build` runs under the FULL shim (a `tar` that
+#      exits 97 as well as the two downloaders) and still builds
+#   d  with a [compiler], the sync happens ONCE -- in this process. The child is
+#      spawned with --entry-only and drv_teach writes that argv name by name, so
+#      the flag cannot reach it: one `lock` line and two `fetch` rows, not four.
+#
+# The registry is the same fixture DIRECTORY the sections above build, named by
+# a [registry] table appended to a copy of the project's config -- `mc build`
+# has no --registry flag, and does not need one.
+mkdir -p "$tmp/c3"
+sh scripts/libroot.sh --libs "$tmp/c3" "$mcver" > /dev/null
+regline="[registry]\\nurl = \"$reg\"\\n\\n[limits]"
+sed "s|^\[limits\]|$regline|" tests/pkg/sync/mc.toml    > tests/pkg/sync/reg.toml
+sed "s|^\[limits\]|$regline|" tests/pkg/sync/teach.toml > tests/pkg/sync/reg-teach.toml
+# `mc build --sync` unpacks an archive, so it needs the real tar -- the two
+# downloaders still refuse, which is what makes "it never reached the network" a
+# property of the run and not of the registry's shape.
+bsync() {                             # bsync CONFIG LIBSDIR [FLAGS...]
+    bcfg="$1"; blibs="$2"; shift 2
+    rm -rf tests/pkg/sync/build
+    PATH="$tmp/bin2:$realpath_env" "$cc" build tests/pkg/sync --config "$bcfg" \
+        --libs-dir "$blibs" "$@" > "$tmp/o" 2>&1
+    rc=$?
+}
+rm -f tests/pkg/sync/mc.lock
+rm -rf tests/pkg/sync/build
+
+# (a) no lock, no --sync: the refusal, with nothing spawned at all
+build tests/pkg/sync tests/pkg/sync/reg.toml "$tmp/c3"
+if want_exit "an unsynced build refuses" 2; then
+    if grep -q "mc.lock is stale" "$tmp/o" && grep -q "run:" "$tmp/o"; then
+        ok "mc build without --sync still refuses: $(grep -m1 'mc.lock is stale' "$tmp/o")"
+    else
+        fail "an unsynced build refuses" "$(cat "$tmp/o")"
+    fi
+fi
+
+# (b) --sync without --yes: the plan, and nothing else
+bsync tests/pkg/sync/reg.toml "$tmp/c3" --sync
+if [ "$rc" != 0 ]; then
+    fail "mc build --sync without --yes" "exit $rc: $(cat "$tmp/o")"
+elif [ "$(grep -c '^fetch  ' "$tmp/o")" != 2 ]; then
+    fail "mc build --sync without --yes" "expected 2 fetch rows: $(cat "$tmp/o")"
+elif ! grep -q "nothing was downloaded: re-run with --yes" "$tmp/o"; then
+    fail "mc build --sync without --yes" "no 'nothing was downloaded' line: $(cat "$tmp/o")"
+elif [ -f tests/pkg/sync/mc.lock ]; then
+    fail "mc build --sync without --yes" "a lock was written"
+elif grep -q '^compile ' "$tmp/o"; then
+    fail "mc build --sync without --yes" "it built anyway"
+else
+    ok "mc build --sync: the plan is printed, no lock is written and nothing is built"
+fi
+
+# (c) --sync --yes: one command, and the program runs
+bsync tests/pkg/sync/reg.toml "$tmp/c3" --sync --yes
+if [ "$rc" != 0 ]; then
+    fail "mc build --sync --yes" "exit $rc: $(cat "$tmp/o")"
+elif ! cmp -s tests/pkg/sync/mc.lock tests/pkg/sync/mc.lock.expect; then
+    fail "mc build --sync --yes" "the lock differs from mc.lock.expect"
+else
+    out=$(tests/pkg/sync/build/sync 2>/dev/null); arc=$?
+    if [ "$arc" = 42 ] && [ "$out" = "plot 110" ]; then
+        ok "mc build --sync --yes: fetched, locked and built in one command, exit 42"
+    else
+        fail "the synced build runs" "exit $arc, stdout '$out'"
+    fi
+fi
+
+# (e) and now, with everything fetched, a build under the FULL shim
+build tests/pkg/sync tests/pkg/sync/reg.toml "$tmp/c3"
+want_exit "a synced build needs no tar and no downloader" 0 \
+    && ok "after --sync, plain mc build works with curl, wget AND tar refusing"
+
+# (d) the [compiler] shape: the child never syncs
+rm -f tests/pkg/sync/mc.lock
+rm -rf "$tmp/c4"
+mkdir -p "$tmp/c4"
+sh scripts/libroot.sh --libs "$tmp/c4" "$mcver" > /dev/null
+bsync tests/pkg/sync/reg-teach.toml "$tmp/c4" --sync --yes
+nlock=$(grep -c '^lock   ' "$tmp/o")
+nfetch=$(grep -c '^fetch  ' "$tmp/o")
+if [ "$rc" != 0 ]; then
+    fail "a taught compiler with --sync" "exit $rc: $(cat "$tmp/o")"
+elif [ "$nlock" != 1 ] || [ "$nfetch" != 2 ]; then
+    fail "a taught compiler with --sync" "$nlock lock lines and $nfetch fetch rows, expected 1 and 2"
+elif ! grep -q '^compiler ' "$tmp/o" || ! grep -q '^compile ' "$tmp/o"; then
+    fail "a taught compiler with --sync" "$(cat "$tmp/o")"
+else
+    out=$(tests/pkg/sync/build/sync 2>/dev/null); arc=$?
+    if [ "$arc" = 42 ]; then
+        ok "with a [compiler]: one sync in the parent, the --entry-only child never syncs"
+    else
+        fail "a taught compiler with --sync runs" "exit $arc, stdout '$out'"
+    fi
+fi
+rm -f tests/pkg/sync/reg.toml tests/pkg/sync/reg-teach.toml
 
 echo "check-pkg: $((total - fails))/$total"
 [ "$fails" -eq 0 ]

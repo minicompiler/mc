@@ -1,0 +1,23 @@
+# tests/pkg/sync/teach.toml -- the same project as mc.toml with a [compiler]
+# section, so that `mc build --sync` is measured on the two-process shape too:
+# this process syncs and writes the lock, and the compiler it builds is spawned
+# with --entry-only and never syncs again (M52 D7).
+#
+# scripts/check-pkg.sh copies this file with a [registry] table appended, since
+# the fixture registry is a directory it builds in $TMPDIR.
+[project]
+name  = "sync"
+entry = "main.mc"
+out   = "build/sync"
+kind  = "exe"
+
+[deps]
+plot  = "1.0.0"
+mathx = "1.0.0"
+
+[compiler]
+out     = "build/mc-sync"
+modules = ["user.mc"]
+
+[limits]
+tolerance = 1.0
