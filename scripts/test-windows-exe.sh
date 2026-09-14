@@ -101,12 +101,18 @@ skip_reason() {
 #   self  the source includes <sys_windows>: wrap it with an mc_start
 #   pure  no I/O layer and no mc-wrapper extern: build bare (synthesized entry)
 #   ""    a portable I/O test: skipped, it belongs to the lld-link path
+# Every pattern is anchored at the start of a line, which is where a directive
+# and a declaration live (the same rule src/limits.mc's pre-scan follows: only a
+# #include that OPENS a line is one). Unanchored, a test whose HEADER COMMENT
+# names <sys_windows> -- 074 does, to say why it is not on this road -- was
+# classified `self` and wrapped with an mc_start calling win_setup, which the
+# source does not carry: `call to unknown function`.
 classify() {
-    if grep -q '#include *<sys_windows>' "$1"; then echo self; return; fi
+    if grep -q '^#include *<sys_windows>' "$1"; then echo self; return; fi
     # any macOS/Linux I/O layer brings mc-wrapper `extern write` etc. that a PE
     # cannot import: <sys>, <sys_svc>, <sys_linux*>, <io>, or a quoted sys*.mc
-    if grep -qE '#include *<(sys[a-z0-9_]*|io)>|#include *"[^"]*sys([a-z0-9_]*)?\.mc"' "$1"; then echo ""; return; fi
-    if grep -qE '\bextern\b.*\b(open|creat|read|write|close|exit)[[:space:]]*\(' "$1"; then echo ""; return; fi
+    if grep -qE '^#include *<(sys[a-z0-9_]*|io)>|^#include *"[^"]*sys([a-z0-9_]*)?\.mc"' "$1"; then echo ""; return; fi
+    if grep -qE '^extern\b.*\b(open|creat|read|write|close|exit)[[:space:]]*\(' "$1"; then echo ""; return; fi
     echo pure
 }
 
