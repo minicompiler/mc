@@ -6335,26 +6335,37 @@ agents (`.claude/agents/`): `stage0-dev` (C23), `mc-dev` (`.mc` code), `reviewer
   native), each after its own plain AND optimized fixed point, its own cross-road identity, and the
   cross proof (`mc2l --backend=macho src/mc.mc` byte for byte the macOS `build/mc2.o`) green in all
   four.
+  **Three more things only CI could see**, all three the cut exposing something step A could not:
+  (1) **roots 2 and 3 never worked on a Windows host** -- `host_self_path()` is
+  `GetModuleFileNameA`, which answers `D:\a\mc\mc\build\mc.exe`, and every path function here
+  cuts on `/` alone, so step A's own no-slash guard refused it; while the blob carried every name
+  nothing asked, and with the cut both Windows legs answered `not in this compiler and mc
+  0.0.0-dev's library tree was not found` for all 41 names. `src/host_windows.mc` hands back one
+  spelling now (forward slashes, which Win32 takes everywhere), which `mc upgrade` and `mc tool`
+  get as well. (2) `check-bundle` names the FILE target `build/mc1` while `$(LIBROOT)` hung off the
+  PHONY `mc1`, so a clean `build/` never got the tree -- it is an order-only prerequisite of
+  `build/mc1` now. (3) the two sandbox CI jobs download the compilers into `build/` and run neither
+  `make check` nor a bootstrap script, so `scripts/ci-sandbox-cell.sh` lays the tree before the
+  cell.
   **The ten goldens rewritten once**, each only after its own criterion -- `mc2.sha256`
-  `61846ac0...96b140` -> `de14cda059265cabe594639250ade4bfeaf29e91c042a147bef7843de26dd14d` and
-  `mc2-opt.sha256` `5f21465033fef708c5397f5c9dc6ed22793b4d8a812935f14306c886927db595` (both by
+  `61846ac0...96b140` -> `629611775ae8004f1e2a2f96be303a781eb215ad7ad15ce1babbece11d493f84` and
+  `mc2-opt.sha256` `e411630785e6f62bb97c56f2cb17d826115d5ed6ad3273509a94c04596f0e8ee` (both by
   `scripts/bootstrap.sh`, after the two empty `--dump-asm` diffs and the two `cmp`s); the four Linux
   ones deleted and re-recorded by `make check-linux-host` --
-  `mc2-linux-arm64.sha256` `2304752f530622b45b9f61b171d2718a63f8602e3c2199404eeea7379763e900`,
+  `mc2-linux-arm64.sha256` `cbbcac6c31cb8c415863176db9a969a3afc1d96f420da52bf614aa79906da953`,
   `mc2-linux-arm64-opt.sha256`
-  `ef5c5cc127c3ae0e894d159298a5d700771141ac22e8b22d0d4374637c88d0cd`,
-  `mc2-linux-x86_64.sha256` `7b6a9b91b8bfd5168a1f8985eca66a2b242a8c2836d6fbceaa0d072f6335ba39`,
+  `c0f22edf9d67c378b2d01a89a7d55796d1e8b11b4af09ff2b40ae0954f9576be`,
+  `mc2-linux-x86_64.sha256` `0d18cbdc7e16539b9ef87481ad756e37b49a0c89a128ff38ee26f1e5367aa99a`,
   `mc2-linux-x86_64-opt.sha256`
-  `2b5c447dd19b5b9f78940ee731043a36874c0586269cb4a164cc8dae1513b17b`, each recorded in its musl
+  `bf9df64d92eb63df5303036c235298ec5cec5ac878e445c261cae4c81a577a0f`, each recorded in its musl
   cell and re-verified by the gnu cell of the same architecture; the four Windows ones
   cross-computed on macOS per `tests/golden/README.md` --
-  `mc2-windows-arm64.sha256` `7659d7c08cb0bfdfcb3b40e60377b9227304ce520195776017119654f20d8331`
-  (1 469 865 B), `mc2-windows-arm64-opt.sha256`
-  `078ca095b3150c6691c79bdbd2d95be14a3fe6f38a2816f423f8ab06b6f92379` (1 411 349 B),
+  `mc2-windows-arm64.sha256` `0378a55da5d213da6a5884cb7e0e976e28a64eafa7c6fd0a39d872ca37f43fad`, `mc2-windows-arm64-opt.sha256`
+  `5dee2dc8c3ef14b504bb85782bf77fc2856efe5e437fbd77ce437c9554bb3474`,
   `mc2-windows-x86_64.sha256`
-  `573f133f9a4d84c8e40d93b7e8cbf9d574e2b922f265a5f7e6488bfed6648328` (1 525 113 B),
+  `3dcf93a4a7cb719617d1b9298d8ab4841167fcfcf13e456c73fbc6cb7cbcb8e9`,
   `mc2-windows-x86_64-opt.sha256`
-  `35a00019c9c15f34bac902c18ac2c306e32ed9da10e381c0aa924171f835d88d` (1 453 353 B).
+  `98a9450354107a35aaa2e812184d182c2656fd2fbe2b9cad624be7ff59cdeb7e`.
   Docs: `docs/reference/bundle.md` (the catalogue split in two with the measured table, and what
   the headline claim is now), `docs/reference/packages.md` § 2 (step 3 is every library name; a new
   § on a compiler that cannot see the tree beside `mc`), `docs/build.md` § M52 (new),

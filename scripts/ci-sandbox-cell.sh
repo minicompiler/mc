@@ -27,6 +27,15 @@ mc="${2:?usage: ci-sandbox-cell.sh CELL MC}"
 
 log="build/sandbox-$cell.log"
 mkdir -p build
+
+# M52 step B: the box compiles programs that say `#include <sys>`, and since the
+# cut that name comes from the `mc` package's library tree, which the box mounts
+# from the host (docs/reference/sandbox.md § The tree). This job downloads the
+# compilers into build/ and runs neither `make check` nor a bootstrap script, so
+# the tree is laid here -- beside the binary, which is where the host looks.
+if [ -f scripts/libroot.sh ] && [ -f tools/bundle.list ]; then
+    sh scripts/libroot.sh build
+fi
 rc=0
 sh scripts/test-sandbox.sh "$mc" > "$log" 2>&1 || rc=$?
 cat "$log"

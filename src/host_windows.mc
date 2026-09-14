@@ -88,11 +88,27 @@ uptr host_home() {
 // scripts/sysroot-windows.sh's kernel32.def, like every other import here.
 extern i64 GetModuleFileNameA(uptr mod, uptr buf, i64 size);
 
+// M52 step B: the separator is a FORWARD slash here, and that is not cosmetic.
+// GetModuleFileNameA answers `D:\a\mc\mc\build\mc.exe`, and every path
+// function in this compiler cuts on '/' alone -- path_join, path_norm,
+// dep_in -- so a backslash path has no directory as far as they are concerned
+// and `<the directory of the binary>/lib/mc/v<ver>/` (resolution root 2,
+// docs/reference/packages.md § 2) could never be formed. Measured: on the
+// windows/x86_64 host every library name came back `not in this compiler and
+// mc 0.0.0-dev's library tree was not found`, with the tree beside the binary.
+// Win32 takes either separator in every call, so one spelling reaches the
+// kernel and the whole compiler reads one kind of path.
 uptr host_self_path() {
     uptr buf = xalloc(4097);
     i64 n = c_int(GetModuleFileNameA(0, buf, 4096));
     if (n <= 0 || n >= 4096) return 0;
     st8(buf + n, 0);
+    i64 i = 0;
+    loop {                                  // the core form: this file is
+        if (i >= n) break;                  // compiled on its own by
+        if (ld8(buf + i) == '\\') st8(buf + i, '/');   // check-asm, with no
+        i = i + 1;                          // <prelude> in scope
+    }
     return buf;
 }
 
