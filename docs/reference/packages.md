@@ -50,8 +50,8 @@ A value that starts with `<` is emitted into the generated compiler source verba
 |---|---|---|
 | 1 | the **lock** | `X`'s first path component is a package `mc.lock` names, and the file asking is allowed to reach it (§ 5) |
 | 2 | the **bundle** — the copy inside this binary ([bundle.md](bundle.md)) | every name in the manifest, plus `<mc/bundle_data>` and `<mc/bundle.bin>` |
-| 3 | the **installed `mc` package** under `<libs>/mc/v<version>/` | the same names as step 2, when the binary carries no bundle |
-| — | nobody | `prog.mc:1: unknown bundled include: no/such/module` — or, in a binary that carries no bundle AND has no installation, `prog.mc:1: #include <prelude>: not bundled in this compiler and mc 0.16.0 is not installed: run mc install` |
+| 3 | the **`mc` package's library tree** — installed, or beside the binary | the names step 2 did not answer |
+| — | nobody | `prog.mc:1: unknown bundled include: no/such/module` when a tree was found; otherwise the sentence that names the road (§ 2b) |
 
 Step 1 exists only where a lock was read, which is `mc build`. The single-file CLI
 (`mc x.mc -o x.o`) has no project and therefore no step 1: `<geo/geo.mc>` there is
@@ -62,7 +62,26 @@ that means a name nobody ships, so a full `mc` behaves exactly as it did before 
 unless a lock says otherwise. For **`mc-slim`** ([bundle.md](bundle.md) § The slim flavour) it
 means every `<name>` there is, which is what `mc install` ([cli.md](cli.md) § 3e) is for.
 
-What step 3 reads is `<libs>/mc/v<version>/` in the REPOSITORY layout, with one extra file:
+**Step 3 has three roots**, tried in this order (M52):
+
+| order | root | who puts it there |
+|---|---|---|
+| 1 | `<libs>/mc/v<version>/` — `--libs-dir DIR` or `$HOME/.mc/libs` | `mc install`, `mc upgrade` |
+| 2 | `<the directory of the binary>/lib/mc/v<version>/` | a release tarball, and `make` beside `build/mc1` |
+| 3 | `<the directory of the binary>/../lib/mc/v<version>/` | a packager: `/usr/local/bin/mc` finds `/usr/local/lib/mc/v<version>/` |
+
+`<libs>` is first, so an explicit `mc install` still wins over the copy that shipped — the same
+precedence `--libs-dir` has over `$HOME`. A root is recognised by its `bundle.list`; the first one
+that has that file is the only one read. The directory of the binary is
+its real path (`host_self_path()`, [hooks.md](hooks.md) § 6), never `argv[0]` and never the
+working directory: one source must give one answer wherever `mc` was run from
+([determinism.md](../determinism.md)).
+
+A root may be **partial**, and a release tarball's is: it carries `bundle.list` and the library
+files, about 250 KB, and nothing of `src/` — a full binary answers every `mc/*` name from its own
+blob. A name whose file is not in the tree falls through exactly as an unknown name does.
+
+What a root holds is the repository layout, and an installed one has one extra file:
 
 ```
 ~/.mc/libs/mc/v0.16.0.toml      the cache manifest: name, version, tree hash, one [[file]] row each
@@ -76,6 +95,20 @@ What step 3 reads is `<libs>/mc/v<version>/` in the REPOSITORY layout, with one 
 `<mc/core>` is `src/core.mc`. The repository keeps that file under `tools/`, and the copy at the
 root is deliberately **not** in `[package].files` — it must not move the tree hash the registry
 published.
+
+## 2b. When nothing answered
+
+Three sentences, and which one a reader gets says what to do about it:
+
+| state | message | exit |
+|---|---|---|
+| a root was found, the name is not in its map | `prog.mc:1: unknown bundled include: no/such/module` | 1 |
+| no root at all, and this binary carries a blob | `prog.mc:1: #include <sys>: not in this compiler and mc 0.16.0's library tree was not found: run mc install` | 1 |
+| no root at all, and this binary carries no blob (`mc-slim`) | `prog.mc:1: #include <prelude>: not bundled in this compiler and mc 0.16.0 is not installed: run mc install` | 1 |
+
+The second row is what a binary copied out of a release tarball **without the `lib/` directory
+beside it** says. `mc install` is one road back; putting the `lib/` tree where the binary can see
+it is the other.
 
 **Where a locked package's tree is**, in order:
 
