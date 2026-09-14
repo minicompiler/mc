@@ -659,12 +659,14 @@ box it never needs it: the tree is mounted where `<libs>` looks (§ The tree), a
 tried first. Keeping the call in the profile is what makes the *absence* of a tree report the
 sentence that names `mc install` instead of `refused: syscall 78 (readlinkat)`.
 Measured with `--union` on Ubuntu 26.04 (aarch64, glibc 2.43) and Alpine 3 (aarch64, musl), where
-both C libraries answer `readlinkat`; the two x86-64 lists carry the same row, unmeasured from the
-development host (`strace` decodes nothing under this Mac's amd64 emulation). **On record**: musl
-on x86-64 implements `readlink()` with the `readlink` syscall, which no `SN_*` name covers yet, so
-on such a host a box with *no* tree reports `refused: syscall 89 (readlink)` rather than the
-sentence; one `sh scripts/sandbox-trace.sh --union` on that host is the fix, and it changes nothing
-for a box that has one.
+both C libraries answer `readlinkat` — and then on the `linux/x86_64` sandbox CI cell, which
+answered `readlink`, a *different* system call: **AArch64 has no `readlink` at all**, so both C
+libraries there issue `readlinkat`, while on x86-64 the number exists (89) and glibc 2.39 uses it.
+Both x86-64 compile lists therefore carry both rows and the AArch64 pair carry `readlinkat` alone,
+which is what each host's own trace records; `SN_READLINK` is `SN_ABSENT` on AArch64, so the filter
+builder drops it there. That measurement is the one no host reachable from the development Mac
+could make (`strace` decodes nothing under its amd64 emulation), and it came back as
+`src/sysno.mc has no index for: SN_READLINK`.
 
 `clone` and `clone3` are in the spawn list because the trace saw them and are written into the
 table as a **comment**: no profile allows a call that makes a process (§ The explain channel).

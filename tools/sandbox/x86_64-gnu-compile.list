@@ -17,6 +17,7 @@ openat
 pread64
 prlimit64
 read
+readlink
 readlinkat
 rseq
 rt_sigprocmask

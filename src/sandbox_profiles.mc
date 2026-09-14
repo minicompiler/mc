@@ -121,6 +121,7 @@ i64 sbp_compile_x86_64[] = {
     SN_OPEN,
     SN_PIPE2,
     SN_READ,
+    SN_READLINK,
     SN_READLINKAT,
     SN_RT_SIGPROCMASK,
     SN_SET_TID_ADDRESS,

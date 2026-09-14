@@ -142,7 +142,8 @@ u16 sysno_tab[] = {
     205,        // SN_GETPEERNAME
     210,        // SN_SHUTDOWN
     199,        // SN_SOCKETPAIR
-     66         // SN_WRITEV
+     66,        // SN_WRITEV
+    SN_ABSENT   // SN_READLINK -- AArch64 has readlinkat and nothing else
 };
 
 // the number of SN_*, or -1 when this architecture has no such call
