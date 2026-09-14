@@ -6687,6 +6687,83 @@ agents (`.claude/agents/`): `stage0-dev` (C23), `mc-dev` (`.mc` code), `reviewer
   forwarded only when explicit), `docs/build.md` § `[compiler]`, `docs/reference/hooks.md` § 6
   (`host_self_path` resolves a symlink, and which host needs what),
   `docs/specs/M52.md` (§ 11 row 4 LANDED + § Implementation notes -- step E).
+- M53 step C ✔ (`docs/specs/M53.md` § 6, § 8.6-8.8, § 9 row 3 + its new § Implementation notes --
+  step C): **the release canary** -- every release is born a GitHub pre-release while
+  `vars.MC_CANARY` is armed, a `promote` job polls the consumer's public verdict and clears the
+  flag, and `publish-to-registry` waits behind it. `stage0/`, `src/`, `lib/` and `tests/` untouched
+  -- `git diff --stat src/ stage0/ tests/golden/` is **empty**, no golden moves, the compiler emits
+  not one different byte. Only `.github/workflows/release.yml` (+97/-8), the new
+  `scripts/canary-poll.sh` (167 lines, 106 code) and `docs/`.
+  * **No credential crosses the boundary, either way** (§ 6's constraint). mc cannot dispatch a
+    workflow in the consumer's repository (a PAT) and the consumer cannot receive mc's `release`
+    webhook (a foreign repository does not get one), so both halves are PULL: the consumer polls
+    mc's public releases API with no token, runs its whole recipe against the tarball, and writes a
+    verdict into a branch of its own repository with its own `GITHUB_TOKEN`; mc `curl`s that file
+    with no token at all.
+  * **The verdict is at the ROOT of a branch named `canary`**, `<version>.json`, at
+    `https://raw.githubusercontent.com/teko-org/teko-lang/canary/<version>.json` --
+    `{"version":"0.17.0","status":"ok"|"fail","run":"<actions url>","utc":"..."}`, the version
+    **bare** (a leading `v` is stripped before comparing). § 6.2 point 2's prose and its own URL
+    contradicted each other (`canary/<version>.json` in a branch named `canary` would read
+    `.../teko-lang/canary/canary/0.17.0.json`); **the URL was right, the prose was wrong**, and the
+    spec is corrected in place to the ROOT form -- which is also what the consumer was told through
+    the channel on 2026-09-14 and what it is building. The repository name comes from that channel
+    and `gh repo list teko-org`, not from the milestone's shorthand, and it is the DEFAULT of
+    `CANARY_REPO` rather than a literal, with `vars.MC_CANARY_REPO` overriding it.
+    **A missing file is neither `ok` nor `fail`** -- the verdict has not been written yet and the
+    poll continues; so is any other value, which lets the consumer write a placeholder without mc
+    acting on it. A verdict naming a different version is not this release's and the poll says so.
+  * **Three repository variables, and unarmed is byte for byte the pipeline that was there.**
+    `MC_CANARY = true` arms it (§ 6.2 point 1's own spelling -- not `"1"` and not `"required"`,
+    which is a second question): `publish`'s `case "$VERSION" in *-*)` is untouched and one
+    `if [ "$CANARY" = "true" ]` below it forces `--prerelease`, and the body composer appends a
+    Canary paragraph naming the one manual command. `MC_CANARY_REQUIRED = true` at 1.0.0
+    ("bloqueante no 1.0.0"), as the job's `continue-on-error: ${{ vars.MC_CANARY_REQUIRED != 'true'
+    }}` -- so § 6.2 point 5's two states are one variable and not two workflow edits.
+    `MC_CANARY_REPO` moves the consumer. Unset, `promote` is SKIPPED and nothing else changes:
+    `gh variable set MC_CANARY --body true` is the owner's switch, named in `docs/ci.md`.
+  * **`promote` is a job**, `if: vars.MC_CANARY == 'true'`, `needs: publish`, `ubuntu-latest`,
+    `timeout-minutes: 95`, `permissions: contents: write` (only it and `publish` have it), one
+    checkout and one step. A job and not a step for `publish-to-registry`'s exact reason (§ 6.2
+    point 3): a failed promotion must not be able to unmake a published release, and a rerun of the
+    job alone is the retry. The 90-minute poll at 60 s is § 6.2 point 4's budget -- up to 15 minutes
+    for the consumer's schedule plus its recipe -- and 95 is that plus the checkout.
+  * **The four outcomes, from the lines.** `ok` -> `gh release edit "$TAG" --prerelease=false`,
+    exit 0, the registry runs. `fail` -> `::error::` + the by-hand line + exit 1, the release left a
+    pre-release with every asset attached; advisory the RUN stays green and the job renders red
+    (§ 8.7), required the run is red and the registry is skipped. `timeout` -> advisory a
+    `::notice::` and the release **promoted anyway** (§ 6.2 point 5 read literally -- a `::notice::`,
+    not the `::warning::` the brief supposed -- so an outage on the consumer's side cannot hold an
+    mc patch), required an `::error::` and the release stays a pre-release. `unarmed` -> skipped.
+  * **`publish-to-registry` is `needs: [publish, promote]`** with an `if` that names a status
+    function, because a job whose `needs` is SKIPPED is skipped too and `promote` is skipped on
+    every release while `MC_CANARY` is unset:
+    `!cancelled() && vars.MC_REGISTRY_PUBLISH == 'true' && needs.publish.result == 'success' &&
+    needs.promote.result != 'failure'`. The load-bearing half is unambiguous -- at 1.0.0
+    `continue-on-error` is false, a `fail` or a required timeout makes that result `failure`, and a
+    pre-release is never announced as the registry's newest row.
+  * **The poll is a script**, `scripts/canary-poll.sh`, not thirty lines of YAML: it is the only way
+    § 8.6's round trip can be reasoned about before a real tag exists, and it is the repository's own
+    precedent (`next-version.sh --test`). `--test` is **7/7 assertions over `file://` URLs**, no
+    network and no framework (ok promotes, a `v`-prefixed field is accepted, `fail` is exit 1, a
+    verdict for another version keeps waiting, an advisory timeout promotes with the `::notice::`,
+    a required timeout is exit 1 with the `::error::`, and the derived URL is § 6.2 point 2's);
+    `--url TAG` prints the URL without touching the network; `DRY_RUN=1` prints the `gh release
+    edit` it would run. `shellcheck -s sh` clean.
+  * **Proof, and what is NOT proved here.** `actionlint .github/workflows/release.yml` reports
+    **exactly the two findings it reports on the same file from `main`** (SC2155 at `:527`, SC2086
+    at `:547`), in the same steps, both predating this change -- zero new. `make check-docs` green
+    (206 symbols, 50 flags, 35 TOML keys, 10 directives, 52 samples, 548 links). § 8.6's measured
+    round trip and § 8.8's job graph need a tag and the consumer's `canary` branch, which does not
+    exist yet (`gh api repos/teko-org/teko-lang/branches/canary` -> 404): **the first real round
+    trip is the next tag with `MC_CANARY` armed**, and its elapsed time and run URL go into
+    `docs/specs/M53.md` § Implementation notes then.
+  Docs: `docs/ci.md` § The canary (new -- the protocol diagram, the contract, the `promote` job, the
+  three variables with the `gh variable set` lines, and `scripts/canary-poll.sh`), § Versioning (a
+  GitHub pre-release is not a pre-release VERSION) and § `release.yml` / § `publish-to-registry`;
+  `docs/specs/M53.md` § 6.1 and § 6.2 point 2 corrected to the ROOT form, § 9 row 3 LANDED, plus
+  twelve implementation notes. `docs/ci.md` § Branch protection needed nothing: `release.yml` fires
+  on a tag and none of its jobs is a pull-request check.
 - Next: the **site + registry server, M47 S4-S6**, in
   `minicompiler/mc-registry`; then **M42 step 2** (PE `--exe`, CI-gated on the Windows runners).
   **M46** only on the owner's request; **M43 Layer 2** after 1.0.0. M13 and M18 stay in the backlog

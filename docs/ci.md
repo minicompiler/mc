@@ -49,10 +49,19 @@ to exist was deleted when releases moved to pull requests, because two sources o
 many. `release-assets.sh` takes the version from its first argument, which `release.yml` derives
 from the tag.
 
-Versions are plain semantic versions, `X.Y.Z`. **No pre-releases**: `release.yml` still marks a
-`-`-suffixed tag as a GitHub pre-release, but neither `autotag.yml` nor `tag.yml` will make one,
-and `scripts/next-version.sh` rejects `0.2.0-rc1` with a message that says so. If a pre-release is
-ever wanted it is a hand-pushed tag, deliberately outside the automation.
+Versions are plain semantic versions, `X.Y.Z`. **No pre-release VERSIONS**: `release.yml` still
+marks a `-`-suffixed tag as a GitHub pre-release, but neither `autotag.yml` nor `tag.yml` will make
+one, and `scripts/next-version.sh` rejects `0.2.0-rc1` with a message that says so. If a
+pre-release version is ever wanted it is a hand-pushed tag, deliberately outside the automation.
+
+A GitHub **pre-release** is a different thing from a pre-release version, and since M53 the project
+uses one and not the other. The flag is a property of the *release*, not of the version string, and
+it is the one property a later job can change — which is what [§ The canary](#the-canary) is built
+on: while `vars.MC_CANARY` is armed every release is born a pre-release at an ordinary `X.Y.Z`
+version, and the `promote` job clears the flag once teko's recipe has passed against it. So a
+release candidate is a *state of a release*, never a suffix; `mc upgrade` and `mc pkg add mc` skip a
+`-`-suffixed version ([reference/packages.md](reference/packages.md)), and a candidate nobody can
+install is not one ([specs/M53.md](specs/M53.md) § 7).
 
 The arithmetic lives in one place:
 
@@ -652,7 +661,10 @@ artifacts,
 takes the **tag's annotation as the release body**, appends
 an install snippet (macOS, Linux and Windows) and the checksums, and calls
 `gh release create --verify-tag`. A version with a
-`-` suffix (`0.2.0-rc1`) is published as a pre-release. Only this job has `contents: write`.
+`-` suffix (`0.2.0-rc1`) is published as a pre-release, and so is *every* release while
+`vars.MC_CANARY` is armed ([§ The canary](#the-canary)), which also appends a short Canary
+paragraph to the body naming the one manual-promotion command. This job and `promote` are the only
+two with `contents: write`.
 
 ### Job `publish-to-registry` — `ubuntu-latest`
 
@@ -704,6 +716,142 @@ validation is a red release, not a footnote.
 that has accepted the registry's documents, and an unauthenticated request has
 no account. Until that has happened the registry answers **404 `not registered`**
 and this job is red while every job above it is green.
+
+Since M53 step C it is `needs: [publish, promote]`, so that a release still
+marked pre-release is never announced as the registry's newest row — see
+[§ The canary](#the-canary) for how a skipped `promote` is handled.
+
+---
+
+## The canary
+
+A release of `mc` is compiled by teko's compiler before anybody is told it is final. The consumer
+([`teko-org/teko-lang`](https://github.com/teko-org/teko-lang)) runs its whole recipe — its five
+legs, its fixed points, its docs gate — against the published tarball, and mc waits for the answer
+before clearing the pre-release flag. At 1.0.0 that wait is blocking; until then it is advisory.
+
+**No credential crosses the boundary, in either direction.** mc cannot dispatch a workflow in
+teko's repository (that needs a PAT) and teko cannot receive mc's `release` webhook (a foreign
+repository does not get one). Both halves are therefore pull, and the only thing that crosses is a
+public URL each side can read anonymously.
+
+```
+  mc: publish ──► GitHub Release created as a PRE-RELEASE, all assets attached
+                          │
+  teko: schedule (15 min) │ GET /repos/minicompiler/mc/releases   (public, no token)
+                          ▼
+                  newer pre-release than its pin? → run the whole recipe against the tarball
+                          │
+                          ▼  writes with its OWN GITHUB_TOKEN, to its own repo
+        raw.githubusercontent.com/teko-org/teko-lang/canary/<version>.json
+                          │
+  mc: promote ◄───────────┘ polls that URL every 60 s, up to 90 minutes
+        ok      → gh release edit "$TAG" --prerelease=false
+        fail    → job RED, the release stays a pre-release, nothing is unmade
+        timeout → advisory before 1.0.0, RED at 1.0.0
+                          │
+                          ▼
+  mc: publish-to-registry  needs: promote   (a pre-release must not become the newest row)
+```
+
+### The contract
+
+The verdict is **one JSON object at the ROOT of a branch named `canary`** in teko's repository,
+named after the version. The branch is in the URL's ref position, so the file is *not* inside a
+`canary/` directory — that would make the path `.../teko-lang/canary/canary/0.17.0.json`:
+
+```
+https://raw.githubusercontent.com/<owner>/<repo>/<branch>/<version>.json
+https://raw.githubusercontent.com/teko-org/teko-lang/canary/0.17.0.json
+```
+
+```json
+{"version": "0.17.0", "status": "ok", "run": "https://github.com/.../actions/runs/123", "utc": "2026-09-14T18:02:11Z"}
+```
+
+- `version` is the **bare** version, no `v` (a leading `v` is stripped before comparing, so either
+  spelling works). A file whose `version` names a different release is not this release's verdict:
+  the poll says so and keeps waiting.
+- `status` is `ok` or `fail`. **A missing file is neither**: it means the verdict has not been
+  written yet, and the poll continues until the timeout. So is any other value, which is what lets
+  teko write a placeholder without mc acting on it.
+- `run` and `utc` are printed into the job log and are not acted on.
+
+A file and not a commit status, because a status is about a *teko commit* and the canary is about
+an *mc version*, and the mapping would have to be invented. A branch and not GitHub Pages, because
+it needs no Pages setup and is versioned by git.
+
+### Job `promote` — `ubuntu-latest`
+
+`if: vars.MC_CANARY == 'true'`, `needs: publish`, `permissions: contents: write`,
+`timeout-minutes: 95`, `continue-on-error: ${{ vars.MC_CANARY_REQUIRED != 'true' }}`. One checkout
+and one step, `sh scripts/canary-poll.sh "$TAG"`.
+
+It is a job and not a step inside `publish` for `publish-to-registry`'s exact reason: a failed
+promotion must not be able to unmake a published release, and a rerun of the job alone is the
+retry.
+
+**The 90-minute budget**: up to 15 minutes for teko's schedule to notice the pre-release, plus its
+recipe — on its 2026-09-14 dry run a build, 64 fixtures, a bootstrap fixed point, `check-docs` and
+`mc limits`. A `workflow_dispatch` on teko's side removes the 15. The job's own
+`timeout-minutes: 95` is the poll's 90 plus the checkout.
+
+**Manual promotion is one command**, printed in the release note and by the script on every path
+that does not promote:
+
+```sh
+gh release edit v0.17.0 --prerelease=false
+```
+
+### The two variables
+
+Both are repository variables (Settings → Secrets and variables → Actions → Variables), the same
+gating shape as `MC_REGISTRY_PUBLISH`: a job that is red by design would hide a real failure.
+
+| variable | default | armed |
+|---|---|---|
+| `MC_CANARY` | unset | `true` — every release is born a pre-release and `promote` runs. **Unset, nothing changes**: `promote` is skipped and the release is created exactly as it was before M53 |
+| `MC_CANARY_REQUIRED` | unset | `true` at 1.0.0 (*"bloqueante no 1.0.0"*) — `continue-on-error` becomes false and a timeout leaves the release a pre-release |
+| `MC_CANARY_REPO` | unset → `teko-org/teko-lang` | `owner/repo` publishing the verdict, if it ever moves |
+
+```sh
+gh variable set MC_CANARY --body true            # arm it
+gh variable set MC_CANARY_REQUIRED --body true   # at 1.0.0, and not before
+gh variable list
+```
+
+A `fail` **verdict** always leaves the release a pre-release and `promote` red, armed or required —
+`continue-on-error` keeps the *run* green before 1.0.0 but the job still shows as failed. What the
+two variables change is only the **timeout**: advisory, it is a `::notice::` and the release is
+promoted anyway, so a teko outage cannot hold an mc patch; required, it is an `::error::` and the
+release stays a pre-release.
+
+`publish-to-registry` is `needs: [publish, promote]` with an `if` that names `!cancelled()`, because
+a job whose `needs` is *skipped* is skipped too — and `promote` is skipped on every release while
+`MC_CANARY` is unset. `needs.promote.result != 'failure'` is what holds the announcement back: at
+1.0.0, with `continue-on-error` false, a `fail` verdict or a timeout makes that result `failure` and
+the registry is never told about a pre-release.
+
+### `scripts/canary-poll.sh`
+
+The poll and the flip are a script and not thirty lines of YAML so that they can be run and tested
+off a runner, the way `next-version.sh --test` is:
+
+```sh
+sh scripts/canary-poll.sh --test            # 7 assertions, no network, no framework
+sh scripts/canary-poll.sh --url v0.17.0     # prints the URL it would poll
+DRY_RUN=1 CANARY_URL=file://$PWD/verdict.json \
+  sh scripts/canary-poll.sh v0.17.0         # the real poll, against a local verdict
+```
+
+`CANARY_REPO`, `CANARY_BRANCH`, `CANARY_URL`, `CANARY_TIMEOUT`, `CANARY_INTERVAL`,
+`CANARY_REQUIRED` and `DRY_RUN` are the knobs; the script's header lists them with their defaults.
+It exits 0 when the release was promoted (verdict `ok`, or an advisory timeout) and 1 when it was
+not, and it reads the verdict with `curl` and **no token at all**.
+
+What the mc side owes is exactly the list above; it does **not** owe teko's workflow, which is
+teko's pull request, and it does not owe a fallback — if teko never publishes a verdict, every
+release before 1.0.0 is promoted on the timeout and the pipeline is what it is today.
 
 ---
 
