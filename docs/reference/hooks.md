@@ -1560,8 +1560,111 @@ of `mc`, in `<mc/core_min>`, so that a recreated compiler writes a five-line
 
 ## 8. Stability
 
-Every name on this page is in the recorded public surface
-([`../../tests/golden/surface.txt`](../../tests/golden/surface.txt), 420 entries, compared on
-every `make check` by `check-freeze`); what a PATCH, a MINOR and a MAJOR may move — and the
-deprecation lane that replaces a dry rename — is [`../specs/M53.md`](../specs/M53.md) § 5 until
-this section is written in full (M53 step B).
+Every name on this page — and every CLI flag, TOML key, directive, `<mc/*>` name and `mc.lock`/
+registry-index key documented elsewhere in `docs/reference/` — is in the recorded public surface:
+[`../../tests/golden/surface.txt`](../../tests/golden/surface.txt), extracted by
+`scripts/surface-extract.sh` and compared on every `make check` by `check-freeze`
+([`../../tests/golden/README.md`](../../tests/golden/README.md)). Seven kinds, **420 entries**
+today, none of them written by hand:
+
+| kind | is | count |
+|---|---|---|
+| `sym` | a function a module outside `src/` may call | 209 |
+| `flag` | a command-line option `mc` accepts | 50 |
+| `toml` | a key `mc.toml` may carry | 35 |
+| `dir` | a `#directive` | 10 |
+| `bundle` | a name `#include <…>` resolves — a library and a `<mc/*>` PART, one kind ([bundle.md](bundle.md)) | 101 |
+| `lock` | a key of an `mc.lock` row or a registry index row ([packages.md](packages.md) § 4) | 14 |
+| `machine` | the machine task contract's version ([machine.md](machine.md)) | 1 |
+
+There is **one** extractor and every gate reads it: `check-docs.sh` asks "is this documented?" and
+`check-freeze.sh` asks "was it here last time?" of the exact same list. Neither script carries a
+list of its own — two lists that had to agree would drift on the first edit.
+
+### What is NOT the surface
+
+Two exclusions, each argued at length in [`../specs/M53.md`](../specs/M53.md) § 3:
+
+* **A file-level global in `src/` is not API.** Freezing the set would forbid the kind of diet
+  that keeps the frozen seed's `MAXGLOBALS` from binding — M48 C0 folded twelve of
+  `src/driver.mc`'s globals into one arena record for exactly that reason, and a freeze on globals
+  would have made that a MAJOR. The rule instead: a module reads a compiler internal through a
+  **function**, and the function is frozen — `val_reg`/`dst_reg`/`dst_done` (§ 3 above) are the
+  three names contract version 3 already publishes by name in [machine.md](machine.md) § 3. A
+  consumer that needs a global asks for an accessor; the accessor is what lands, as an additive
+  MINOR, and it is in the inventory from that day. A rename or removal of a `src/` global that
+  nothing wraps goes in the **release note** — no gate, because the in-repo consumers under
+  `lib/`/`examples/` already fail `make check` on such a rename, and an out-of-tree consumer only
+  needed the announcement (the memory rule this project keeps, from teko at 0.15.12).
+* **Diagnostic TEXT is not API; the exit code and the stream are.** `mc` documents hundreds of
+  messages ([diagnostics.md](diagnostics.md)) and a gate asserts only a few dozen of them by exact
+  text; those few are protected because the gate that asserts them turns red on a wording change,
+  which is the "you will notice" a freeze needs. A message's wording is a PATCH; its exit code is
+  a MAJOR.
+
+### The rules
+
+| change | bump | example |
+|---|---|---|
+| a message's wording; a fix that moves no inventory line | **PATCH** | |
+| a new entry of any kind; a new append-only `MTASK_*` slot under the null-slot rule ([machine.md](machine.md), version 4 → 5); a new accessor for a `src/` global | **MINOR** | M49's six slots |
+| an entry **REMOVED**; a signature changed; an exit code changed; behaviour a *conforming* module can observe changed; a machine-contract change that is not append-only | **MAJOR** | |
+
+*Conforming* carries weight: a module that reads a `src/` global directly, asserts an
+undocumented message's exact wording, or depends on an emitted byte (`docs/determinism.md`'s own
+promise, not this one) is not conforming, and none of those is owed a MAJOR.
+
+### The deprecation lane
+
+From 1.0.0 there is **no dry rename**. To replace `old` with `new`:
+
+1. **Add `new`.** It is a MINOR, and it appears in the inventory the moment `surface.txt` is
+   re-recorded for it.
+2. **Keep `old` as an alias.** For a symbol, a one-line wrapper calling `new`; for a flag, a TOML
+   key, a directive or a bundle name, the same parse site accepting both spellings.
+3. **Mark the old entry**, in `surface.txt`, with a third column:
+   `sym<TAB>old_name<TAB>deprecated 1.1.0 -> new_name`. **The version is written by a human**: the
+   working tree can never know its own (`src/version.mc` says `0.0.0-dev` on every commit,
+   `scripts/check-bundle.sh` guarantees it — [`../ci.md`](../ci.md) § The baked version), so the
+   reviewer checks the written version against the tag the pull request will cut.
+4. **Remove `old` no earlier than the next MAJOR**, in a pull request labelled `release:major`.
+
+`check-freeze` is what makes step 4 hard to do by accident: an entry missing from the extraction
+FAILS unless `surface.txt` already carries the step-3 marker, and even a legal removal still must
+be re-recorded, in the same commit, with `make record-surface` (`scripts/check-freeze.sh
+--record`) — never by deleting the file, because unlike a hash golden this file's *content* is
+the review artefact, and the diff of it is the change's announcement.
+
+### The note — specified, not built
+
+A deprecated name **should** say so where it is used. This is specified and priced, and deferred:
+where a name is parsed from TEXT — a CLI flag, a TOML key, a `#directive`, a bundle name — the
+compiler is meant to print, once per build, to stderr:
+
+```
+mc: --old-flag is deprecated since 1.1.0, use --new-flag
+```
+
+through one shared `dep_note(kind, old, since, new)` with a seen-bit per entry, at the four parse
+sites this would need (`src/cli.mc`'s option loop, one helper behind the `toml_get` family, the
+directive dispatch, `lex_include_name`) — an estimated 25 lines of `src/`, 0 new globals (the
+table would be a field of a record that already exists). **A symbol gets no note**: it is resolved
+by the linker, and a wrapper that printed would write to the stderr of every *taught compiler*
+that still calls it — stderr that belongs to that compiler's own product, not to `mc`'s. A
+symbol's deprecation lives in the inventory, on this page, and in the release note that ships it.
+
+**M53 ships no deprecation, so it ships no note.** The 25 lines land with the first real one, in
+the pull request that needs them and can exercise them — 25 lines nothing tests today would only
+rot.
+
+### What 0.x may still do, and when the promise starts
+
+| period | `check-freeze` | a removal costs |
+|---|---|---|
+| 0.16.x and earlier | does not exist | nothing — 0.x semver lets a minor break |
+| **0.17.0, the RC** | binding, inside `make check` | the deprecation lane above — but 0.17.x itself takes **bug fixes only**, so nothing should be removed inside it at all |
+| **1.0.0 onward** | unchanged | `release:major`, publicly promised |
+
+The RC is where the freeze *starts* — the gate, the inventory and this page are all in 0.17.0 —
+and 1.0.0 is where it is *promised*: the only difference between the two rows is the word above,
+not the mechanism.

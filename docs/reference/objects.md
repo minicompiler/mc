@@ -15,6 +15,11 @@ expressions; `src/gen_walk.mc` walks the AST and knows nothing about registers;
 table ([machine.md](machine.md)). None of that moved a public name: `gen_lower`, `gen_encode_all`
 and every `gen_*` accessor below mean exactly what they meant before.
 
+Every function name on this page is in the recorded public surface, as the `sym` kind; what a
+PATCH, a MINOR and a MAJOR may do to one is [hooks.md](hooks.md) § 8. The emitted BYTES are not —
+that promise is `docs/determinism.md`'s, and it moves by design whenever the compiler improves
+(M53 § 3c).
+
 ---
 
 ## 1. The two halves of the gen

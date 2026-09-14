@@ -327,6 +327,11 @@ void user_init() {
 
 ## 4. The lock
 
+Every key of an `mc.lock` row and of a registry index row (`[[versions]]`, § 10) is in the
+recorded public surface, as the `lock` kind — the FORMAT, checked on every `make check` whether
+this build ever writes one or not; what a PATCH, a MINOR and a MAJOR may do to one is
+[hooks.md](hooks.md) § 8.
+
 `mc.lock` sits beside `mc.toml`, is written only by `mc pkg sync` (§ 10), and has one
 `[[package]]` row per resolved package, sorted by name — a total order over unique keys, so two
 runs of `sync` write the same bytes:
