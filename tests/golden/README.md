@@ -87,3 +87,25 @@ those are dev.
 
 So these five files move only when `src/*.mc`, `lib/*.mc` or the codegen change **on purpose**, as
 they always have.
+
+## `surface.txt` — the public surface (M53 step A)
+
+`surface.txt` is not a hash: it is the **inventory** — 420 lines, `<kind><TAB><name>`, bytewise
+sorted, seven kinds (`sym` 209, `flag` 50, `toml` 35, `dir` 10, `bundle` 101, `lock` 14,
+`machine` 1). Every line is extracted from the tree by `scripts/surface-extract.sh`, which is also
+what `scripts/check-docs.sh` asks its four coverage questions of, so the two gates cannot disagree
+about what is public. `make check-freeze` compares the two and fails on **any** difference: a
+REMOVED entry because a removal is a MAJOR, an ADDED one because every surface change should cost
+one committed line in the same pull request — the diff is the announcement. The `machine` line
+carries the contract's version and may only go up, and only in a commit that adds a
+`Version N → M` paragraph to `docs/reference/machine.md`.
+
+Unlike every file above, it is re-recorded by a **named command** and not by deleting it:
+
+    make record-surface        # scripts/check-freeze.sh --record
+
+Re-record it in the same pull request as the change that moved it, never to make the gate pass.
+The policy — what a PATCH, a MINOR and a MAJOR may move, and the deprecation lane — is
+[`../../docs/specs/M53.md`](../../docs/specs/M53.md) § 5 (it becomes `docs/reference/hooks.md`
+§ 8 in step B). An entry may carry a third column, `deprecated <version> -> <replacement>`, which
+is the only expressible removal; nothing is deprecated today.

@@ -3,8 +3,10 @@
 # compiler, not against a memory of it. Three checks, in this order:
 #
 #   1. coverage  every public symbol, CLI flag, TOML key and directive that
-#                exists in src/ appears in docs/reference/. The lists are
-#                extracted from src/*.mc, never written down here, so a new
+#                exists in src/ appears in docs/reference/. The lists come from
+#                scripts/surface-extract.sh (M53 D11: one extractor, read by
+#                this gate and by check-freeze.sh) and are extracted from
+#                src/*.mc, never written down anywhere, so a new
 #                p_*/syntax*/sec_*/gen_* function or a new --flag fails this
 #                check until it is documented.
 #   2. samples   every fenced ```mc block under docs/ is compiled by MC. A block
@@ -83,11 +85,21 @@ cat docs/reference/*.md > "$refs" 2>/dev/null || { echo "FAIL: docs/reference/ i
 # A FIFTH exact name: source_claim, the registration that says where a module's
 # taught words apply. It is a word on its own, like subcommand, and no prefix
 # above reaches it -- the same reason `on_` had to be added after M27.
+# A SIXTH, SEVENTH and EIGHTH exact name, since M53: val_reg, dst_reg and
+# dst_done -- docs/reference/machine.md § 3 publishes them BY NAME as the only
+# three names of a machine's internals that are frozen (contract version 3,
+# M24 D2), and they matched no prefix and no exact name until the freeze
+# inventory counted them (M53 § 1.2a, D2): 206 -> 209.
 # A symbol counts as documented when the reference mentions it
 # as a call (`name(`), which is how every entry in hooks.md and objects.md is
 # written; a bare word in prose is not enough.
-grep -hoE '^(void|i64|uptr|u8|u16|u32|u64) +((p_|syntax|type_|pass|backend|machine|sec_|sym_|reloc_add|gen_|on_|decl_|host_|intrinsic|walk_|subcommand|c_)[A-Za-z_0-9]*|parse_unary|parse_top|do_directive|lex_include|source_claim)\(' src/*.mc \
-    | sed -E 's/^[a-z0-9]+ +//; s/\($//' | sort -u > "$tmp/syms"
+#
+# Since M53 the four lists below are NOT extracted here: scripts/surface-extract.sh
+# is the single definition both this gate and check-freeze.sh read, because two
+# extractions that must agree are a bug waiting (M53 § 4.1, D11). The families,
+# the prefixes and the regexes live there; the questions -- is it documented? was
+# it here last time? -- live in the two gates.
+sh scripts/surface-extract.sh sym > "$tmp/syms"
 
 missing=""
 while read -r s; do
@@ -109,9 +121,7 @@ fi
 # passes to OTHER programs (`xcrun --show-sdk-path`, and since M25
 # `tar --strip-components=`) and would have demanded a cli.md row for a flag
 # `mc` does not accept.
-grep -hoE '(str_eq\([a-z_]+, |opt_val\([a-z_]+, )"--[a-z][a-z-]*=?"' src/*.mc \
-    | sed -E 's/.*("--[a-z][a-z-]*=?")/\1/' | tr -d '"' | sort -u > "$tmp/flags"
-echo "-o" >> "$tmp/flags"
+sh scripts/surface-extract.sh flag > "$tmp/flags"
 missing=""
 while read -r f; do
     [ -n "$f" ] || continue
@@ -127,11 +137,7 @@ fi
 
 # TOML: every key the driver looks up by name, plus the two table prefixes it
 # walks the flat table for ([libs] and [externs] have user-chosen key names).
-grep -hoE 'toml_(get|get_array|count|int|bp|err_key)\("[a-z_.]+"' src/*.mc \
-    | sed -E 's/.*"([a-z_.]+)"/\1/' | sort -u > "$tmp/tomlkeys"
-grep -hoE 'opt_val\(toml_path_at\(i\), "[a-z_]+\."' src/*.mc \
-    | sed -E 's/.*"([a-z_]+)\."/\1/' | sort -u >> "$tmp/tomlkeys"
-sort -u "$tmp/tomlkeys" -o "$tmp/tomlkeys"
+sh scripts/surface-extract.sh toml > "$tmp/tomlkeys"
 missing=""
 while read -r k; do
     [ -n "$k" ] || continue
@@ -146,7 +152,7 @@ else
 fi
 
 # Directives: the names in lex.mc's dir_index(), which IS the table.
-grep -oE 'mem_eq\("[a-z]+", s,' src/lex.mc | sed -E 's/.*"([a-z]+)".*/\1/' | sort -u > "$tmp/dirs"
+sh scripts/surface-extract.sh dir > "$tmp/dirs"
 missing=""
 while read -r d; do
     [ -n "$d" ] || continue

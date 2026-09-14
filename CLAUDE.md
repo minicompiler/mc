@@ -6845,6 +6845,75 @@ agents (`.claude/agents/`): `stage0-dev` (C23), `mc-dev` (`.mc` code), `reviewer
   prints when the compiler it spawned fails) and § `[linker]`, `docs/reference/toml.md`
   (the `linker.cmd` row and the errors), `docs/reference/diagnostics.md` (one new row),
   `docs/specs/M42.md` § Implementation notes.
+- M53 step A ✔ (`docs/specs/M53.md` § 2 D1/D2, § 3, § 4, § 8.1-8.5, § 9 row 1 + its new
+  § Implementation notes -- step A): **the surface extractor, `tests/golden/surface.txt` and
+  `check-freeze`.** Nothing in `src/` or `stage0/` -- `git diff --stat src/ stage0/
+  tests/golden/*.sha256` is **empty**, no golden moves, and the only new file under
+  `tests/golden/` is the inventory itself. The measurement the milestone rests on is that the
+  inventory ALREADY EXISTED and nobody read it as one: `scripts/check-docs.sh` extracted the whole
+  public surface on every `make check` and threw it away after asking "is each one documented?".
+  Asking the second question, "was each one here last time?", costs one recorded file and one
+  comparison.
+  * **`scripts/surface-extract.sh` (81 lines)** is THE definition of all seven kinds, printing
+    `<kind><TAB><name>` bytewise-sorted (`LC_ALL=C`), or one kind's names alone with an argument:
+    **`sym` 209** (the 17 prefixes, the five exact names, plus `val_reg`/`dst_reg`/`dst_done`),
+    **`flag` 50**, **`toml` 35**, **`dir` 10**, **`bundle` 101** (column 1 of `tools/bundle.list`,
+    the libraries AND the `<mc/*>` parts in one kind, D3), **`lock` 14** (the `tm_cat(key, "...")`
+    literals in `src/pkg.mc`/`src/tool.mc`/`src/deps.mc`, a computed TOML path the `toml_*` regex
+    cannot see, D4) and **`machine` 1** (the `Contract version N` line of
+    `docs/reference/machine.md`, one line and not 37 slot names, D5) -- **420 in all**, exactly
+    what § 2 predicted.
+  * **D11 held: `scripts/check-docs.sh` has no regex left.** `grep -c 'grep -hoE'` over it is
+    **0**; its four pipelines became four `sh scripts/surface-extract.sh <kind>` calls
+    (**+19/-13**), so the two gates cannot disagree about what is public. Its four `ok coverage:`
+    lines are unchanged except the first -- **206 -> 209 symbols**, 50 flags, 35 TOML keys,
+    10 directives -- and samples (52) and links (543) are untouched.
+  * **D2 closed the hole at no documentation cost.** `val_reg`, `dst_reg` and `dst_done` are the
+    three names `machine.md` § 3 publishes BY NAME as the only three names of a machine's
+    internals that are frozen (contract version 3, M24 D2) and they matched no prefix and no exact
+    name -- **0 of 206**, so a gate built on the old regex would have frozen 206 names and left the
+    three that were already promised unprotected. `check-docs` is green at 209 with **no edit to
+    `docs/reference/`**: all three are already written as calls in `machine.md` and `hooks.md`.
+  * **`scripts/check-freeze.sh` (125 lines)**, `make check-freeze`, inside `make check` right
+    after `check-docs` on macOS and in the Linux and Windows subsets too -- it is `grep` over
+    `src/`, `tools/bundle.list` and one line of `machine.md`, so it needs no compiler and runs on
+    every host. Identical -> `ok freeze: 420 entries (209 sym, 50 flag, 35 toml, 10 dir,
+    101 bundle, 14 lock, 1 machine)`, exit 0. An entry GONE -> `removed: <kind> <name>` and the
+    MAJOR sentence pointing at the policy; gone and MARKED `deprecated <version> -> <replacement>`
+    in the golden -> the shorter "legal, re-record it in this commit"; an entry ADDED ->
+    `new: <kind> <name> -- additive, a MINOR` and `re-record: scripts/check-freeze.sh --record`
+    (**D10**: a legal addition still fails until the file is re-recorded, so every surface change
+    costs one committed line in the same pull request and the diff IS the announcement).
+    Re-recording is a NAMED act, `--record` / `make record-surface`, and not the hash goldens'
+    delete-and-rerun (**D9**): this file's CONTENT is the review artefact.
+  * **`machine` gets its own verdict and is excluded from the add/remove diff**, because a version
+    bump is neither a removal nor an addition -- leaving it in would have printed
+    `removed: machine 5` under the MAJOR sentence for an append-only bump. All four rows of § 4.3's
+    table measured: `-> 4` FAILS (`a version may only go up`), `-> 6` with no paragraph FAILS
+    naming the `Version 5 -> 6` paragraph it wants, `-> 6` WITH one FAILS as "re-record", and after
+    `--record` it passes. The paragraph is matched as `Version <old> (->|→|-->) <new>`, the shape
+    `machine.md`'s own four changelog entries use.
+  * **The policy pointer is to the SPEC, not to `hooks.md` § 8**, which is step B's: the gate's
+    messages, `tests/golden/README.md` and a new two-line `hooks.md` § 8 all point at
+    `docs/specs/M53.md` § 5 and say where the full text will be. Step B replaces one string
+    (`policy` in `check-freeze.sh`).
+  -- **Teeth, measured in both directions**, each with the tree restored afterwards: renaming
+  `p_type` to `p_typ` in `src/parse.mc` gives `removed: sym p_type` + the MAJOR sentence AND
+  `new: sym p_typ -- additive, a MINOR`, exit 1; deleting `tools/bundle.list`'s `float` row gives
+  `removed: bundle float` + the MAJOR sentence, exit 1; marking that row deprecated in the golden
+  first gives the shorter message; the pristine tree is `ok freeze: 420 entries`, exit 0.
+  `make check` green end to end (**RC 0, zero FAIL**) with `check-freeze` in it; `check-docs`
+  green at **209 symbols, 50 flags, 35 TOML keys, 10 directives, 52 samples, 543 links** (206 ->
+  209 is the whole difference); `check-limits` unchanged. `Makefile` +17/-4 (`check-freeze`,
+  `record-surface`, `.PHONY`, and the three `check:` lists).
+  Docs: `tests/golden/README.md` (§ `surface.txt` -- what it is, the seven counts, why `--record`
+  and not delete-and-rerun, and when to re-record: in the same pull request as the change that
+  moved it, never to make the gate pass), `docs/reference/hooks.md` § 8 (two lines, pointing at
+  the spec), `docs/ci.md` § Job `check` (the gate in the `make check` list),
+  `docs/specs/M53.md` (§ 9 row 1 LANDED with the real line counts + ten implementation notes).
+  Not in this step: **B** the policy (`hooks.md` § 8 in full, the six pointers, `ci.md`'s label
+  table), **C** the canary (`release.yml`'s `MC_CANARY` pre-release flag and the `promote` job),
+  and **D** the deprecation note, which lands with the first deprecation (D13).
 - Next: the **site + registry server, M47 S4-S6**, in
   `minicompiler/mc-registry`; then **M42 step 2** (PE `--exe`, CI-gated on the Windows runners).
   **M46** only on the owner's request; **M43 Layer 2** after 1.0.0. M13 and M18 stay in the backlog
