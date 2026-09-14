@@ -1,0 +1,24 @@
+# teach-fail.toml — the taught compiler builds, and then exits 127 without a
+# word (tests/proj/exit127.mc). `mc build` printed the `compiler` step line and
+# died silently; it now says which program failed and how.
+[project]
+entry = "app.mc"
+out   = "build/app-teachfail"
+kind  = "exe"
+
+[target]
+os   = "macos"
+arch = "aarch64"
+
+[compiler]
+out     = "build/mc-teachfail"
+modules = ["exit127.mc"]
+
+[libs]
+sqlite3 = "/usr/lib/libsqlite3.dylib"
+
+[externs]
+"sqlite3_*" = "sqlite3"
+
+[include]
+paths = ["inc"]

@@ -145,11 +145,31 @@ out     = "build/mc-avr"
 ```
 
 `mc build` then writes `#include <mc/host>` + `#include <mc/core_min>` + the modules. The taught
-compiler is still built with the HOST's executable backend — it is a tool that has to run here —
-so a compiler assembled from `<mc/core_min>` and an AVR machine is a macOS (or Linux, or Windows)
-binary that emits AVR. What it gives up is listed in
+compiler is still a binary for the HOST — it is a tool that has to run here — so a compiler
+assembled from `<mc/core_min>` and an AVR machine is a macOS (or Linux, or Windows) binary that
+emits AVR. What it gives up is listed in
 `docs/guide/98-recreating-the-compiler.md`; the five parts are in
 `docs/reference/bundle.md` § The parts of the core.
+
+**Which road builds it — `[linker]` declared wins (0.16.1).** There are two, and the config
+chooses between them exactly as it does for the entry:
+
+| the config | the taught compiler is |
+|---|---|
+| no `[linker]` | written in one step by the host's direct executable backend (`macho-exe`, `elf-exe`, `pe-exe`) |
+| `[linker]` declared | an object, then the tool that section names — the same linker the entry uses |
+| no `[linker]` and the host has no direct executable | the missing-key error `a taught compiler on this host needs [linker]: there is no direct executable` |
+
+It went the other way until 0.16.1: the exe slot was taken whenever it was not 0, so a declared
+`[linker]` was read for the entry and ignored for the compiler. That was invisible while the only
+hosts with an exe slot were macOS and Linux, and a defect the day M42 step 2 filled
+`windows/x86_64`'s — a project whose only road to a Windows binary had been `lld-link` silently
+got a PE the driver wrote itself (`docs/specs/M42.md` § Implementation notes).
+
+The linker a config declares is therefore expected to link a binary **this host can run**: the
+compiler is run here, right after it is written. A project that cross-compiles *and* teaches has
+to declare a `[linker]` that can do both, or no `[linker]` at all on a host that has a direct
+executable backend.
 
 compiles it with the built-in `macho-exe` backend, and then **spawns the binary that came out**:
 
@@ -177,6 +197,21 @@ use for `[project].entry`. `examples/lang/test.sh` runs `--compiler-only` and th
 It is also what an editor server needs, which is why the flag exists before M28.
 `--entry-only` and `--compiler-only` together are an error; `--compiler-only` without
 `[compiler].modules` is the same missing-key error a `[compiler]` build already gives.
+
+**When the compiler that was spawned fails** (0.16.1), the driver names it:
+
+```
+$ mc build tests/proj --config tests/proj/teach-fail.toml
+compiler build/mc-teachfail.mc -> build/mc-teachfail
+compile app.mc -> build/app-teachfail
+mc: tests/proj/build/mc-teachfail exited 127
+```
+
+Exit 1 is exempt — that is how every diagnostic in this compiler ends, so the child has already
+said what was wrong and the driver adds nothing. Anything else is a death the child had no chance
+to report: 127 from a loader that refused the executable, 126, or `killed by signal <N>`. The same
+line covers a `[linker]` that fails for any reason other than exit 1. Before 0.16.1 the build
+stopped with exit 1 and no output at all past the step line.
 
 `#include` is once-only, so a module that already pulls in the core (as `examples/api/mc-api.mc`
 does, with `#include <mc/core>`) works whether or not `core` is also written here: the second
@@ -264,7 +299,10 @@ value goes through the same substitution, so a library can be written as
 `/usr/lib/libsqlite3.dylib` only exists inside the dyld shared cache and `ld` cannot open it.
 
 The tool inherits stdin/stdout/stderr, so its diagnostics reach the user unchanged, and a non-zero
-exit stops the build with exit 1:
+exit stops the build with exit 1 — silently when it exited 1, since the linker printed its own
+error, and with `mc: <cmd> exited <N>` / `killed by signal <N>` otherwise (0.16.1).
+The section applies to the entry **and**, since 0.16.1, to the compiler a `[compiler]` section
+builds: see § `[compiler]` above.
 
 ```
 $ build/mc1 build tests/proj --config tests/proj/link.toml

@@ -341,6 +341,34 @@ i64 drv_spawn(uptr file, uptr av, uptr fa) {
     return (s >> 8) & 255;
 }
 
+// A spawned tool that failed and could not say so: this is where it is said,
+// and then the build stops with exit 1.
+//
+// Exit 1 is exempt, and that is the whole rule. It is how every diagnostic in
+// this compiler ends (`die` and `err_at` both _exit(1)) and how a linker
+// reports its own error, so the tool has already printed what was wrong and a
+// line from here would only push it off the end of the output -- which several
+// gates read as the last line. Anything else is a death the tool had no chance
+// to report: 127 from a loader that refused the executable, 126, a signal.
+//
+// The case that asked for it: `mc build` on a project with a [compiler] spawns
+// the compiler it just wrote, and until 0.16.1 a child that died before its
+// first instruction left the build mute after the `compiler x.mc -> x` step
+// line (the consumer's windows/x86_64 report against mc 0.16.0, M42 step 2).
+//
+// 128 + N is drv_spawn's encoding for a signal and the convention every shell
+// uses; a tool that really exits 137 is read as SIGKILL here, which is the
+// price of not giving drv_spawn a second return channel for a distinction no
+// caller makes either.
+void drv_tool_failed(uptr file, i64 rc) {
+    if (rc != 1) {
+        uptr how = tm_cat(" exited ", tm_num_str(rc));
+        if (rc >= 128) how = tm_cat(" killed by signal ", tm_num_str(rc - 128));
+        die(tm_cat(file, how));                // die() is the exit 1 below
+    }
+    _exit(1);
+}
+
 // {sdk}: `xcrun --show-sdk-path`, run at most once and only if some argument
 // actually uses it. stdout goes to `tmpf` via a spawn file action -- no shell,
 // no pipe.
@@ -673,7 +701,7 @@ void drv_link(uptr obj, uptr out) {
     }
     st64(av + n * 8, 0);
     i64 rc = drv_spawn(cmd, av, 0);
-    if (rc != 0) _exit(1);
+    if (rc != 0) drv_tool_failed(cmd, rc);
 }
 
 // ---- the two halves of a build ----
@@ -797,14 +825,20 @@ i64 drv_teach(uptr cout, uptr dir, i64 compiler_only) {
     // it has to run here, right after it is written. Which backend that is
     // comes from the registry, looked up with the host's own pair: `macho-exe`
     // on macos and, since M42, `elf-exe` / `elf-exe-x86_64` on linux -- one
-    // step in both cases. A host with no direct executable (windows) is the
-    // object backend plus [linker], the same linker the entry uses.
+    // step in both cases. A host with no direct executable is the object
+    // backend plus [linker], the same linker the entry uses.
     i64 ht = target_find(host_os(), host_arch());
     if (ht < 0) die2("the host is not a registered target", host_os());
-    if (tgt_exe_at(ht) != 0) {
+    // 0.16.1: a [linker] the config DECLARES wins over the host's direct
+    // executable backend, which is what drv_entry has always done for the
+    // entry. It went the other way until M42 step 2 filled the windows/x86_64
+    // exe slot and a config whose only road to a binary had been `lld-link`
+    // silently got a PE the driver wrote itself.
+    uptr has_linker = toml_get("linker.cmd");
+    if (has_linker == 0 && tgt_exe_at(ht) != 0) {
         drv_compile(gen, drv_path(cbin), tgt_exe_at(ht), 0, tm_cat(cout, ".mc"));
     } else {
-        if (toml_get("linker.cmd") == 0)
+        if (has_linker == 0)
             toml_err_key("linker.cmd",
                          "a taught compiler on this host needs [linker]: there is no direct executable");
         uptr cobj = tm_cat(cout, ".o");
@@ -859,7 +893,7 @@ i64 drv_teach(uptr cout, uptr dir, i64 compiler_only) {
     if (drv_lim_mode() == 2) { st64(av + n * 8, "--fix-limits"); n = n + 1; }
     st64(av + n * 8, 0);
     i64 crc = drv_spawn(comp, av, 0);
-    if (crc != 0 && crc != 3) return 1;
+    if (crc != 0 && crc != 3) drv_tool_failed(comp, crc);
     if (crc > rc) rc = crc;
     return rc;
 }

@@ -212,13 +212,20 @@ Errors: `missing key: compiler.modules`, `must be a relative path: compiler.out`
 
 | key | type | meaning |
 |---|---|---|
-| `linker.cmd` | string | the program to run. Its presence is what turns on the link step |
+| `linker.cmd` | string | the program to run. Its presence is what turns on the link step — for the entry **and**, since 0.16.1, for the compiler a `[compiler]` section builds |
 | `linker.args` | array of strings | the argument list, with placeholders |
 
 Without `[linker]`, `kind = "exe"` uses the built-in `macho-exe` backend: no `ld`, ad-hoc
 signature, dylibs bound by ordinal. With it, `mc` writes `<out>.o` and spawns the tool, which
 inherits stdin/stdout/stderr so its diagnostics reach you unchanged; a non-zero exit stops the
-build with exit 1.
+build with exit 1 — silently when it exited 1 (the tool printed its own error), and with
+`mc: <cmd> exited <N>` otherwise.
+
+**A declared `[linker]` wins over the host's direct executable backend**, and it does so for the
+taught compiler too: a config that says how to link is the developer's decision, and the taught
+compiler is linked by the same section the entry is ([build.md](../build.md) § `[compiler]`). The
+linker it names is therefore expected to produce a binary this host can run, since `mc build`
+spawns the compiler it just wrote.
 
 | placeholder | expands to |
 |---|---|
@@ -235,7 +242,8 @@ argument, since it expands to several; each expanded value then goes through the
 substitution, so a library may be written `"{sdk}/usr/lib/libsqlite3.tbd"`.
 
 Errors: `too many arguments in [linker].args` (the argv cap is 64),
-`mc: cannot run: <cmd>`, `xcrun --show-sdk-path failed`.
+`mc: cannot run: <cmd>`, `mc: <cmd> exited <N>`, `mc: <cmd> killed by signal <N>`,
+`xcrun --show-sdk-path failed`.
 
 ## `[sysroot]`
 
