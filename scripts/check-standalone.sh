@@ -17,7 +17,9 @@
 #      statement available: the core inside the bundle is the core in src/,
 #      down to the last byte, INCLUDING the `mc/bundle_data` that core.mc
 #      includes and that src/bundle.mc regenerates from the blob on the fly.
-#   5. an unknown bundled name gives `unknown bundled include: <name>`.
+#   5. an unknown bundled name is refused, and since M52 (D6) the message names
+#      the road -- this compiler has no library tree beside it and none
+#      installed, which is exactly what "alone" means.
 #
 # The only files copied in are the compiler and that reference object; the
 # reference is test data, not an input to any compilation.
@@ -36,7 +38,7 @@ tmp="${TMPDIR:-/tmp}/check-standalone.$$"
 # path the native mc cannot open; cygpath -m gives D:/... which both accept.
 case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) tmp=$(cygpath -m "$tmp") ;; esac
 rm -rf "$tmp"
-mkdir -p "$tmp"
+mkdir -p "$tmp" "$tmp/nohome"
 trap 'rm -rf "$tmp"' EXIT INT TERM
 
 cp "$mc_exe" "$tmp/mc"
@@ -128,11 +130,17 @@ else
     echo "ok <mc/host> + <mc/core> + <user_default> == src/mc.mc, byte for byte"
 fi
 
-# 5. a name that is not in the bundle
-msg=$(./mc bad.mc -o bad.o 2>&1)
+# 5. a name that is not in the bundle. M52 D6: this compiler is alone -- no
+# library tree beside it and (HOME is empty here, on purpose, so the answer does
+# not depend on whoever ran `mc install` on this machine) none installed -- so
+# the message names the road instead of saying only that the name is unknown.
+# `unknown bundled include: <name>` is what a compiler WITH a tree says for the
+# same source, and scripts/check-libroot.sh asserts that half.
+ver=$(sed -n 's/^uptr mc_version() { return "\(.*\)"; }$/\1/p' "$here/src/version.mc" | head -1)
+msg=$(HOME="$tmp/nohome" ./mc bad.mc -o bad.o 2>&1)
 if [ $? -eq 0 ]; then
     step_fail "an unknown bundled include was accepted"
-elif ! printf '%s' "$msg" | grep -q 'unknown bundled include: no/such/module'; then
+elif ! printf '%s' "$msg" | grep -qF "#include <no/such/module>: not in this compiler and mc $ver's library tree was not found: run mc install"; then
     step_fail "wrong message for an unknown bundled include: $msg"
 else
     echo "ok unknown name: $msg"

@@ -45,7 +45,7 @@ notatype main() { return 0; }
 | `empty lexeme` | `#token ""` | give the lexeme at least one byte |
 | `unknown directive` | a `#name` that is not one of the ten | check the spelling; the list is in [directives.md](directives.md). `#include <name>` and `#embed` do not exist in the C seed |
 | `invalid hole` | a `$` that begins neither a `#rule` hole nor a token a module claimed | `$name` and `$$name` are only meaningful inside a `#rule` template; a `$` used as punctuation (e.g. `$"..."`) is not a core token, so it is this error unless a module claims it with `syntax_expr("$")` |
-| `unknown bundled include` | `#include <name>` with a name the bundle does not carry | the catalogue is [bundle.md](bundle.md). There is no filesystem fallback for `<...>`. In a binary with no bundle at all the message names the install instead ([packages.md](packages.md) § 2) |
+| `unknown bundled include` | `#include <name>` with a name the bundle does not carry | the catalogue is [bundle.md](bundle.md). There is no filesystem fallback for `<...>`. When no library tree was found at all the message names the road instead ([packages.md](packages.md) § 2b) |
 | `path with too many segments` | a path with more than 64 components after normalisation | shorten it, or add an `[include].paths` root and include by a short name |
 | `too many substitutions` | more than 16 `p_subst_*` entries pending for one pushed source | a module bug: batch fewer substitutions per push |
 
@@ -542,7 +542,8 @@ The compiler's own package ([cli.md](cli.md) § 3e). Same two codes, same meanin
 
 | message | exit | cause | fix |
 |---|---|---|---|
-| `prog.mc:1: #include <prelude>: not bundled in this compiler and mc 0.16.0 is not installed: run mc install` | 1 | a binary with NO bundle -- `mc-slim` -- was asked for a `<name>` and neither a lock nor an installation had it. A binary that carries the blob says `unknown bundled include` instead, and a slim one that IS installed says it too, for a name the tree really does not have | `mc install --yes` |
+| `prog.mc:1: #include <prelude>: not bundled in this compiler and mc 0.16.0 is not installed: run mc install` | 1 | a binary with NO bundle -- `mc-slim` -- was asked for a `<name>` and neither a lock nor a library tree had it | `mc install --yes`, or put the `lib/` tree of the tarball beside the binary |
+| `prog.mc:1: #include <sys>: not in this compiler and mc 0.16.0's library tree was not found: run mc install` | 1 | the same, for a binary that DOES carry the blob: the name is not one it ships and none of the three library roots exists ([packages.md](packages.md) § 2). What a binary copied out of a release tarball without the `lib/` directory beside it says | the same two roads |
 | `mc: mc 0.0.0-dev is a development build: the registry publishes no such version` + `run: mc install --from-tree .` | 2 | the registry road on a compiler built from a checkout: `0.0.0-dev` is the sentinel `scripts/set-version.sh` replaces at release time | install from the checkout, or name a published `VERSION` |
 | `mc: not the mc package: DIR` | 1 | `--from-tree DIR` where `DIR/mc.toml` has another `[package].name` | point it at a checkout of `minicompiler/mc` |
 | `mc: no mc.toml in: DIR` | 1 | `--from-tree DIR` with no manifest there at all | the same |

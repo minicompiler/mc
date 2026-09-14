@@ -90,7 +90,28 @@ check-lex: $(REF)
 check-ast: $(REF)
 	scripts/check-ast.sh $(REF)
 
-mc1: build/mc1
+mc1: build/mc1 $(LIBROOT)
+
+# M52 step A (D5): the library root, beside the binary. Since M52 a compiler
+# resolves a `#include <name>` its blob cannot answer from
+# <dir of its own binary>/lib/mc/v<version>/, so laying that tree next to
+# build/mc1 is what lets every check script keep working with no new flag, no
+# --libs-dir and no dependence on $HOME (docs/specs/M52.md § 4). It is the same
+# tree scripts/release-assets.sh stages in every tarball -- one definition,
+# scripts/libroot.sh.
+MCVER := $(shell sed -n 's/^uptr mc_version() { return "\(.*\)"; }$$/\1/p' src/version.mc)
+LIBROOT = build/lib/mc/v$(MCVER)/bundle.list
+
+$(LIBROOT): tools/bundle.list scripts/libroot.sh $(wildcard lib/*.mc)
+	@mkdir -p build
+	sh scripts/libroot.sh build
+
+libroot: $(LIBROOT)
+
+# M52 step A: the three roots in precedence order, a partial tree, the refusal
+# that names `mc install`, and a release tarball unpacked and used as a root.
+check-libroot: build/mc1 $(LIBROOT)
+	scripts/check-libroot.sh build/mc1
 
 # Bootstrap decoupling: mc0 (the frozen C seed, fixed 64 MiB arena) no longer
 # compiles the whole src/mc.mc — it compiles only the minimal seed core
@@ -246,7 +267,7 @@ check-build: build/mc1
 # mc.lock and the tree hash, the closure rule and the [package].files boundary.
 # It depends on build/mc-exe and build/mc2.o, because its last case re-runs
 # check-standalone with a curl/wget/tar shim that fails if it is invoked.
-check-pkg: build/mc1 build/mc-exe bootstrap
+check-pkg: build/mc1 build/mc-exe bootstrap $(LIBROOT)
 	scripts/check-pkg.sh build/mc1
 
 # M48 C3: `mc tool` -- install, run boxed, remove, list, box-args. It builds a
@@ -668,7 +689,7 @@ else ifneq (,$(WINHOST))
 # Docker or python3 -- and `check-skipped` prints the reason for each one.
 check: budget bootstrap-windows check-lex check-ast check-asm check-obj check-bundle check-mc check-toml check-sysroots check-limits check-skipped
 else
-check: budget test check-lex check-ast check-bundle check-asm check-obj bootstrap check-surface check-opt test-exe check-mc check-standalone check-parts check-toml check-build check-pkg check-tool check-sysroots check-stubs check-limits check-minimal test-linux test-linux-x86_64 test-windows test-windows-x86_64 test-windows-x86_64-exe check-examples check-lang check-conc check-desktop check-float check-wide check-kernel check-avr check-docs site check-site check-site-linux test-linux-exe test-linux-x86_64-exe test-sandbox
+check: budget test check-lex check-ast check-bundle check-asm check-obj bootstrap check-surface check-opt test-exe check-mc check-standalone check-parts check-libroot check-toml check-build check-pkg check-tool check-sysroots check-stubs check-limits check-minimal test-linux test-linux-x86_64 test-windows test-windows-x86_64 test-windows-x86_64-exe check-examples check-lang check-conc check-desktop check-float check-wide check-kernel check-avr check-docs site check-site check-site-linux test-linux-exe test-linux-x86_64-exe test-sandbox
 endif
 
 budget:
@@ -707,6 +728,7 @@ bench-cell: build/mc1
 .PHONY: check-site-linux
 .PHONY: check-tool check-linux-host check-skipped check-shim test-sandbox sandbox-trace sandbox-trace-check mc-linux-gnu mc-linux-x86_64-gnu
 .PHONY: bootstrap-windows mc-windows mc-windows-x86_64 mc-windows-obj mc-windows-x86_64-obj
+.PHONY: libroot check-libroot
 .PHONY: all stage0 stage0-san test check-lex check-ast check-asm check-obj mc1 mc-seed bootstrap check-surface test-exe bundle check-bundle check-mc check-standalone check-parts check-toml check-build check-pkg check-sysroots check-stubs check-limits sysroot-linux sysroot-linux-x86_64 sysroot-windows sysroot-windows-x86_64 test-linux test-linux-x86_64 test-windows test-windows-x86_64 test-windows-exe test-windows-x86_64-exe check-examples check-lang check-conc check-docs site check-site check budget clean check-desktop check-minimal mcrt-windows mcrt-windows-x86_64 check-float check-wide check-kernel check-avr check-opt test-linux-exe test-linux-x86_64-exe bench bench-cell
 
 # M32: examples/desktop -- a GTK4 application written in mc, and the same

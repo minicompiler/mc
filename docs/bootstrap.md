@@ -320,9 +320,31 @@ ok <mc/core> + <user_syntax_demo>: taught compiler built and signed
 ok the taught compiler compiles <syntax_demo_test> (exit 42)
 ok the copied compiler rejects the same source (syntax_demo_test:10: type expected at top level)
 ok <mc/core> + <user_default> == src/mc.mc, byte for byte
-ok unknown name: bad.mc:1: unknown bundled include: no/such/module
+ok unknown name: bad.mc:1: #include <no/such/module>: not in this compiler and mc 0.0.0-dev's library tree was not found: run mc install
 standalone: the binary alone is the toolchain
 ```
+
+### What "alone" means for the LIBRARY (M52)
+
+The last line of that transcript is the one M52 moved, and it is worth reading as the scope of the
+claim rather than as a loss of it. **The compiler's own source is inside the binary** — that is
+what the `cmp` above proves, and it is what makes a copied `mc` able to teach a compiler with
+nothing else on the disk. The **standard library** is a second thing, and from M52 a release
+carries it beside the binary instead of only inside it:
+
+```
+mc-0.16.0-macos-arm64/
+    mc
+    lib/mc/v0.16.0/bundle.list      the NAME<TAB>PATH map
+    lib/mc/v0.16.0/lib/…            <sys>, <prelude>, <io>, <float>, …
+```
+
+`mc` looks for that tree next to its own binary and one directory up, after
+`<libs>` ([packages.md § 2](reference/packages.md#2-the-resolution-order)), so untarring the
+archive and running the compiler out of it compiles a program that says `#include <sys>` with no
+install, no `--libs-dir` and no network. A binary copied out of the archive **without** the `lib/`
+directory says so, in as many words — that is the transcript line above — and `mc install` is the
+other road back. `scripts/check-libroot.sh` is the gate for all of it.
 
 ### On which hosts "the binary alone" is literally true
 

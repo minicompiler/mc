@@ -1017,8 +1017,20 @@ scripts/release-assets.sh VERSION TARGET BINARY [OUTDIR]
 leading `v` is stripped, so `v0.1.1` and `0.1.1` name the same archive.
 
 Writes `OUTDIR/mc-VERSION-TARGET.tar.gz` and its `.sha256` (the `shasum -c` / `sha256sum -c`
-format). The tarball holds one directory, `mc-VERSION-TARGET/`, with `mc`, a generated
-`INSTALL.txt`, plus `README.md` and `LICENSE` when the repository has them.
+format). The tarball holds one directory, `mc-VERSION-TARGET/`:
+
+```
+mc                              the binary (mc.exe on a windows-* target)
+INSTALL.txt                     generated here, never dated
+README.md  LICENSE              when the repository has them
+lib/mc/v<VERSION>/bundle.list   the library root (M52), laid by scripts/libroot.sh
+lib/mc/v<VERSION>/lib/…         41 files, about 250 KB of source
+```
+
+`lib/` is resolution root 2 ([packages.md § 2](reference/packages.md#2-the-resolution-order)):
+`mc` looks for it beside its own binary, so `#include <sys>` works out of the unpacked directory
+with no install and no network. Both flavours carry it. It is the same tree `make` lays beside
+`build/mc1`, written by the same script, so the two cannot drift.
 
 It is deterministic — two runs over the same tree produce the same bytes — which took five
 decisions:

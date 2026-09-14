@@ -6105,6 +6105,121 @@ agents (`.claude/agents/`): `stage0-dev` (C23), `mc-dev` (`.mc` code), `reviewer
   Docs: `docs/reference/packages.md` § 10 (§ "When the snapshot is refreshed"),
   `docs/reference/cli.md` (the `--registry` row), `docs/reference/diagnostics.md` (the
   `no such version in the registry` row now says when it is raised), `docs/specs/M44.md`.
+- M52 step A ✔ (`docs/specs/M52.md` § 4 D4/D5/D6, § 10.2, § 10.6, § 11 row 1 + its new
+  § Implementation notes -- step A): **the library root beside the binary, and the refusal that
+  names `mc install`.** `stage0/` untouched (2848/3000, `git diff main -- stage0/` empty).
+  **Inert by design**: the blob still carries all 101 rows, so every name a program can spell is
+  still answered by step 2 of the resolution order, and the new road is proved with a name the
+  blob does NOT have.
+  * **D4, three roots instead of one** (`src/deps.mc`): `dp_mc_root()` tries
+    `<libs>/mc/v<version>/` (`--libs-dir` or `$HOME/.mc/libs` -- FIRST, so an explicit
+    `mc install` still wins over the copy that shipped), then
+    `<dir of host_self_path()>/lib/mc/v<version>/`, then the same one directory up
+    (`/usr/local/bin/mc` finding `/usr/local/lib/mc/v<version>/`). A root is recognised by its
+    `bundle.list` and by nothing else, so a `<libs>` directory that exists and is empty does not
+    silently fall through to the tree beside the binary. Roots 2 and 3 are `path_join(self, ...)`
+    -- which cuts its base at the last slash, i.e. "the directory of this file", and normalises
+    the `..` lexically -- and a self path with **no slash in it is refused**, because `path_join`
+    would then answer a relative path and the working directory is never a root
+    (`docs/determinism.md`). A PARTIAL tree is safe by construction: `dp_mc_open` falls through on
+    any name whose file is not readable, which is what lets a release stage the library files and
+    nothing of `src/`.
+  * **D6, the refusal is widened** (`src/lex.mc`, `src/deps.mc`): the hint is asked whenever
+    NOTHING answered, not only when this binary has no bundle, and it distinguishes three states.
+    A root was found -> 0, and `unknown bundled include: <name>` is unchanged, which is the row
+    `check-pkg` asserts twice. No root and no blob (`mc-slim`) -> the M44 sentence, unchanged. No
+    root and a blob -> `#include <sys>: not in this compiler and mc 0.0.0-dev's library tree was
+    not found: run mc install`, which is what a binary copied out of a release tarball WITHOUT the
+    `lib/` directory beside it says. `dep_include_hint` reads `bopen_fn` directly: whether this
+    binary carries a blob is one global in `src/lex.mc`, and `src/deps.mc` is compiled after it in
+    every assembly that contains it, so the hook needed no new argument.
+  * **D5, `make` lays the root** (`scripts/libroot.sh`, 50 lines, new; `Makefile` +25/-3):
+    `build/lib/mc/v<mc_version()>/` beside `build/mc1`, holding `bundle.list` and the 41 `lib/`
+    files the manifest names (256 685 B). **`scripts/release-assets.sh` calls the same script**
+    (+22/-2) to stage `lib/mc/v<ver>/` in every tarball, full and slim -- one definition, because
+    a release whose library root is laid differently from the one every gate runs against is a
+    release nothing tested. With it, every check script keeps working with no new flag, no
+    `--libs-dir` and no dependence on `$HOME`.
+  * **`scripts/check-libroot.sh`** (178 lines, `make check-libroot`, inside `make check`):
+    **7/7**. Because the blob still has every real name, each positive case adds ONE row to the
+    tree under test -- `m52probe`, three lines of mc returning 42 -- and compiles, links and RUNS
+    a program that calls it, so the case says which road answered instead of asserting a name that
+    would have worked anyway. (a) no root: the exact D6 sentence, exit 1; (b) root 2 serves it,
+    exit 42; (c) root 3, with the binary in a `bin/` beside a `lib/`; (d) precedence, two trees
+    differing in one byte (`<libs>` says 42, the tree beside the binary says 7) and the program
+    exits 42; (e) a misspelled name with a root present keeps `unknown bundled include:
+    no/such/module`; (f) `scripts/release-assets.sh`'s archive untarred -- `lib/mc/v<ver>/` with
+    `bundle.list` and all 41 files -- and used as a root with an empty `$HOME`, no `--libs-dir`
+    and no network. **Teeth measured**: against a `build/mc1` built from `main`, the same script
+    is **3/7 with four failures** (each `unknown bundled include: m52probe`) and exit 1.
+  * **`scripts/check-standalone.sh` case 5 moved, and that is D6 working**: that script copies the
+    binary into an empty directory and now runs it with an empty `HOME` too, so it is exactly
+    state 1 and asserts the sentence that names the road. `docs/bootstrap.md` gained
+    § "What 'alone' means for the LIBRARY": the compiler's own source is inside the binary (what
+    the `cmp` against `build/mc2.o` proves, unchanged), the standard library travels beside it.
+  * **Deviation, on record** (§ Implementation notes 8): case (f) compiles `<m52probe>` and not
+    the `<float>` program § 10.7 names -- `lib/float.mc` is a compiler MODULE and needs a taught
+    compiler built first, minutes in a gate that runs in seconds. Step B, where `<float>` leaves
+    the blob, is where the literal form becomes measurable.
+  -- cost, `git diff --numstat main -- src/` (the generated `src/bundle_data.mc` excluded):
+  `src/deps.mc` **+78/-18**, `src/lex.mc` **+8/-6** = **86 added lines, 37 of them neither comment
+  nor blank** (the spec priced ~40). **Zero new globals**: `build/mc1 limits src/mc.mc` reports
+  `globals 446/512` before and after, and `funcs` 1951 -> 1954, the three being `dp_root_at`,
+  `dp_root_beside` and `dp_mc_root`.
+  `make bundle` re-run BEFORE bootstrapping (101 files, raw 1482105 -> LZ 678232, blob 679483 B).
+  `make check` green end to end (**RC 0, zero FAIL**): `budget` 2848/3000, `test` 32/32,
+  `check-lex` 177/177 (5 skipped), `check-ast`/`check-asm` 178/178, `check-obj` **32/32 identical
+  to the frozen seed** (and 32/32 `arm64-surface` against `macho`), `check-bundle`, `bootstrap` at
+  BOTH fixed points (`mc2.o == mc3.o` 1555048 B, `mc2o.o == mc3o.o`) with the cross-road identity
+  (`build/mc2o src/mc.mc == build/mc2.o`) and **both `--dump-asm` diffs between `mc1` and `mc2`
+  empty** (plain and `--opt=1`), `check-surface` 32/32 + inert, `check-opt`, `test-exe` 32/32 via
+  `--exe`, `check-mc`, `check-standalone`, `check-parts`, **`check-libroot` 7/7**, `check-toml`,
+  `check-build`, `check-pkg` 183/183, `check-tool` 27/27, `check-sysroots` (13 rows),
+  `check-stubs`, `check-limits` **17/17 seed limits under 90%** (the tightest row is `globals`
+  268/512 = 52% on `src/mc_seed.mc`), `check-minimal`, `test-linux` / `test-linux-x86_64` and the
+  four `--exe` cells, `test-windows` 56/56 and `test-windows-x86_64` 52/52 objects cross-compiled,
+  `check-examples`, `check-lang`, `check-conc`, `check-desktop`, `check-float`, `check-wide`,
+  `check-kernel` (`kernel.bin` 3304 B, QEMU 11.0.1), `check-avr` (`avr.elf` 15255 B),
+  `test-sandbox` 73 ok / 0 failed / 1 skipped, `check-docs` (206 symbols, 49 flags, 35 TOML keys,
+  10 directives, 52 samples, 514 links), `site` 99 pages + `check-site` (0 link problems) +
+  `check-site-linux` (99 pages on all four Linux cells, byte for byte the macOS render).
+  `make check-linux-host` **RC 0 over all four cells** (aarch64 musl 55/55 and gnu 56/56, x86_64
+  musl 51/51 and gnu native), each after its own plain AND optimized fixed point and with the
+  cross proof (`mc2l --backend=macho src/mc.mc` byte for byte the macOS `build/mc2.o`) green.
+  `scripts/check-inert.sh <mc1 from main 7c01d06> build/mc1`: **33 objects identical on the plain
+  road and 33 on `--opt=1`** (`tests/*.mc` and `src/mc.mc`) plus byte-identical artefacts for
+  `examples/api`, `lang`, `conc`, `desktop` and `kernel` -- a name the blob answers is answered by
+  the blob, before any root is consulted.
+  **All ten goldens rewritten once**, each only after its own criterion -- what moved is
+  `src/deps.mc`, `src/lex.mc` and therefore the blob: `mc2.sha256`
+  `1b56148c...cd5029` -> `61846ac0e463cd68a472aefbc195887eee1646585d30010914f5ece30996b140`,
+  `mc2-opt.sha256` `95205eeaf337246ebacbf08821bc39dc46c498c6512c2bd1c1ddafd0e638f144` (both by
+  `scripts/bootstrap.sh`, after the two empty `--dump-asm` diffs and the two `cmp`s); the four
+  Linux ones deleted and re-recorded by `make check-linux-host` --
+  `mc2-linux-arm64.sha256` `631b1a92e093f9fa177a5729893f63a2afb08ab9cf338e94b2f53aad57fe8e79`,
+  `mc2-linux-arm64-opt.sha256`
+  `a111c5fb465d4fd495b5715e2356bb81ba3865e995b02c51c0ece73274f4deff`,
+  `mc2-linux-x86_64.sha256` `979e33490e0397a2f5d44054462da1d5a40f72764b5618d3bcd05f6e477f3332`,
+  `mc2-linux-x86_64-opt.sha256`
+  `e34a957098f710288898f61263421363f5bf01849d978965b73884eeefcfc7d5`, each recorded in its musl
+  cell and re-verified by the gnu cell of the same architecture; the four Windows ones
+  cross-computed on macOS per `tests/golden/README.md` --
+  `mc2-windows-arm64.sha256` `1048679ac7f24c63b53d1d6c5a8e72b35fce9292d8cd01d9a75bdce7bda5cc5c`
+  (1589726 B), `mc2-windows-arm64-opt.sha256`
+  `ef75c2073c8d5989877ad8c6cc7b9c57766e8a991c0132691fe81884bfdbf06f` (1531314 B),
+  `mc2-windows-x86_64.sha256`
+  `7441742f103fa5ad88d989e5a8f7995c4154d1a5833288a5acfd7217827ae1ff` (1644678 B),
+  `mc2-windows-x86_64-opt.sha256`
+  `3a99fc8e7f6297b1209596c2063cf1b5c9c7211b86ff59b1b349509154858fd9` (1573098 B), all four also
+  written byte for byte by `build/mc2`.
+  Docs: `docs/reference/packages.md` § 2 (the three roots, their order and the partial tree) and
+  the new § 2b (the three sentences), `docs/reference/diagnostics.md` (one new row, two corrected),
+  `docs/bootstrap.md`, `docs/reference/bundle.md` § The slim flavour (both flavours ship the tree;
+  the slim tarball is an offline toolchain for the first time), `docs/ci.md`
+  § `scripts/release-assets.sh` (the tarball layout), `docs/specs/M52.md` (§ 11 row 1 LANDED with
+  the real line count + nine implementation notes).
+  Not in this step: **B**, the cut (`tools/bundle.mc`'s predicate, -140 300 B) and **C**,
+  `mc build --sync`.
 - Next: the **site + registry server, M47 S4-S6**, in
   `minicompiler/mc-registry`; then **M42 step 2** (PE `--exe`, CI-gated on the Windows runners).
   **M46** only on the owner's request; **M43 Layer 2** after 1.0.0. M13 and M18 stay in the backlog

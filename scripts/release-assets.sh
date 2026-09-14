@@ -85,6 +85,15 @@ esac
 cp "$binary" "$stage/$binname"
 chmod 755 "$stage/$binname"
 
+# M52 D4: the library root, beside the binary. `mc` resolves a `#include <name>`
+# it does not carry from <dir of the binary>/lib/mc/v<version>/, so the archive
+# carries that tree and "untar and a program that says <sys> compiles, offline"
+# stays true (docs/specs/M52.md § 4, docs/bootstrap.md). About 250 KB of source:
+# bundle.list and the library files, nothing of src/ -- a full binary answers
+# every mc/* name from its own blob. Both flavours get it, which is what makes
+# the slim tarball an offline toolchain for the first time (D12).
+sh "$(dirname "$0")/libroot.sh" "$stage" "$version" > /dev/null
+
 # INSTALL.txt is generated, never dated: a date would make the tarball differ
 # between two builds of the same tag.
 {
@@ -175,9 +184,20 @@ chmod 755 "$stage/$binname"
         echo "own tree, every --dump-*, mc --host, mc build, mc limits, mc sysroot, mc pkg."
         echo "The full flavour, mc-$version-$target.tar.gz, needs no install at all."
     else
-        echo "The standard library travels inside the binary: #include <sys>, <prelude>, <io>"
-        echo "and <mc/core> need no checkout. Documentation: docs/ in the repository."
+        echo "The compiler's own source travels inside the binary: #include <mc/core> needs"
+        echo "no checkout. Documentation: docs/ in the repository."
     fi
+    echo
+    echo "The library beside it"
+    echo "---------------------"
+    echo "lib/mc/v$version/ in this archive is the standard library. mc looks for it"
+    echo "next to its own binary, and one directory up -- so"
+    echo
+    echo "  install -m 755 mc /usr/local/bin/mc"
+    echo "  cp -R lib /usr/local/"
+    echo
+    echo "keeps #include <sys>, <prelude>, <io>, <float> working. A binary copied out of"
+    echo "this archive alone loses them, and says so; 'mc install' is the other road."
 } > "$stage/INSTALL.txt"
 
 # the README excerpt: everything before the marker, or the first 120 lines

@@ -1218,20 +1218,68 @@ uptr deps_libs_root() {
 
 void deps_set_libs_dir(uptr d) { dp_libs_opt = d; }
 
-// ---- stage 1: the installed `mc` package (A3, A4) ----
-// <libs>/mc/v<mc_version()>/ in the REPOSITORY layout, with bundle.list at its
-// root as the NAME<TAB>PATH map. Read once, cached; absent is not an error here
-// -- a full binary answers every one of these names from its blob and never
-// reaches this step.
+// ---- stage 1: the installed `mc` package (A3, A4), and the tree beside the
+// binary (M52 D4) ----
+// The map is `bundle.list` at the root of a tree in the REPOSITORY layout, so a
+// name's file is `<root>/<the path bundle.list gives it>`. Three roots are
+// tried, in this order:
+//
+//   1. <libs>/mc/v<mc_version()>/  -- --libs-dir DIR or $HOME/.mc/libs, what
+//      `mc install` and `mc upgrade` write. FIRST, so an explicit install still
+//      wins over the copy that shipped.
+//   2. <dir of host_self_path()>/lib/mc/v<version>/ -- what a release tarball
+//      carries beside the binary, and what `make` lays beside build/mc1.
+//   3. <dir of host_self_path()>/../lib/mc/v<version>/ -- for /usr/local/bin/mc
+//      finding /usr/local/lib/mc/v<version>/.
+//
+// Read once, cached; absent is not an error here. A PARTIAL tree is fine by
+// construction: dp_mc_open falls through on any name whose file is not
+// readable, so a release stages the library files and nothing of src/.
+uptr dp_root_at(uptr dir) {
+    if (!lex_readable(dep_in(dir, "bundle.list"))) return 0;
+    return dir;
+}
+
+// `<base>/../lib/mc/v<ver>/` and friends. path_join cuts its base at the last
+// slash, which is exactly "the directory of this file", and normalizes the
+// `..`; the trailing slash is what dep_in joins against.
+uptr dp_root_beside(uptr self, uptr rel) {
+    return tm_cat(path_join(self, rel), "/");
+}
+
+uptr dp_mc_root() {
+    uptr ver = mc_version();
+    uptr libs = deps_libs_root();
+    if (libs != 0) {
+        uptr d = dp_root_at(tm_cat(tm_cat(tm_cat(libs, "/mc/v"), ver), "/"));
+        if (d != 0) return d;
+    }
+    uptr self = host_self_path();
+    if (self == 0) return 0;
+    // A path with no directory at all would make path_join answer a RELATIVE
+    // one, and the working directory is never a root here (deps_libs_root says
+    // why): one source must give one answer wherever `mc` was run from.
+    i64 i = 0;
+    i64 slash = 0;
+    loop {
+        if (ld8(self + i) == 0) break;
+        if (ld8(self + i) == '/') slash = 1;
+        i = i + 1;
+    }
+    if (!slash) return 0;
+    uptr rel = tm_cat("lib/mc/v", ver);
+    uptr d = dp_root_at(dp_root_beside(self, rel));
+    if (d != 0) return d;
+    return dp_root_at(dp_root_beside(self, tm_cat("../", rel)));
+}
+
 void dp_mc_load() {
     uptr s = dp_state();
     if (ld64(s + DP_MCTRIED)) return;
     st64(s + DP_MCTRIED, 1);
-    uptr root = deps_libs_root();
-    if (root == 0) return;
-    uptr dir = tm_cat(tm_cat(tm_cat(root, "/mc/v"), mc_version()), "/");
+    uptr dir = dp_mc_root();
+    if (dir == 0) return;
     uptr list = dep_in(dir, "bundle.list");
-    if (!lex_readable(list)) return;
     i64 len = 0;
     uptr src = read_file(list, &len);
     // two passes: count the lines, then fill. The manifest is a file the
@@ -1290,18 +1338,30 @@ uptr dp_mc_open(uptr name, uptr pcanon, uptr plen) {
     return 0;
 }
 
-// ---- why nothing answered (M44 step 4) ----
-// src/lex.mc calls this when a `#include <name>` found nothing AND this binary
-// carries no bundle -- which is `mc-slim` and nothing else. 0 means "the usual
-// message is right": the tree IS installed and the name is simply not one of
-// its entries, which is an ordinary unknown-include. Otherwise the answer is
-// the sentence the reader needs, and the only one: the libraries of a slim
-// compiler are the installed `mc` package, and there is none.
+// ---- why nothing answered (M44 step 4, widened by M52 D6) ----
+// src/lex.mc calls this when a `#include <name>` found nothing at all -- on
+// every road now, not only on a binary with no bundle. Three states, and only
+// the middle one is silent:
+//
+//   no root at all, and this binary carries no blob (`mc-slim`): its libraries
+//   ARE the installed `mc` package and there is none. Unchanged text.
+//
+//   no root at all, and this binary carries a blob: the name is not one it
+//   ships and the library tree that would have had it was not found -- which
+//   is what a binary copied out of a release tarball without the lib/
+//   directory beside it looks like (docs/specs/M52.md § 4, risk 1).
+//
+//   a root was found: 0, "the usual message is right". The name is simply not
+//   one of the tree's entries, which is an ordinary unknown-include, and
+//   check-pkg and check-libroot assert that exact sentence.
 uptr dep_include_hint(uptr name) {
     dp_mc_load();
     if (ld64(dp_state() + DP_MCDIR) != 0) return 0;
-    return tm_cat(tm_cat(tm_cat("#include <", name), ">: not bundled in this compiler and mc "),
-                  tm_cat(mc_version(), " is not installed: run mc install"));
+    if (bopen_fn == 0)
+        return tm_cat(tm_cat(tm_cat("#include <", name), ">: not bundled in this compiler and mc "),
+                      tm_cat(mc_version(), " is not installed: run mc install"));
+    return tm_cat(tm_cat(tm_cat("#include <", name), ">: not in this compiler and mc "),
+                  tm_cat(mc_version(), "'s library tree was not found: run mc install"));
 }
 
 // ---- the opener src/lex.mc calls ----

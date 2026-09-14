@@ -1052,12 +1052,14 @@ i64 lex_include_name(uptr name, i64 line) {
     // The name IS a locked package and nothing answered: say why, instead of
     // reporting a bundled name that was never going to be there.
     if (t >= 0 && !lex_may_reach(from, t)) lex_pkg_refuse(from, name, line);
-    // A compiler with no bundle at all (bopen_fn == 0) is `mc-slim`, and there
-    // the interesting fact is not that this name is unknown but that no name is
-    // known: the libraries live in the installed `mc` package. The hint says so
-    // and names the road; a compiler that HAS a blob never gets here for a name
-    // it ships, so its message does not move.
-    if (bopen_fn == 0 && lhint_fn != 0) {
+    // Nothing answered, on any road: ask WHY before saying the name is unknown.
+    // A compiler with no bundle at all (`mc-slim`) is the loud case -- no name
+    // is known, because its libraries live in the installed `mc` package -- but
+    // since M52 a full binary can be in the same position for a name it does
+    // not ship, when no library tree was found either (docs/specs/M52.md § 4,
+    // D6). The hint answers 0 when a tree IS there, which is what keeps
+    // `unknown bundled include` the message for an ordinary misspelling.
+    if (lhint_fn != 0) {
         uptr why = callp(lhint_fn, name);
         if (why != 0) err_at(from, line, why);
     }

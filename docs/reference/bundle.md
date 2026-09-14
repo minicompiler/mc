@@ -351,7 +351,13 @@ Two parts are missing. `<mc/core_bundle>` is the point of the flavour. `<mc/core
 with it because `mc sandbox` is a Linux supervisor and not part of compiling anything; a build that
 wants it back adds the include and the `mc_sandbox_init()` call, and nothing else changes.
 
-What a slim binary does before anything is installed: compile a program with no `<...>` include,
+Since M52 both flavours ship the library **beside** the binary as well — `lib/mc/v<version>/` in
+every tarball, which is resolution root 2
+([packages.md § 2](packages.md#2-the-resolution-order)). For the slim flavour that is the larger
+change: untarring it gives a working `#include <prelude>` with no `mc install` at all, which it
+never had before. For the full one it is what keeps the promise when a name leaves the blob.
+
+What a slim binary does with nothing installed AND no tree beside it: compile a program with no `<...>` include,
 every `--dump-*`, `mc --host`, `mc --version`, `mc build` of a project whose sources use no
 bundled name, `mc limits`, `mc sysroot`, `mc pkg` — and `mc install` itself. What it does after
 `mc install` ([cli.md](cli.md) § 3e) is everything the full binary does, out of
