@@ -435,7 +435,7 @@ as stated for a reader who already accepts it), `docs/specs/M53.md` (the decisio
   the tree by one script (`scripts/surface-extract.sh`) and never written by hand — a function a
   module outside `src/` may call (`sym`), a CLI flag, an `mc.toml` key, a `#directive`, a name
   `#include <…>` resolves (a library or an `<mc/*>` part, one kind), a key of an `mc.lock`/
-  registry-index row, and the machine task contract's one-line version. 421 entries today
+  registry-index row, and the machine task contract's one-line version. 423 entries today
   (`tests/golden/surface.txt`, `check-freeze` inside `make check`); a removal fails the build
   unless the entry was deprecated at least one major earlier.
 * **The ten committed fixed points keep holding, on all five hosts `mc` runs itself on** — macOS
