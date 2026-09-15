@@ -396,14 +396,26 @@ fixed tree, so it can read neither a type (`bits i64`) nor an argument list
 `syntax_expr handler produced no expression` when it returns 0 — an expression position has no
 empty node to fall back on.
 
-**`word` may be `$`.** `$` is not a core token. Every `$` that begins a `#rule` hole — `$name`,
-`$1`, the `$$name` gensym — is lexed as a hole; every other `$` runs the surface matcher, so a
-module that registers `syntax_expr("$", &f)` (which reserves the lexeme through `word_add`) gets a
-one-character `$` token. In `$"..."` the `"` is left and lexes as an ordinary string, so the
-handler consumes the `$` and reads the `T_STR` token that follows. With nothing registered a bare
-`$"` matches no token and is `invalid hole` (raised in the lexer, the same diagnostic a genuinely
-unclaimed `$` always got). `$` is punctuation, so — unlike a taught *word* — it is never scoped by
-`source_claim` and cannot collide with an identifier.
+**`word` may be `$`, and a registration on it changes how `$` LEXES.** `$` is not a core token.
+Registering `syntax_expr("$", &f)` reserves the lexeme through `word_add`, and from then on:
+
+| where | `$x`, `$1`, `$$g` | `$` before anything else |
+|---|---|---|
+| inside a `#rule` pattern or template | a hole, as always | the one-character `$` token |
+| anywhere else | the one-character `$` token | the one-character `$` token |
+| with no `syntax_expr("$")` registered | a hole | the surface matcher, i.e. `invalid hole` |
+
+So `$"..."` works either way — the `"` is left and lexes as an ordinary string, so the handler
+consumes the `$` and reads the `T_STR` token that follows — and `$name` reaches the handler too,
+as the `$` token followed by the ordinary identifier `name`, which the module resolves in a table
+of its own. Inside a `#rule` a hole is still a hole, so one module can teach `$name` *and* write
+rules whose templates use `$` holes, in the same file.
+
+The rule is safe in both directions. Outside a template an unbound hole was already the error
+`hole $name has no rule binding it`, so nothing an untaught compiler accepts changes meaning; and
+with nothing registered the lexer does not even ask the question, so `$name` is a hole exactly as
+it was. `$` is punctuation, so — unlike a taught *word* — it is never scoped by `source_claim` and
+cannot collide with an identifier.
 
 ### `void syntax_infix(uptr word, i64 prec, uptr fn)`
 
@@ -1195,8 +1207,8 @@ one-line wrapper over it.
 
 ### Record and replay
 
-The four functions that let a module read a region now and parse it later — what a generic
-instantiation needs.
+The functions that let a module read a region now and parse it later — what a generic
+instantiation needs — and the two that let it own the region outright.
 
 | function | effect |
 |---|---|
@@ -1206,6 +1218,7 @@ instantiation needs.
 | `void p_take_lit(uptr q)` | the current numeric token really ends at `q`: the cursor moves there, the token's length grows with it, and the next token is lexed from `q` (M24) |
 | `uptr p_src_end()` | where the source being lexed ends — what a handler scanning raw bytes forward has to stop at (M24) |
 | `uptr p_cp()` | the lexer's **cursor**: the first byte of the source that has not been lexed yet, i.e. just past the current token (M45) |
+| `void p_skip_to(uptr q)` | the bytes from the cursor to `q` were consumed **by the handler**: the cursor moves there, the current token does *not* grow, and the next token is lexed from `q` |
 
 `p_skip_balanced` counts depth over **real tokens**, which is what makes a `}` inside a string or
 a comment harmless — a byte scan could not do that. An unterminated region is reported at the
@@ -1246,6 +1259,24 @@ reason (`p_take_lit outside the source token`). The lexer stops a number where *
 — `1.5` is the token `1` with the cursor left on the `.` — so a handler that scanned further says
 where its literal really ended. `q` may not be before the cursor (a handler cannot un-read) and
 may not be past `p_src_end()`.
+
+`p_skip_to` is the generalisation of `p_take_lit`, and the difference between them is the whole
+point. `p_take_lit(q)` says *my literal ends at `q`, make the token that long*; `p_skip_to(q)` says
+*I have consumed the bytes up to `q` myself, lex the next token from there* — the token keeps the
+length the lexer gave it. That is what a handler needs for a region the core has **no grammar
+for**: a single-quoted string, a `#` comment, a heredoc body, a run of inline HTML between `?>`
+and `<?php`. The handler reads the bytes with `p_cp()`/`p_src_end()`, builds whatever node it
+likes, and then says where it stopped.
+
+The guard is `p_take_lit`'s, for the same reason: the token has to be one **just lexed from the
+source being read** — never a string, never a substituted identifier — `q` may not be before the
+cursor and may not be past `p_src_end()`. Anything else is `p_skip_to outside the source token`.
+
+**Newlines inside the skipped region are counted.** A literal has no newline in it and a heredoc is
+nothing but newlines, so this is the one thing `p_take_lit` never had to do: without it every
+`err_at`, every `tok_line` and every `--dump-tokens` line number after a multi-line region would be
+the line the region *started* on. A four-line region followed by a bad call reports the call on its
+own line, not on the first line of the region.
 
 **`p_cp()` and `p_start()` are not the same position, and the difference matters exactly once.**
 `p_start()` is where the CURRENT TOKEN starts. On a token `p_subst_name()` replaced, `subst_apply`
@@ -1291,6 +1322,49 @@ The roots and the edges between them are registered by `src/deps.mc` from `mc.lo
 `lex_pkg_reserve`/`lex_add_root`/`lex_add_edge`/`lex_set_root_dir`; both tables are sized once,
 from the lock, and never grow. With none registered `lex_root_of` answers -1 for everything and
 the closure rule costs nothing.
+
+### The `<mc/core>` facilities a handler stands on
+
+A handler does not only call `p_*`. It builds nodes, interns strings and asks the core about a
+name, and those functions are as much of the API as the hooks are: they are frozen too
+(§ 8, `tests/golden/surface.txt`). They are listed here so that the promise is written down, not
+because a module has a choice about using them.
+
+**The AST.** A node index, never a pointer; `node_new` gives it a kind, a line and a file, and
+every field is read with `nd_*` and written with `set_nd_*`. `docs/reference/objects.md` § 1 says
+what each field means per kind.
+
+| function | effect |
+|---|---|
+| `i64 node_new(i64 kind, i64 line, uptr file)` | a new node of one of the `N_*` kinds, at that position; returns its index |
+| `i64 nd_kind(i64 n)` · `void set_nd_kind(i64 n, i64 v)` | the `N_*` kind |
+| `i64 nd_a(i64 n)` · `i64 nd_b(i64 n)` · `i64 nd_c(i64 n)` · `i64 nd_d(i64 n)`, written with `set_nd_a(i64 n, i64 v)` · `set_nd_b(i64 n, i64 v)` · `set_nd_c(i64 n, i64 v)` · `set_nd_d(i64 n, i64 v)` | the four child slots, whose meaning is per kind |
+| `i64 nd_val(i64 n)` · `void set_nd_val(i64 n, i64 v)` | the integer payload: a literal's value, a `break` level, a string's length |
+| `uptr nd_name(i64 n)` · `void set_nd_name(i64 n, uptr v)` | the text payload: an identifier, a string's bytes, a symbol |
+| `i64 nd_type(i64 n)` · `void set_nd_type(i64 n, i64 v)` | the type id — a core `TY_*` or one `type_new` returned |
+| `i64 nd_op(i64 n)` · `void set_nd_op(i64 n, i64 v)` | the operator token of a `N_BINARY`/`N_UNARY` |
+| `i64 nd_next(i64 n)` · `void set_nd_next(i64 n, i64 v)` | the sibling chain — a statement list, a parameter list, an initializer list |
+| `i64 nd_line(i64 n)` · `uptr nd_file(i64 n)`, written with `set_nd_line(i64 n, i64 v)` · `set_nd_file(i64 n, uptr v)` | the position `err_node` reports |
+| `i64 nd_sect(i64 n)` · `void set_nd_sect(i64 n, i64 v)` | the `#section` a declaration was written under |
+
+**Names the core already knows.**
+
+| function | effect |
+|---|---|
+| `i64 tok_add(uptr text, i64 len)` | the token id of a lexeme, creating it if it is new. Idempotent, which is why `word_add` can call it for a word another registration already claimed. A lexeme that does not begin with a letter (`;`, `$`, `<?php`) has no other way to get an id |
+| `i64 word_id(uptr s, i64 len)` | the id of an **alpha-initial** lexeme, or -1. It answers only for words, so the id of `(` comes from `tok_add` |
+| `i64 def_find(uptr s, i64 len)` · `uptr de_at(i64 i)` · `i64 de_val(uptr e)` | the `#define` table: the index of a name, the entry at an index, its value. What a module reads to honour a `#define` the source made |
+
+**Strings, paths and files.** All of `<mc/core>`'s, all in the arena, which is never freed: a
+pointer a module keeps stays valid for the whole compilation.
+
+| function | effect |
+|---|---|
+| `uptr xalloc(i64 n)` · `uptr xstrdup(uptr s, i64 n)` | `n` bytes of arena, and a NUL-terminated copy of `n` bytes into it |
+| `i64 cstrlen(uptr s)` · `i64 str_eq(uptr a, uptr b)` | length to the NUL, and equality of two NUL-terminated strings |
+| `uptr path_join(uptr base, uptr rel)` · `uptr path_norm(uptr p)` | join a relative path against the DIRECTORY of `base` (`base` is cut at its last `/`, and an absolute `rel` replaces it entirely), and resolve `.`/`..` **lexically**, with no floor — a module that joins a path out of untrusted text must contain it itself |
+| `uptr read_file(uptr path, uptr plen)` | the whole file into the arena, NUL-terminated, with its length through `plen`; 0 if it cannot be opened |
+| `void err_at(uptr file, i64 line, uptr msg)` · `void err_at2(uptr file, i64 line, uptr msg, uptr what)` | `file:line: msg` (and `: what`) on stderr, exit 1. A module's own diagnostics read exactly like the core's |
 
 ## 5. A worked example
 

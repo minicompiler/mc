@@ -20,20 +20,34 @@
 // exactly that, and also proves the change is inert: with no module claiming
 // `$`, --dump-ast and every object are byte for byte the pre-change compiler's.
 //
-// The handler eats its own token (p_next) and then reads the string. The `"` is
-// a NORMAL token: the lexer left it for the next lex_next, so p_id() is T_STR
-// and p_name() is the decoded bytes -- there is no interpolation syntax in the
-// lexer, and there does not need to be.
+// The handler eats its own token (p_next) and then reads what follows. The `"`
+// is a NORMAL token: the lexer left it for the next lex_next, so p_id() is
+// T_STR and p_name() is the decoded bytes -- there is no interpolation syntax
+// in the lexer, and there does not need to be.
+//
+// `$name` is the other half, and it is what a registration on `$` now buys:
+// outside a #rule template the `$` is this module's token and `name` is the
+// ordinary identifier after it, so the handler resolves it in a table of its
+// OWN -- here two names, 40 and 2. Inside a template `$name` is still a hole,
+// which is what keeps the rule below working in the same file.
 i64 dol_str() {
     i64 line = p_line();
     uptr fl = p_file();
     p_next();                                    // the `$` token
-    if (p_id() != T_STR)
-        err_at(fl, line, "$ must be followed by a string");
-    i64 len = cstrlen(p_name());                 // \0 is forbidden in a string (M5.5)
-    p_next();                                     // the string token
+    i64 v = 0 - 1;
+    if (p_id() == T_STR) {
+        v = cstrlen(p_name());                   // \0 is forbidden in a string (M5.5)
+    } else if (p_id() == T_IDENT) {
+        uptr nm = p_name();
+        if (str_eq(nm, "a")) v = 40;
+        if (str_eq(nm, "b")) v = 2;
+        if (v < 0) err_at(fl, line, "$ names nothing this module knows");
+    } else {
+        err_at(fl, line, "$ must be followed by a string or a name");
+    }
+    p_next();                                     // the string or the name
     i64 n = node_new(N_INT, line, fl);
-    set_nd_val(n, len);
+    set_nd_val(n, v);
     set_nd_type(n, TY_I64);
     return n;
 }

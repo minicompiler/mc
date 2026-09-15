@@ -7656,3 +7656,135 @@ agents (`.claude/agents/`): `stage0-dev` (C23), `mc-dev` (`.mc` code), `reviewer
   5 sections, 52 fences highlighted (1 kept plain)`; `make check-site` → `mcsite --check: 100
   pages, 0 link problems`, `100 files, 0 problems` (`checkhtml.py`), `50 pairs checked, 0 below the
   minimum` (`contrast.py`).
+
+- Lexer ownership, three additive items (0.16.x; reported by the mc-php consumer with reproducers
+  in its `probes/gap-lexer-ownership/`, exit 0 only while the gap reproduces). Measured against
+  `build/mc1` from `main` 210af6b BEFORE any code: `$name` -> `2 6 $a` (T_HOLE) and
+  `e-dollar.php:1: hole $name has no rule binding it`, with a `syntax_expr("$", &f)` registered
+  and every PHP lexeme `tok_add`ed -- the whole of what the surface offers. `stage0/` untouched
+  (2848/3000, `/usr/bin/git diff main -- stage0/` empty). **Cost in `src/`: 64 added lines, 21 of
+  them neither comment nor blank** (`parse.mc` +27/9, `lex.mc` +24/7, `hooks.mc` +13/5);
+  **zero new globals** (`dhook_fn` in `lex.mc` replaces nothing but is the fourth of its kind;
+  `check-limits` 17/17 seed limits under 90%, unchanged).
+  1. **`void p_skip_to(uptr q)`** (`src/parse.mc`, beside `p_take_lit`/`p_src_end`): the cursor
+     moves to `q` and the current token does **not** grow -- the generalisation of `p_take_lit`,
+     which says "my literal ends here, make the token that long" where this says "I consumed these
+     bytes myself, lex the next token from there". That is what a handler owning a region the core
+     has no grammar for needs: a single-quoted string, a `#` comment, a heredoc body, the inline
+     HTML between `?>` and `<?php`. It reads the bytes with `p_cp()`/`p_src_end()` (M45 already
+     allowed that) and now says where it stopped. Guarded exactly like `p_take_lit` --
+     `cp == tok_start(cur) + tok_len(cur)`, so never a string and never a substituted identifier,
+     `q` at or past the cursor and inside the file -- with its own message,
+     `p_skip_to outside the source token`.
+     **Newlines in the skipped region are counted**, which `p_take_lit` never had to do (a literal
+     has no newline in it; a heredoc is nothing but newlines). Proved by a negative control: with
+     the counting line removed and the compiler rebuilt, a bad call on the line after a four-line
+     region is reported at **line 3**; with it, at **line 6**.
+  2. **`$name` reaches `syntax_expr("$", &f)`.** The rule, and it is the consumer's: with a
+     registration on `$`, a `$` OUTSIDE a `#rule` pattern or template lexes as the one-character
+     `$` token and the name after it as the ordinary identifier it looks like; INSIDE a template a
+     hole is still a hole; with no registration nothing is even asked and `$name` is a hole exactly
+     as it was. Safe in both directions: outside a template an unbound hole was already the error
+     `hole $name has no rule binding it`, so nothing an untaught compiler accepts changes meaning.
+     The lexer must not name `hooks.mc` (`src/lexdump.mc` includes it with `arena.mc` and nothing
+     else), so it arrives as the fourth function pointer of its kind -- `lex_set_dollar_hook`,
+     beside `lex_set_source_hook`/`lex_set_claim_hook`/`lex_set_bundle` -- registered by
+     `syntax_expr` and answered in `hooks.mc` by `dollar_is_word(tok)`, which is the one place
+     both halves are visible (`syntax_expr_find` is there, `rule_def` is `parse.mc`'s). The
+     pointer is 0 until some module registers an expression word, and then not even the `callp`
+     happens. `lex_set_dollar_hook` is deliberately NOT surface: like the other two hook setters it
+     is named nowhere in `docs/reference/` (M53 § 8 -- an undocumented helper is not surface).
+  3. **Surface coverage widened, the rule being "a name `docs/reference/` documents as a CALLABLE
+     is frozen"** (`scripts/surface-extract.sh`, the ONE file both `check-docs` and `check-freeze`
+     read). **60 entries added, 0 removed**: `check-freeze` **424 -> 483 entries
+     (271 sym, 50 flag, 36 toml, 10 dir, 101 bundle, 14 lock, 1 machine)**, `check-docs`
+     **209 -> 271 symbols**. The 16 `hooks.md` § 4/§ 6 already calls "the parser's public API.
+     Fixed names" (`parse_expr`, `parse_stmt`, `parse_block`, `parse_params`, `parse_function`,
+     `top_add`, `def_add`, `param_new`, `list_append`, `lex_set_libs`, `lex_root_of`,
+     `lex_root_count`, `lex_root_name`, `lex_root_dir`, `lex_inc_count`, `lex_inc_at`), plus
+     `lex_file`/`lex_set_bundle` by the same rule, the `nd_*`/`set_nd_*` families as prefixes (26)
+     and `node_new`, `tok_add`, `word_id`, `def_find`/`de_at`/`de_val`, `path_join`/`path_norm`,
+     `read_file`, `xalloc`/`xstrdup`, `str_eq`, `cstrlen`, `err_at`/`err_at2`. Exact names and not
+     a `parse_`/`lex_` prefix, deliberately: those two prefixes would drag in 17 and 48 names
+     respectively, most of them internals nobody documents. 26 of the 60 needed a documentation
+     row and got one rather than being dropped from the list -- a new § "The `<mc/core>` facilities
+     a handler stands on" in `docs/reference/hooks.md` § 4 (three tables: the AST, names the core
+     already knows, strings/paths/files) plus `p_skip_to` in § Record and replay.
+     `lex_next`, `lex_word_id` and the three `lex_set_*_hook` are documented nowhere and stay out.
+  Proofs in `scripts/check-surface.sh` (**160 ok, 0 FAIL**), six new cases over two fixtures.
+  `lib/user_dollar.mc` (M-earlier's `$"..."` demo) grew the `$name` half -- a table of its own,
+  `a` -> 40, `b` -> 2 -- and one source now exercises **all three in the same file**: a `#rule`
+  whose template uses `$n` holes, `$"...42 chars..."` and `$a + $b`, exit **40**; the default
+  compiler still refuses `$"..."` (`invalid hole`) and still lexes `$name` as a hole
+  (`hole $name has no rule binding it`, asserted on a file of its own, since in the combined one
+  the `$"` above it is `invalid hole` first). `lib/user_rawlex.mc` + `lib/mc_rawlex.mc` are new and
+  are the `p_skip_to` half: `q'...'` is a region the core cannot lex, read verbatim into an
+  ordinary `N_STR` -- `q'a php single-quoted string'` prints itself and exits **26** -- the
+  four-line region reports the error after it at **:6**, and the default compiler refuses the same
+  source with `unterminated char literal`, which is the defect being answered. Neither fixture is
+  in `tools/bundle.list` (the M41 precedent for check-script-only demos), so neither is a
+  `[package].files` entry and the blob moved only through `src/lex.mc`/`src/parse.mc`/
+  `src/hooks.mc`.
+  **Inert**: `scripts/check-inert.sh <mc1 from main 210af6b> build/mc1` -- **33 objects identical
+  on the plain road and 33 with `--opt=1`** (`tests/*.mc` and `src/mc.mc`) plus byte-identical
+  artefacts for `examples/api`, `lang`, `conc`, `desktop` and `kernel` through the taught compiler
+  each side builds. Nothing in the corpus registers `syntax_expr("$")` or calls `p_skip_to`.
+  -- `make bundle` re-run BEFORE bootstrapping (60 files, raw 1259244 -> LZ 571094, blob
+  571868 B). `make check` green end to end (**RC 0, zero FAIL**): `budget` 2848/3000, `test`
+  32/32, `check-lex`/`check-ast`/`check-asm` **108/108**, `check-obj` **32/32 identical to the
+  frozen seed** and 32/32 `arm64-surface` against `macho`, `check-bundle` (lz round trip 125
+  cases), `bootstrap` at BOTH fixed points (`mc2.o == mc3.o`, `mc2o.o == mc3o.o`) with the
+  cross-road identity (`mc2o-plain.o == mc2.o`) and **both `--dump-asm` diffs between `mc1` and
+  `mc2` empty**, `check-surface` 32/32 + 160 ok + inert, `check-opt` **76/76**, `test-exe` 32/32
+  via `--exe`, `check-mc`, `check-standalone`, `check-parts`, `check-libroot` 11/11, `check-toml`,
+  `check-build`, `check-pkg` **200/200**, `check-tool` **31/31**, `check-sysroots` (13 rows),
+  `check-stubs`, `check-limits` **17/17 seed limits under 90%**, `check-minimal`, `test-linux`
+  57/57 and `test-linux-x86_64` 53/53, the four `--exe` cells 60/60 + 60/60 + 56/56 + 56/56,
+  `test-windows` 59/59 and `test-windows-x86_64` 55/55 objects cross-compiled, `check-examples`,
+  `check-lang` 18, `check-conc` 21, `check-desktop`, `check-float`, `check-wide`, `check-kernel`
+  (QEMU 11.0.1), `check-avr`, `test-sandbox` 73 ok / 0 failed / 1 skipped, `check-docs`
+  (**271 symbols**, 50 flags, 36 TOML keys, 10 directives, 52 samples, 588 links),
+  **`check-freeze` 483 entries**, `site` 100 pages + `check-site` (0 link problems) +
+  `check-site-linux` (100 pages on all four Linux cells, byte for byte the macOS render).
+  `make check-linux-host` **RC 0 over all four cells** (aarch64 musl 57/57 and gnu 58/58, x86_64
+  musl 53/53 and gnu 54/54), each after its own plain AND optimized fixed point, its own
+  cross-road identity and the cross proof (`mc2l --backend=macho src/mc.mc` byte for byte the
+  macOS `build/mc2.o`).
+  `tests/golden/seed-cmp.txt` **371 -> 407**: `p_skip_to`'s three `uptr` comparisons and the `$`
+  branch's, replicated across the 12 entry points that include `lex.mc`/`parse.mc`. Every one of
+  the 108 files still passes `validate_seed_diff`, so every differing line is still one of the
+  four allowed `ge/lt/gt/le -> hs/lo/hi/ls` substitutions; only the count moved, which is what the
+  gate's own message says to re-record.
+  **The ten goldens rewritten once**, each only after its own criterion: `mc2.sha256`
+  `dcbc2711...5a1443` -> `feae10152c3e9c92266cdb4a34db4fc1ece5a34ba6116386b04210adb4440281`,
+  `mc2-opt.sha256` `385a9b57eeba0c40dc718659ef0f0c9afd4b18f3272a152f633219d686e8f5b1` (both by
+  `scripts/bootstrap.sh`, after the two empty `--dump-asm` diffs and the two `cmp`s); the four
+  Linux ones deleted and re-recorded by `make check-linux-host` -- `mc2-linux-arm64`
+  `e6c8b3908f1cc774e3013b7dcd9a92132ec22d2b8cd90325142794e0e0d40b02`, `mc2-linux-arm64-opt`
+  `737b9957236b339b18807498db881155fb0576d49c8593262e1538d72e8ce1d1`, `mc2-linux-x86_64`
+  `50e38c93c474468823d1925295117a0398d5f05e7632de23c4927cd863e549d6`, `mc2-linux-x86_64-opt`
+  `f4e53de210029079efd8e1f3f69459c06092d3f415c493e1b3f670e5714bfa94`, each recorded in its musl
+  cell and re-verified by the gnu cell of the same architecture; the four Windows ones
+  cross-computed on macOS per `tests/golden/README.md` -- `mc2-windows-arm64`
+  `da2608649475d2b8bdf5993601bbf114d2d132eeb3f532c92289ba11affec269` (1492820 B),
+  `mc2-windows-arm64-opt`
+  `06a4a78a3352cc6aa7d198c0758689fe8eb0fa1e961cbacb9a35779d7903030d` (1433808 B),
+  `mc2-windows-x86_64`
+  `e2cd9e9ebafa3adfd9051a86135c43cb38d302689e0fc8ea256113763ebe2f43` (1548856 B),
+  `mc2-windows-x86_64-opt`
+  `7affea9666e84e89d6e7b7b0aa9dd28145552f67da6225e44a32645bcfd8e42b` (1476332 B).
+  **The consumer's own probe, re-run against the new compiler** (`MC=… sh run.sh`, exit 1 =
+  "no longer reproduces"): `e-dollar.php` moved from `hole $name has no rule binding it` to
+  `syntax_expr handler produced no expression: $` -- the handler road exists and `claimall.mc`'s
+  `ca_dollar()` is `p_next(); return 0;`, which is the guard -- and three of the five
+  `--dump-tokens` lines moved from `2 6 $a` (T_HOLE) to `2 308 $` + `2 1 a`. The other four lines
+  (`'`, `#`, `#[`, the raw text) are unchanged **by design**: they need a handler that CALLS
+  `p_skip_to`, and `claimall.mc` registers none. A 24-line module that does
+  (`syntax_expr("$")` + `syntax("<?php")` + `p_cp`/`p_src_end`/`p_skip_to`/`p_push_source`)
+  compiles both halves of the probe: `a-single-quote.php` exits **26** (the length of the
+  single-quoted string the core cannot lex) and `e-dollar.php` exits **4** (`cstrlen("name")`).
+  Docs: `docs/reference/hooks.md` (§ `syntax_expr` -- the `$` rule as a four-row table and why it
+  is safe both ways; § Record and replay -- the `p_skip_to` row, the guard and the line rule;
+  the new § "The `<mc/core>` facilities a handler stands on"), `docs/reference/diagnostics.md`
+  (one new row, `p_skip_to outside the source token`), `scripts/surface-extract.sh`'s own header
+  (what the widening freezes and what it deliberately leaves out).

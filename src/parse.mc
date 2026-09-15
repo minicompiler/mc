@@ -2076,6 +2076,33 @@ void p_take_lit(uptr q) {
 // from p_start() has to stop at
 uptr p_src_end() { return cend; }
 
+// The generalisation of p_take_lit: move the cursor to `q` WITHOUT growing the
+// current token. p_take_lit says "my literal ends here, make the token that
+// long"; this says "I have consumed the bytes up to here myself, lex the next
+// token from there" -- which is what a handler owning a region the core has no
+// grammar for needs: a single-quoted string, a `#` comment, a heredoc body, a
+// run of inline HTML. The handler reads from p_cp() to p_src_end(), builds its
+// own node, and skips what it read.
+//
+// Guarded exactly like p_take_lit and p_resplit_punct: `cp == tok_start(cur) +
+// tok_len(cur)` holds only for a token just lexed from the source being read --
+// never a string, never a substituted identifier -- and `q` has to be at or
+// past the cursor (a handler may not un-read) and inside the file.
+//
+// Newlines in the skipped region are counted, so err_at, tok_line and
+// --dump-tokens stay right on the line AFTER a multi-line region. That is the
+// one thing p_take_lit does not have to do: a numeric literal has no newline in
+// it, a heredoc is nothing but newlines.
+void p_skip_to(uptr q) {
+    if (q < cp || q > cend || cp != tok_start(cur) + tok_len(cur))
+        err_at(tok_file(cur), tok_line(cur), "p_skip_to outside the source token");
+    loop {
+        if (cp >= q) break;
+        if (ld8(cp) == '\n') cline = cline + 1;
+        cp = cp + 1;
+    }
+}
+
 // ---- M31 (2.1): asking the core about a declaration it already parsed ----
 // A module that lowers `await r = f(a)` -- or that generates FFI glue, or an
 // LSP hover, or a doc entry -- needs the CALLEE's declared signature, and the
