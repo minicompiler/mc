@@ -19,13 +19,15 @@ for mc in "$mc0" "$mc1"; do
 done
 
 
-# M38: a source the FROZEN SEED cannot compile has nothing to compare. There is
-# exactly one -- lib/sys_windows_host.mc declares CreateProcessA, which takes
-# ten parameters, and stage0 keeps MAXPARAMS at 8 (docs/build.md § limits). It
-# carries the reason in its own header, the way tests/*.mc carry `// skip-linux:`,
-# and it is REPORTED here rather than silently dropped. This is the same reason
-# tests/mc/ is a directory of its own (scripts/check-mc.sh).
-seed_skip() { sed -n 's|^// seed-skip: *||p' "$1" | head -1; }
+# The frozen C seed (build/mc0) is a differential oracle for src/ and tests/
+# ONLY, never for lib/: a library is taught from the surface and comparing it
+# against the seed has no purpose beyond pressing the seed's fixed MAX* tables
+# (docs/plan.md, CLAUDE.md § State). lib/*.mc left this corpus for that reason,
+# which is also why the seed-skip escape (M38) has no user left here: the one
+# file that ever carried it, lib/sys_windows_host.mc (CreateProcessA takes ten
+# parameters and stage0 keeps MAXPARAMS at 8), was a library. If a future src/-
+# or tests/-only file needs it, reintroduce the mechanism then -- git history
+# has it verbatim.
 
 tmp="${TMPDIR:-/tmp}/check-asm.$$"
 # Under Git Bash on Windows, MSYS hands TMPDIR to this shell in /d/... form, a
@@ -34,15 +36,9 @@ case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) tmp=$(cygpath -m "$tmp") ;; esac
 mkdir -p "$tmp"
 fails=0
 total=0
-skipped=0
 
-for f in tests/*.mc tests/lib/*.mc lib/*.mc src/*.mc; do
+for f in tests/*.mc tests/lib/*.mc src/*.mc; do
     [ -f "$f" ] || continue
-    why=$(seed_skip "$f")
-    if [ -n "$why" ]; then
-        echo "skip $f ($why)"
-        skipped=$((skipped + 1)); continue
-    fi
     total=$((total + 1))
 
     "$mc0" --dump-asm "$f" > "$tmp/a" 2> "$tmp/ae"; ra=$?
@@ -68,5 +64,4 @@ done
 
 rm -rf "$tmp"
 echo "$((total - fails))/$total files identical"
-[ "$skipped" -gt 0 ] && echo "$skipped skipped (the frozen seed cannot compile it)"
 [ "$fails" -eq 0 ]

@@ -476,6 +476,12 @@ file and then by function:
    file itself is identical (which is what `scripts/check-asm.sh` already checks for every
    `src/*.mc`), so the file that breaks when included in `mc.mc` but not alone points at the real
    interaction.
+
+   The seed's corpus is `src/*.mc` and `tests/**/*.mc` only. `lib/*.mc` are libraries taught from
+   the surface and are never compiled by `build/mc0`: the seed is a differential oracle for the
+   compiler's own source, not a ceiling for what a library may be (its fixed `MAXFUNCS 2048` once
+   pressed `lib/mc_i128.mc` to 2047 and forced `seed-skip` headers; since 2026-09-15 the three
+   scripts `check-lex`/`check-ast`/`check-asm` compare 108 files, all under `src/` and `tests/`).
 2. Inside the file, comment out/isolate functions (or run `--dump-asm` on a reduced file with
    just the suspect function and its direct dependencies) until the exact function is isolated.
 3. Usual causes of divergence in a self-hosted fixed point (not seen here, but the suspect list

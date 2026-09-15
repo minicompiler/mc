@@ -1,10 +1,6 @@
 // float_rt.mc — the run-time half of `<float>`: what a PROGRAM includes, not
 // what the compiler carries.
 //
-// seed-skip: it spells float literals, and the frozen stage0 lexer stops a
-// number at the `.` -- this file is only ever read by a compiler that has been
-// taught <float> (docs/specs/M24.md, risk 6)
-//
 //   #include <sys>           (or <sys_linux>, or <sys_windows> + <io>)
 //   #include <float_rt>
 //

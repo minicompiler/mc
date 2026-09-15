@@ -7107,3 +7107,24 @@ agents (`.claude/agents/`): `stage0-dev` (C23), `mc-dev` (`.mc` code), `reviewer
   real `<img>` past mcsite's own link check, not a GitHub blob link) — `scripts/check-docs.sh`
   gained the `/static/*` -> `site/static/*` mapping its naive relative-link scan needed to see
   them.
+- The seed compares `src/` and `tests/`, never `lib/` (owner's decision, 2026-09-15): `mc0` is a
+  differential oracle for the parts of the tree that MUST track it (`src/`, and the corpus under
+  `tests/`), and a library taught from the surface has no reason to be compared against a compiler
+  that has never heard of Tier 3/4 — the comparison only pressed the seed's fixed `MAXFUNCS`
+  (`lib/mc_i128.mc` sits at 2047/2048), which is what forced `// seed-skip:`/`// lex-skip:` headers
+  onto `lib/mc_float.mc`, `lib/mc_f16.mc`, `lib/sys_windows_host.mc` and
+  `lib/syntax_demo_test.mc` in the first place. `scripts/check-lex.sh`, `scripts/check-ast.sh` and
+  `scripts/check-asm.sh` dropped `lib/*.mc` from their corpus glob (now `tests/*.mc tests/lib/*.mc
+  src/*.mc`); the `seed-skip`/`lex-skip` escape mechanism itself is removed from all three scripts
+  too, since it had no remaining user in `tests/` or `src/` (the last four carriers were all
+  libraries) — a future `src/`- or `tests/`-only file that needs it can reintroduce the header and
+  the two-line `sed` reader from git history. The four headers above are deleted from `lib/`, with
+  their substantive explanations (the `MAXFUNCS` count, the `.` lexeme clash) kept as plain
+  comments where they still teach something. No other script compiles a `lib/*.mc` file with `mc0`
+  for comparison (`check-surface.sh`/`check-float.sh`/`check-wide.sh` build their taught compilers
+  with `mc_seed`/`mc1`, never `mc0`, and `check-surface.sh`'s two direct `$mc0` uses are over
+  `tests/*.mc` only). `src/`, `stage0/` and `tests/golden/` untouched by this change; `make
+  check-docs` and `make check-freeze` unaffected (both are green: 209 symbols / 50 flags / 35 TOML
+  keys / 10 directives / 52 samples / 570 links; 420 frozen entries).
+  Counts: `check-lex` **177/177 (5 skipped) -> 108/108 (0 skipped)**, `check-ast`/`check-asm`
+  **178/178 (4 skipped) -> 108/108 (0 skipped)**.
