@@ -102,8 +102,10 @@ uptr xg_addr;
 uptr xg_vmsize;
 uptr xg_off;
 uptr xg_fsize;
+uptr xg_zf;                                // 1 = holds only zerofill sections
 i64  xsegcap = 0;
 i64  nxseg = 0;
+i64  text_seg = 0;                         // index of the regular __TEXT segment
 
 uptr xg_name_at(i64 i)            { return ld64(xg_name + i * 8); }
 void set_xg_name_at(i64 i, uptr v) { st64(xg_name + i * 8, v); }
@@ -201,16 +203,16 @@ i64 exe_undef_index(i64 sym) {
 }
 
 // ---- segments and sections ----
-i64 exe_seg_find(uptr nm) {
+i64 exe_seg_find(uptr nm, i64 zf) {
     i64 i = 0;
     while (i < nxseg) {
-        if (str_eq(xg_name_at(i), nm)) return i;
+        if (str_eq(xg_name_at(i), nm) && ivec_at(xg_zf, i) == zf) return i;
         i++;
     }
     return -1;
 }
 
-void exe_seg_add(uptr nm) {
+void exe_seg_add(uptr nm, i64 zf) {
     i64 oc = xsegcap;
     xg_name = grow(T_XSEGS, xg_name, nxseg, &xsegcap, 8);
     if (xsegcap != oc) {
@@ -218,8 +220,10 @@ void exe_seg_add(uptr nm) {
         xg_vmsize = grow_to(xg_vmsize, nxseg, xsegcap, 8);
         xg_off    = grow_to(xg_off,    nxseg, xsegcap, 8);
         xg_fsize  = grow_to(xg_fsize,  nxseg, xsegcap, 8);
+        xg_zf     = grow_to(xg_zf,     nxseg, xsegcap, 8);
     }
     set_xg_name_at(nxseg, nm);
+    set_ivec_at(xg_zf, nxseg, zf);
     nxseg = nxseg + 1;
 }
 
@@ -279,39 +283,49 @@ i64 exe_seg_nsec(i64 g) {
     return n;
 }
 
-// One segment per distinct segment name, in order of first appearance — since
-// __TEXT,__text is always the first section created by gen_sections, __TEXT always
-// comes out at index 0, which is what the header requires. Within each segment the
-// regular sections come in creation order and the zerofill ones at the end, the same
-// rule as macho_write. The two synthetic ones go at the end of their segment's regular sections.
+// One segment per distinct (segment name, zerofill) pair, zerofill first and then
+// in order of first appearance. A zerofill segment takes no file space, so it is the
+// only kind that may sit BELOW __TEXT — and it has to, because dyld reads the classic
+// symbol table of an executable with no export trie only when __LINKEDIT's offset from
+// the mach header in memory equals its offset in the file. A zerofill section between
+// __TEXT and __LINKEDIT makes the two differ by its size, and every symbol the binary
+// exports becomes invisible to a flat-namespace dlopen (docs/macho-notes.md § M11).
+// Within each segment the sections come in creation order; the two synthetic ones go at
+// the end of their segment's regular sections.
 void exe_plan_sections() {
     nxseg = 0;
     nxsec = 0;
     sec2x = xalloc(8 * (nsections + 1));   // one slot per module section, exactly
-    i64 i = 0;
-    while (i < nsections) {
-        uptr nm = exe_segname(sec_seg(sec_at(i)));
-        if (exe_seg_find(nm) < 0) exe_seg_add(nm);
-        i++;
+    i64 zf = 1;
+    while (zf + 1 > 0) {
+        i64 i = 0;
+        while (i < nsections) {
+            uptr s = sec_at(i);
+            if (((sec_flags(s) & 0xff) == S_ZEROFILL) == zf) {
+                uptr nm = exe_segname(sec_seg(s));
+                if (exe_seg_find(nm, zf) < 0) exe_seg_add(nm, zf);
+            }
+            i++;
+        }
+        zf = zf - 1;
     }
-    if (nundef > 0 && exe_seg_find("__DATA") < 0) exe_seg_add("__DATA");
+    if (nundef > 0 && exe_seg_find("__DATA", 0) < 0) exe_seg_add("__DATA", 0);
+    text_seg = exe_seg_find("__TEXT", 0);
+    if (text_seg < 0) die("no __TEXT section: cannot generate an executable");
     i64 g = 0;
     while (g < nxseg) {
         uptr nm = xg_name_at(g);
-        i64 pass = 0;
-        while (pass < 2) {
-            i = 0;
-            while (i < nsections) {
-                uptr s = sec_at(i);
-                i64 zf = (sec_flags(s) & 0xff) == S_ZEROFILL;
-                if (zf == pass && str_eq(exe_segname(sec_seg(s)), nm)) exe_add_sec(i, 0, g);
-                i++;
-            }
-            if (pass == 0 && nundef > 0) {
-                if (str_eq(nm, "__TEXT")) exe_add_sec(0 - 1, 1, g);
-                if (str_eq(nm, "__DATA")) exe_add_sec(0 - 1, 2, g);
-            }
-            pass++;
+        i64 gz = ivec_at(xg_zf, g);
+        i64 i = 0;
+        while (i < nsections) {
+            uptr s = sec_at(i);
+            i64 sz = (sec_flags(s) & 0xff) == S_ZEROFILL;
+            if (sz == gz && str_eq(exe_segname(sec_seg(s)), nm)) exe_add_sec(i, 0, g);
+            i++;
+        }
+        if (!gz && nundef > 0) {
+            if (str_eq(nm, "__TEXT")) exe_add_sec(0 - 1, 1, g);
+            if (str_eq(nm, "__DATA")) exe_add_sec(0 - 1, 2, g);
         }
         g++;
     }
@@ -358,7 +372,7 @@ void exe_layout(i64 sizeofcmds) {
         i64 segvm = vm;
         i64 segoff = fo;
         i64 cur = 0;
-        if (g == 0) cur = 32 + sizeofcmds;        // the header lives inside __TEXT
+        if (g == text_seg) cur = 32 + sizeofcmds; // the header lives inside __TEXT
         i64 fsz = 0;
         i64 pass = 0;
         while (pass < 2) {
@@ -792,7 +806,10 @@ void exe_write(uptr path) {
     buf_u32(o, buf_len(lk_bind));
     buf_u32(o, 0); buf_u32(o, 0);                   // weak bind
     buf_u32(o, 0); buf_u32(o, 0);                   // lazy bind: everything is immediate bind
-    buf_u32(o, 0); buf_u32(o, 0);                   // export trie: the executable exports nothing
+    buf_u32(o, 0); buf_u32(o, 0);                   // export trie: none -- dyld falls back to
+                                                    // LC_SYMTAB, which is why the zerofill has
+                                                    // to stay out from between __TEXT and
+                                                    // __LINKEDIT (see exe_plan_sections)
 
     buf_u32(o, LC_SYMTAB);
     buf_u32(o, 24);
@@ -830,7 +847,7 @@ void exe_write(uptr path) {
     buf_u32(o, 0);                                  // ntools
     buf_u32(o, LC_MAIN);
     buf_u32(o, 24);
-    buf_u64(o, exe_sym_addr(msym) - EXE_BASE);      // entryoff: dyld calls _main
+    buf_u64(o, exe_sym_addr(msym) - ivec_at(xg_addr, text_seg));  // entryoff: dyld calls _main
     buf_u64(o, 0);                                  // stacksize: default
     exe_dylib(o);
     buf_u32(o, LC_CODE_SIGNATURE);
@@ -893,7 +910,7 @@ void exe_write(uptr path) {
         sha256(buf_p(o) + i * CS_PAGE, n, hashes + i * CD_HASHSIZE);
         i++;
     }
-    exe_sig(o, ident, sigoff, nslots, ivec_at(xg_off, 0), ivec_at(xg_fsize, 0), hashes);
+    exe_sig(o, ident, sigoff, nslots, ivec_at(xg_off, text_seg), ivec_at(xg_fsize, text_seg), hashes);
     exe_write_file(path, o);
 }
 

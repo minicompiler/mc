@@ -191,35 +191,61 @@ accepts bind/rebase via opcodes.
 
 ### Segment layout
 
-One `LC_SEGMENT_64` per **distinct segname** among the module's sections, in order of first
-appearance — since `__TEXT,__text` is always the first section `gen_sections` creates, `__TEXT`
-is always first. `__DATA` is created even without globals when there's an imported symbol (that's
-where `__got` lives). Inside each segment: regular sections in creation order, `S_ZEROFILL` last
-— the same rule `macho_write` follows.
+One `LC_SEGMENT_64` per **distinct (segname, zerofill) pair**: first every segment that holds
+only `S_ZEROFILL` sections, then the regular ones in order of first appearance — so `__TEXT`,
+whose `__text` is always the first section `gen_sections` creates, is the first segment with file
+content. `__DATA` is created even without globals when there's an imported symbol (that's where
+`__got` lives), and a module with a `__bss` gets a **second** `LC_SEGMENT_64` also named
+`__DATA`, carrying the zerofill alone.
 
 ```
 __PAGEZERO   vmaddr 0            vmsize 0x100000000   fileoff 0      filesize 0       prot 0
 __TEXT       vmaddr 0x100000000  vmsize 0x4000        fileoff 0      filesize 16384   prot 5 (r-x)
 __DATA       vmaddr 0x100004000  vmsize 0x4000        fileoff 16384  filesize 16384   prot 3 (rw-)
-__LINKEDIT   vmaddr 0x100008000  vmsize 0x4000        fileoff 32768  filesize 586     prot 1 (r--)
+__LINKEDIT   vmaddr 0x100008000  vmsize 0x4000        fileoff 32768  filesize 576     prot 1 (r--)
 ```
 
-(real values from `build/mc1 --exe tests/021-strings.mc`). Confirmed rules:
+(real values from `build/mc1 --exe tests/021-strings.mc`, which has no zerofill). With one —
+`tests/024-arena.mc`, an uninitialized global array — the zerofill segment goes **below**
+`__TEXT`:
+
+```
+__PAGEZERO   vmaddr 0            vmsize 0x100000000   fileoff 0      filesize 0       prot 0
+__DATA       vmaddr 0x100000000  vmsize 0x4000        fileoff 0      filesize 0       prot 3 (rw-)
+__TEXT       vmaddr 0x100004000  vmsize 0x4000        fileoff 0      filesize 16384   prot 5 (r-x)
+__DATA       vmaddr 0x100008000  vmsize 0x4000        fileoff 16384  filesize 16384   prot 3 (rw-)
+__LINKEDIT   vmaddr 0x10000c000  vmsize 0x4000        fileoff 32768  filesize 496     prot 1 (r--)
+```
+
+Confirmed rules:
 
 - **16 KiB page** (arm64's `vm_page_size`): every segment's `vmaddr` and `fileoff` are multiples
   of 16384. `filesize` is the regular content rounded up (the file is padded with zeros up to
-  there); `vmsize` is the total content, zerofill included, rounded up.
+  there); `vmsize` is the total content rounded up.
+- **The zerofill goes first, and that is not cosmetic.** An executable `mc` writes carries no
+  export trie, so `dyld` resolves a flat-namespace bundle's undefined symbols against the classic
+  `LC_SYMTAB` — and it only reads that table when `__LINKEDIT`'s offset from the mach header **in
+  memory** equals its offset **in the file**. Any zerofill between `__TEXT` and `__LINKEDIT`
+  makes the two differ by its size, and then every symbol the binary exports is invisible to
+  `dlopen` (the binary itself still runs). Measured both ways: `ld`'s own output with its
+  `export_off` patched to 0 fails identically with a 16 KiB `__bss` and works without one, and
+  `mc`'s output works once the zerofill is moved out from between them. A zerofill segment costs
+  no file space, so it is the only kind that can be placed below `__TEXT`; a segment placed
+  *after* `__LINKEDIT` would put the file offsets out of order.
 - **VM and file advance separately.** The next segment has `vmaddr = vmaddr + vmsize` and
   `fileoff = fileoff + filesize` of the previous one, computed independently — that's what allows
-  a 32 MiB `__bss` (`heap[]` in `src/arena.mc`) without a 32 MiB file. Confirmed against `ld`:
-  `build/mc1` has `__DATA` with `vmsize 0x2030000` and `filesize 16384`, and `__LINKEDIT` at
-  `vmaddr 0x10205c000` = `0x10002c000 + 0x2030000`.
+  a 32 MiB `__bss` (`heap[]` in `src/arena.mc`) without a 32 MiB file. `build/mc-exe` has a
+  zerofill `__DATA` with `vmaddr 0x100000000`, `vmsize 0x2064000` and `filesize 0`, `__TEXT` at
+  `0x102064000`, and from there on the two advance in lockstep: `__LINKEDIT`'s `vmaddr` minus
+  `__TEXT`'s is exactly its `fileoff`.
 - **The header lives inside `__TEXT`**: `__TEXT` starts at `fileoff 0` and the first section
-  starts at `32 + sizeofcmds`, rounded up to its own alignment.
-- **`LC_MAIN`'s `entryoff` is `_main`'s file offset.** Since `__TEXT` has `fileoff 0` and
-  `vmaddr = 0x100000000`, it's simply `addr(_main) - 0x100000000`. `dyld`/`libdyld` calls that
-  address as `main(argc, argv, envp, apple)` and does `exit(return value)` — which is why an
-  `i64 main()` that returns 42 gives `$? == 42` without any hand-written `_start`.
+  starts at `32 + sizeofcmds`, rounded up to its own alignment. It is no longer the lowest
+  address in the image when there is zerofill, which is legal: `dyld` takes the slide from
+  `__TEXT`, and `__PAGEZERO` still covers the whole low 4 GiB.
+- **`LC_MAIN`'s `entryoff` is `_main`'s file offset**, i.e. `addr(_main) - __TEXT.vmaddr` (which
+  is `0x100000000` only when the module has no zerofill). `dyld`/`libdyld` calls that address as
+  `main(argc, argv, envp, apple)` and does `exit(return value)` — which is why an `i64 main()`
+  that returns 42 gives `$? == 42` without any hand-written `_start`.
 
 Header flags: `MH_NOUNDEFS | MH_DYLDLINK | MH_TWOLEVEL | MH_PIE` = `0x200085`. `ld` sets
 `MH_NOUNDEFS` even with imported symbols (confirmed with `otool -hv` on the reference) — the flag
