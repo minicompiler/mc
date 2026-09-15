@@ -46,7 +46,7 @@ for all thirteen operations. `MTASK_CONST`, `MTASK_LOAD`, `MTASK_JUMP` are two o
 ones that take real thought are the four that touch the frame (`PROLOGUE`, `PARAM`, `EPILOGUE`,
 `FRAME_FIX`) and the two calls, and even those are twenty lines apiece.
 
-Four rules earn their keep:
+Five rules earn their keep:
 
 * **Depths go in caller-saved registers that are not argument registers.** That is the rule that
   produced `x9..x15` on AArch64, `r8..r11` on x86-64 and `t3..t6` on RISC-V; it is what lets a
@@ -57,6 +57,13 @@ Four rules earn their keep:
   the label pass reserves and the bytes the encoder writes moves every later branch and produces
   a plausible image that jumps into the middle of an instruction. If size and bytes come out of
   one function they cannot disagree.
+* **`MTASK_CMP` has ten conditions, not six.** `MCOND_EQ NE LT LE GT GE` and, since contract
+  version 6, `MCOND_ULT ULE UGT UGE` — the codes a `u64` or a `uptr` comparison takes. Map all ten
+  and refuse anything else (`die("unknown condition")`) rather than fall through to the signed
+  twin: the walker hands the code in an ARGUMENT, so there is no null-slot escape and a machine
+  that ignores them is silently wrong for every address comparison. On a part whose compare is
+  already two instructions this is one extra choice — `sltu` instead of `slt` on RISC-V,
+  `brlo`/`brsh` instead of `brlt`/`brge` on AVR.
 * **You may invent relocation kinds.** `src/machine_x86_64.mc` uses 16 and 17,
   `examples/kernel/machine_riscv64.mc` uses 32 and 33; they travel opaquely in the same `Reloc`
   record and only your writer has to understand them.

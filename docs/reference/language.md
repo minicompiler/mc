@@ -73,8 +73,35 @@ core has never heard of**, registered by a module.
 | `i32` | 4 | **signed** | M45; C's `int`, and the type an `extern` returning `int` declares |
 
 There is no `i8/i16`, no float, no `bool` — but each of those is now **one line** away, see
-"Types a module registers" below. A comparison yields `i64` `0` or `1`, and comparisons are always
-**signed** — the convention is that addresses stay below 2^63; it is documented, not enforced.
+"Types a module registers" below. A comparison yields `i64` `0` or `1`; whether it is signed is
+decided by the operand types, and the rule is in "Comparisons" below.
+
+### Comparisons
+
+`< <= > >=` are **unsigned** when neither operand is a signed type and one of them is eight bytes
+wide, and **signed** otherwise. `==` and `!=` never had a signedness to pick.
+
+| the operands | the comparison | why |
+|---|---|---|
+| `u64`/`u64`, `uptr`/`uptr`, `u64`/`uptr` | **unsigned** | an address above 2^63 is not negative |
+| `u8`/`u16`/`u32` on both sides | signed, and right | both are zero-filled into a 64-bit slot, so both are far below 2^63 |
+| a narrow unsigned and a `u64`/`uptr` | **unsigned** | the eight-byte side decides |
+| `i64` or `i32` on either side | signed | the signed side wins |
+| `f64`, `u128`, any registered non-integer | the module's own | its machine answers `MTASK_CMP` |
+
+The mixed row is deliberately **not** C's rule. C makes `i64 < u64` unsigned, which turns a
+negative left operand into a huge number; here the signed side wins, so a comparison that is
+correct today cannot change meaning. Two things follow for a program:
+
+* a plain integer literal is `i64`, so `u64 x; x >= 0x4000000000000000` is a *signed* comparison —
+  correct for every literal below 2^63, which is every literal this language can write down. A
+  constant with bit 63 set belongs in a `u64` variable (`u64 lim = one << 63;`), because a cast of
+  a literal folds to a literal and is `i64` again;
+* an address comparison needs no thought: `uptr` is eight bytes and unsigned, so `cp < cend` is
+  unsigned wherever it is written.
+
+Until contract version 6 every comparison was signed, which made `u64 m = 2; m >= (one << 63)`
+answer TRUE ([machine.md](machine.md) § 3).
 
 ### `i32`: the eighth word, and it is registered, not a keyword
 
@@ -96,7 +123,7 @@ The value of a type narrower than the word is **defined by extension from its wi
 | a store | truncates to the width | truncates — **the same instruction** as `u32` |
 | arithmetic | 64-bit on the extended value; wraps at the next store or cast | the same |
 | `/ % >>` | unsigned | **signed** (`sdiv`/`idiv`, `asr`) |
-| comparisons | signed on the 64-bit value | signed on the 64-bit value, and now correct |
+| comparisons | signed on the 64-bit value (unsigned against a `u64`/`uptr`) | signed on the 64-bit value, and now correct |
 | `(T) x` | zero-fill: `and #mask` / `mov wd, wn` | **sign-fill**: `sxtw` / `movsxd` / `sext.w` |
 | a constant cast, at compile time | masks | sign-extends from bit 31 |
 | a literal | there is none; `i32 x = -1` stores `0xffffffff` and reads back `-1` | |
@@ -192,7 +219,7 @@ one through `syntax_expr` instead: the handler reads the operator with `p_next()
 | 10 | `* / %` | left | signedness follows the **left** operand's type |
 | 9 | `+ -` | left | |
 | 8 | `<< >>` | left | `>>` is `asr` when the left operand is `i64`, `lsr` otherwise |
-| 7 | `< <= > >=` | left | result 0/1 |
+| 7 | `< <= > >=` | left | result 0/1; unsigned when neither side is signed and one is eight bytes wide |
 | 6 | `== !=` | left | result 0/1 |
 | 5 | `&` | left | bitwise |
 | 4 | `^` | left | bitwise |

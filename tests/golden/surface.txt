@@ -176,7 +176,7 @@ lock	tools
 lock	url
 lock	version
 lock	yanked
-machine	5
+machine	6
 sym	backend
 sym	backend_coff
 sym	backend_coff_x86

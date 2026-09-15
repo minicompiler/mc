@@ -228,6 +228,7 @@ notatype main() { return 0; }
 | `intrinsic with an unknown result type` | the result type is not a type id that exists | register the type first |
 | `machine_slot outside the task table` | M24: the task index handed to `machine_slot` is not in `0 .. MTASK_COUNT - 1` | the slot list is [machine.md](machine.md) § 2 |
 | `unknown machine` | `--machine=NAME`, or a backend's `machine_use`, named something not registered | `arm64` and `x86_64` are built in; the detail is the name |
+| `unknown condition` | a machine's `MTASK_CMP` was handed a `cond` its table does not cover. Since contract version 6 there are ten ([machine.md](machine.md) § 3), and a machine that maps only the signed six must refuse rather than encode the signed twin of an unsigned comparison | map `MCOND_ULT ULE UGT UGE`; all five machines in this tree do |
 | `add/sub immediate out of 12 bits` / `cmp immediate out of 12 bits` | a folded immediate does not fit the instruction | materialise it into a variable first |
 | `immediate and mask not supported` | an `and` with an immediate the bitmask encoding cannot express | put the mask in a variable |
 | `memory offset out of range` | a frame offset outside the scaled `ldr`/`str` range | the frame is too large or too fragmented; reduce the locals |

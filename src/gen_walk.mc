@@ -150,6 +150,12 @@ uptr mtask_name(i64 t) {
 #define MCOND_LE 3
 #define MCOND_GT 4
 #define MCOND_GE 5
+// Contract version 6: the four unsigned orderings. EQ and NE have no signed
+// form to be the other of, so there are ten codes and not twelve.
+#define MCOND_ULT 6
+#define MCOND_ULE 7
+#define MCOND_UGT 8
+#define MCOND_UGE 9
 
 // ---- Ins ----
 #define INS_OP    0
@@ -653,7 +659,11 @@ i64 str_sym(uptr bytes, i64 len) {
 // The walker's job here is to say WHICH abstract operation the token names; how
 // it is spelled in instructions is the machine's.
 i64 cmp_toks[]  = { K_EQ, K_NE, K_LT, K_LE, K_GT, K_GE };
-i64 cmp_conds[] = { MCOND_EQ, MCOND_NE, MCOND_LT, MCOND_LE, MCOND_GT, MCOND_GE };
+// ONE table of twelve, not two of six: the signed half first, then the unsigned
+// one, so cmp_cond indexes it with `i + uns * 6` and the seed's MAXGLOBALS pays
+// for nothing (scripts/check-limits.sh).
+i64 cmp_conds[] = { MCOND_EQ, MCOND_NE, MCOND_LT,  MCOND_LE,  MCOND_GT,  MCOND_GE,
+                    MCOND_EQ, MCOND_NE, MCOND_ULT, MCOND_ULE, MCOND_UGT, MCOND_UGE };
 i64 bin_toks[]  = { K_ADD, K_SUB, K_MUL, K_DIV, K_MOD,
                     K_AND, K_OR, K_XOR, K_SHL, K_SHR, 0 };
 i64 bin_uops[]  = { MOP_ADD, MOP_SUB, MOP_MUL, MOP_UDIV, MOP_UMOD,
@@ -667,14 +677,48 @@ i64 bin_toks_at(i64 i)  { return ld64(bin_toks + i * 8); }
 i64 bin_uops_at(i64 i)  { return ld64(bin_uops + i * 8); }
 i64 bin_sops_at(i64 i)  { return ld64(bin_sops + i * 8); }
 
-i64 cmp_cond(i64 op) {
+// uns picks the half: the signed six, or the same six with the four orderings
+// replaced by their unsigned twins. -1 means "this token is not a comparison",
+// which is the question src/gen_resolve.mc asks with uns = 0.
+i64 cmp_cond(i64 op, i64 uns) {
     i64 i = 0;
     loop {
         if (i >= 6) break;
-        if (cmp_toks_at(i) == op) return cmp_conds_at(i);
+        if (cmp_toks_at(i) == op) return cmp_conds_at(i + uns * 6);
         i = i + 1;
     }
     return -1;
+}
+
+// Which of the two a comparison takes. The rule, and it is deliberately
+// NARROWER than C's:
+//
+//   unsigned  iff  NEITHER operand is a signed type, both are TK_INT, and one
+//                  of them is eight bytes wide.
+//
+// Everything else keeps the signed code, which is what this compiler has always
+// emitted -- so a comparison of two values of the SAME type is the only shape
+// that can move, and only for u64/uptr. Two zero-extended narrow operands are
+// already right under a signed 64-bit compare (the slot invariant fills the
+// bytes above the width with zero and both values are far below 2^63), and a
+// mixed comparison where one side is i64 stays signed: C would make the whole
+// thing unsigned and turn a negative i64 into a huge number, silently. Here the
+// signed side wins, so no program that works today changes meaning.
+//
+// A plain integer literal is i64 (res_lit_type), so `u64 x; x >= 0` and every
+// comparison against a written constant stays signed -- correct for every
+// literal this language can spell below 2^63, and the reason the escape for a
+// constant with bit 63 set is a u64 VARIABLE, not a cast (a cast of a literal
+// folds to an N_INT and res_lit_type types it i64 again).
+//
+// TK_FLOAT, TK_WIDE and TK_OPAQUE are excluded by the kind test, which is what
+// keeps <float>'s f64 (width 8, not signed) and <i128>'s u128 out: they carry
+// their own compare and dispatch on the six codes they know.
+i64 cmp_unsigned(i64 ta, i64 tb) {
+    if (type_signed(ta) || type_signed(tb)) return 0;
+    if (type_kind(ta) != TK_INT || type_kind(tb) != TK_INT) return 0;
+    if (type_width(ta) == 8 || type_width(tb) == 8) return 1;
+    return 0;
 }
 
 // M45: i64 and every TK_SINT divide and shift with sign; everything else
@@ -1090,7 +1134,7 @@ void gen_binary(i64 n, i64 depth) {
     if (op == K_ANDAND || op == K_OROR) { gen_logic(n, depth); return; }
     gen_value(nd_a(n), depth);
     gen_value(nd_b(n), depth + 1);
-    i64 cond = cmp_cond(op);
+    i64 cond = cmp_cond(op, cmp_unsigned(res_type(nd_a(n)), res_type(nd_b(n))));
     if (cond >= 0) { callp(mach(MTASK_CMP), cond, depth, depth + 1); return; }
     i64 mop = bin_op(op, type_signed(res_type(nd_a(n))));
     if (mop < 0) err_node(n, "binary operator with no codegen");

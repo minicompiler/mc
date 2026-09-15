@@ -102,9 +102,17 @@
 #define I_SXTH    51
 #define I_SXTW    52
 
-// AArch64 conditions used by M1
+// AArch64 conditions used by M1, and (contract version 6) the four unsigned
+// orderings. Every pair here is `cc ^ 1` of the other -- hs/lo are 2/3 and
+// hi/ls are 8/9, exactly as eq/ne are 0/1 and ge/lt 10/11 -- which is what lets
+// the CSET encoder and both M49 peepholes negate a condition by flipping one
+// bit without knowing which condition it is.
 #define C_EQ  0
 #define C_NE  1
+#define C_HS  2
+#define C_LO  3
+#define C_HI  8
+#define C_LS  9
 #define C_GE 10
 #define C_LT 11
 #define C_GT 12
@@ -215,7 +223,8 @@ uptr mem_name[] = { "ldr", "str", "ldr", "str", "ldrh", "strh", "ldrb", "strb",
 // the MOP_* / MCOND_* vocabulary, in its own order, spelled in AArch64
 i64 bin_rrr[] = { I_ADD, I_SUB, I_MUL, I_SDIV, I_UDIV, I_SDIV, I_UDIV,
                   I_AND, I_ORR, I_EOR, I_LSLV, I_LSRV, I_ASRV };
-i64 cond_arm[] = { C_EQ, C_NE, C_LT, C_LE, C_GT, C_GE };
+i64 cond_arm[] = { C_EQ, C_NE, C_LT, C_LE, C_GT, C_GE,
+                   C_LO, C_LS, C_HI, C_HS };   // MCOND_ULT ULE UGT UGE
 
 i64  rrr_ins_at(i64 i)   { return ld64(rrr_ins + i * 8); }
 i64  rrr_base_at(i64 i)  { return ld32(rrr_base + i * 4); }
@@ -440,6 +449,7 @@ void a64_bin(i64 op, i64 d, i64 d2) {
 }
 
 void a64_cmp(i64 cond, i64 d, i64 d2) {
+    if (cond < 0 || cond >= 10) die("unknown condition");   // a code past this contract
     i64 rl = val_reg(d, REG_S1);
     i64 rr = val_reg(d2, REG_S2);
     i64 rd = dst_reg(d);
@@ -452,7 +462,8 @@ void a64_un(i64 op, i64 d) {
     // M49 P2: `cset rd, cc` then a logical NOT on the same rd is `cset rd, !cc`.
     // When the value at this depth was just produced by a cset in the depth's
     // own register, flip its condition in place and emit nothing at all -- the
-    // negation of any C_* pair (EQ/NE, GE/LT, GT/LE) is exactly `cc ^ 1`, the
+    // negation of any C_* pair (EQ/NE, HS/LO, HI/LS, GE/LT, GT/LE) is exactly
+    // `cc ^ 1` -- the version 6 codes included -- the
     // same inversion the CSET encoder applies (0x9A9F07E0 | (imm ^ 1) << 12).
     // Guarded by walk_opt() and by adjacency, like the store rewrite: an
     // I_LABEL between would BE the last instruction and is not an I_CSET.
@@ -750,6 +761,10 @@ void d_word(u64 w) {
 uptr cond_name(i64 c) {
     if (c == C_EQ) return "eq";
     if (c == C_NE) return "ne";
+    if (c == C_HS) return "hs";
+    if (c == C_LO) return "lo";
+    if (c == C_HI) return "hi";
+    if (c == C_LS) return "ls";
     if (c == C_GE) return "ge";
     if (c == C_LT) return "lt";
     if (c == C_GT) return "gt";

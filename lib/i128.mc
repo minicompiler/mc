@@ -184,10 +184,10 @@ i64 iw_lit() {
 #define WI_CSET   209                 // cset rd, <cond>   -- an unsigned condition (hs/lo)
 #define WI_MAXOP  210
 
-// arm64 condition codes for the UNSIGNED compare (the core only ever uses the
-// signed/equal ones, so these are the module's).
-#define WC_HS 2                       // unsigned >=  (carry set: no borrow)
-#define WC_LO 3                       // unsigned <   (carry clear: borrow)
+// The arm64 codes for the UNSIGNED compare are C_HS (carry set: no borrow) and
+// C_LO (carry clear: borrow). They were this module's own #defines until
+// contract version 6 gave the core machine unsigned comparisons of its own;
+// now there is one definition, in src/machine_arm64.mc.
 
 u32 wi_base[] = { 0xAB000000, 0x9A000000, 0xEB000000, 0xDA000000, 0xFA000000,
                   0x9BC07C00, 0x937FFC00, 0xEB00001F, 0xFA00001F };
@@ -332,8 +332,8 @@ void wi_cmp(i64 cond, i64 d, i64 d2) {
     if (cond == MCOND_LE) base = MCOND_LT;        // le = lt || eq
     i64 rd = dst_reg(d);
     if (uns) {                                    // hs (>=) / lo (<)
-        i64 wc = WC_HS;
-        if (base == MCOND_LT) wc = WC_LO;
+        i64 wc = C_HS;
+        if (base == MCOND_LT) wc = C_LO;
         ins_add(WI_CSET, rd, 0, 0, wc, 0, 0);
     } else {
         ins_add(I_CSET, rd, 0, 0, cond_arm_at(base), 0, 0);
@@ -484,8 +484,8 @@ void wi_cast(i64 ty, i64 d) {
 
 // ---- arm64 encoding, sizing and the dump ----
 uptr wi_cond_name(i64 c) {
-    if (c == WC_HS) return "hs";
-    if (c == WC_LO) return "lo";
+    if (c == C_HS) return "hs";
+    if (c == C_LO) return "lo";
     return "??";
 }
 
@@ -560,12 +560,10 @@ void wi_dump(uptr in) {
 #define XW_MUL    102                 // mul rd          REX.W f7 /4  (rdx:rax = rax*rd)
 #define XW_SETCC  103                 // setcc rd        0f 9x /0
 
-// x86 condition nibbles (setcc cc): the unsigned pair the core dump has no name
-// for, plus the signed/equal ones this compare uses.
-// XC_E (4) and XC_NE (5) are the core x86 machine's; these are the four the
-// core has no name for.
-#define XC_B  2                       // below     (unsigned <)
-#define XC_AE 3                       // above-eq  (unsigned >=)
+// x86 condition nibbles (setcc cc). XC_E (4), XC_NE (5) and -- since contract
+// version 6, which gave the core machine unsigned comparisons -- XC_B (2) and
+// XC_AE (3) are the core x86 machine's; the two signed ones this compare uses
+// are the module's, because the core reaches them through its own table.
 #define XC_L  12                      // signed <
 #define XC_GE 13                      // signed >=
 

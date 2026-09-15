@@ -10,7 +10,8 @@
 //
 //   CONST      small, 32-bit, 64-bit and negative constants -> the four `li` shapes
 //   BIN        all thirteen MOP_*, signed and unsigned, through i64 and u64
-//   CMP        all six MCOND_*
+//   CMP        all ten MCOND_* -- the six signed and, since contract version 6,
+//              the four unsigned orderings a u64 comparison takes
 //   UN         MUN_NEG, MUN_NOT, MUN_LNOT
 //   BOOL       && and ||
 //   CAST       u8, u16, u32, and (M45) i32 -- the signed side of the same slot
@@ -62,7 +63,7 @@ i64 sw_signed(i64 a, i64 b) {
     return r;
 }
 
-// all six comparisons, plus && and || for MTASK_BOOL
+// all six signed comparisons, plus && and || for MTASK_BOOL
 i64 sw_compare(i64 a, i64 b) {
     i64 n = 0;
     if (a == b) n = n + 1;
@@ -73,6 +74,17 @@ i64 sw_compare(i64 a, i64 b) {
     if (a >= b) n = n + 32;
     if (a && b) n = n + 64;
     if (a || b) n = n + 128;
+    return n;
+}
+
+// the same four orderings on u64, which is contract version 6: MCOND_ULT..UGE,
+// and therefore `sltu` where sw_compare gets `slt`
+i64 sw_compare_u(u64 a, u64 b) {
+    i64 n = 0;
+    if (a < b)  n = n + 1;
+    if (a <= b) n = n + 2;
+    if (a > b)  n = n + 4;
+    if (a >= b) n = n + 8;
     return n;
 }
 
@@ -182,7 +194,7 @@ i64 sw_addresses() {
 
 i64 sw_all() {
     sw_nop();
-    return sw_unsigned(9, 4) + sw_signed(9, 4) + sw_compare(1, 2)
+    return sw_unsigned(9, 4) + sw_signed(9, 4) + sw_compare(1, 2) + sw_compare_u(1, 2)
          + sw_consts() + sw_casts(0x1234567) + sw_memory(sw_arr)
          + sw_big_frame() + sw_twelve(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12)
          + sw_deep(1) + sw_control(10) + sw_addresses() + sw_signed32(0x89abcdef);

@@ -5,8 +5,8 @@
 a `Version N → M` paragraph like the ones below — `check-freeze` enforces both
 ([hooks.md](hooks.md) § 8).
 
-> **Contract version 5 -- the integer tasks, the depth type, deriving a machine, the KIND
-> obligation and the register allocator (M17, M24, M39, M45, M49).**
+> **Contract version 6 -- the integer tasks, the depth type, deriving a machine, the KIND
+> obligation, the register allocator and the unsigned comparisons (M17, M24, M39, M45, M49).**
 > `src/gen_walk.mc` is the target-independent walker; `src/machine_arm64.mc` (M17 step A) and
 > `src/machine_x86_64.mc` (step B, and M20's Win64 half) are the three machines behind it in the
 > compiler -- `arm64`, `x86_64`, `x86_64-win` -- and `machine(name, tab)` in `src/hooks.mc` is
@@ -59,6 +59,21 @@ a `Version N → M` paragraph like the ones below — `check-freeze` enforces bo
 > version 4 — with no edit. `examples/kernel/machine_riscv64.mc` and `examples/avr/machine_avr.mc`
 > are exactly that case, and `scripts/check-opt.sh` proves it by comparing their artefacts on both
 > roads.
+>
+> **Version 5 → 6 appends no slot and changes no signature.** It appends four values to ONE
+> argument: `MTASK_CMP`'s `cond` may now be `MCOND_ULT`, `MCOND_ULE`, `MCOND_UGT` or `MCOND_UGE`
+> (6..9) as well as the six it has always carried. Every comparison used to be signed, so a `u64`
+> or a `uptr` with bit 63 set read as negative and `2 >= (1 << 63)` answered TRUE. The walker now
+> picks the unsigned code when **neither** operand is a signed type and one of them is eight bytes
+> wide (§ 3); a narrow unsigned operand keeps the signed code, because the slot invariant
+> zero-fills it and a signed 64-bit compare of two such values is already right.
+> **A machine that does not map the four is wrong, not merely old**: there is no null-slot escape
+> here, because the codes arrive in an argument and not in a table entry. The obligation is one
+> line per code in whatever the machine already dispatches on — a condition-code table on arm64
+> and x86-64, a choice of `slt` against `sltu` on riscv64, a choice of `brlt`/`brge` against
+> `brlo`/`brsh` on AVR — and a machine that receives a code it does not know must **refuse**
+> (`unknown condition`) rather than encode the signed twin. All five machines in this tree map
+> them.
 
 ## Why the split exists
 
@@ -162,7 +177,7 @@ cast, for the **kind** that says how the bytes above that width are filled (cont
 | `MTASK_FRAME_FIX` | `void f(i64 frame)` | the frame size, known only after the whole body |
 | `MTASK_CONST` | `void f(i64 d, i64 imm)` | materialise a constant at depth `d` |
 | `MTASK_BIN` | `void f(i64 op, i64 d, i64 d2)` | `MOP_*` of depths `d` and `d2`, result at `d` |
-| `MTASK_CMP` | `void f(i64 cond, i64 d, i64 d2)` | `MCOND_*`, result 0/1 at `d` |
+| `MTASK_CMP` | `void f(i64 cond, i64 d, i64 d2)` | one of the ten `MCOND_*`, result 0/1 at `d` |
 | `MTASK_UN` | `void f(i64 op, i64 d)` | `MUN_*` in place |
 | `MTASK_BOOL` | `void f(i64 d)` | `d = (d != 0)` — the normalisation `&&`/`\|\|` needs |
 | `MTASK_CAST` | `void f(i64 ty, i64 d)` | extend depth `d` to the type's width **by its kind**: zero-fill for `TK_INT`, sign-fill for `TK_SINT`, nothing at width 8 |
@@ -387,12 +402,35 @@ MOP_ADD MOP_SUB MOP_MUL MOP_SDIV MOP_UDIV MOP_SMOD MOP_UMOD
 MOP_AND MOP_OR MOP_XOR MOP_SHL MOP_SHR MOP_SAR
 MUN_NEG MUN_NOT MUN_LNOT
 MCOND_EQ MCOND_NE MCOND_LT MCOND_LE MCOND_GT MCOND_GE
+MCOND_ULT MCOND_ULE MCOND_UGT MCOND_UGE
 ```
 
 Signed and unsigned are **separate operations**, not a flag: the walker picks `MOP_SDIV` over
 `MOP_UDIV` (and `MOP_SAR` over `MOP_SHR`) from `res_type` of the left operand, which is mc's actual
 rule — `i64` and every `TK_SINT` divide and shift with sign, everything else does not
-(`type_signed`, M45). Comparisons are always signed, so there is one set of six.
+(`type_signed`, M45). Comparison is the same shape and, since contract version 6, the same rule:
+ten codes, and `cmp_unsigned` in `src/gen_walk.mc` is the whole of it —
+
+```
+unsigned  iff  neither operand is a signed type, both are TK_INT,
+               and one of them is eight bytes wide
+```
+
+— so `u64` and `uptr` compare as addresses and everything else keeps the signed code. `EQ` and `NE`
+have no signed form to be the other of, which is why there are ten and not twelve. Three things
+follow, and each is deliberate:
+
+* **A narrow unsigned operand keeps the signed code.** A `u8`, `u16` or `u32` is zero-filled above
+  its width by the slot invariant (§ 5), so both values are far below 2^63 and a signed 64-bit
+  comparison of them is already the unsigned one. This is what let every object in the corpus come
+  out byte for byte what it was.
+* **A comparison with an `i64` on either side stays signed**, which is NOT C's rule. C makes the
+  whole expression unsigned and turns a negative `i64` into a huge number; here the signed side
+  wins, so no program that works today changes meaning. A plain integer literal is `i64`
+  ([language.md](language.md) § 3), so a constant with bit 63 set belongs in a `u64` variable.
+* **A float, a wide type and an opaque type are excluded by the kind test**, so `<float>`'s `f64`
+  (eight bytes, not signed) and `<i128>`'s `u128` keep receiving the six codes their own
+  `MTASK_CMP` knows.
 
 **The walker itself issues `MTASK_CAST` in two places no expression asked for it** (M45): after
 `MTASK_CALL`, when the callee's declared result is a `TK_INT`/`TK_SINT` narrower than the word and
@@ -655,12 +693,14 @@ eight bits here and in sixty-four there. A source that wants the portable answer
 `(i64) a + (i64) b + (i64) c`. `examples/avr/tests/sweep_b.mc` asserts **both** answers, checks 52
 and 56, so the divergence cannot drift unnoticed.
 
-**Comparison is the one place narrow arithmetic cannot be narrow.** `MTASK_CMP` carries no
-signedness and comparison in this language is signed, while `u8`/`u16`/`u32` are unsigned — so
-comparing two zero-extended `u16`s at two bytes would answer `-25536 < 1` for 40000. The machine
-compares at `max(w1, w2) + 1` bytes when neither operand is `i64`, and at all eight when one is:
-the extra byte is zero by the slot invariant, which turns the signed comparison into the unsigned
-one. `avr_cmp_width` is the whole rule.
+**Comparison is the one place narrow arithmetic cannot be narrow.** Two narrow operands reach a
+machine with a SIGNED condition — the walker only picks an unsigned one when a side is eight bytes
+wide (§ 3) — while `u8`/`u16`/`u32` are themselves unsigned, so comparing two zero-extended `u16`s
+at two bytes would answer `-25536 < 1` for 40000. The machine compares at `max(w1, w2) + 1` bytes
+when neither operand is `i64`, and at all eight when one is: the extra byte is zero by the slot
+invariant, which turns the signed comparison into the unsigned one. `avr_cmp_width` is the whole
+rule. A version 6 unsigned condition reaches it too, at eight bytes, and `avr_cmp` answers it with
+`brlo`/`brsh` — the C flag the `cp`/`cpc` chain leaves — where the signed twin takes `brlt`/`brge`.
 
 **Every slot holds eight valid bytes.** A value of a type of width `w` has its bytes above `w`
 filled by its KIND — zero for a `TK_INT`, the sign for `i64` and for a `TK_SINT` — which is what

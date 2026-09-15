@@ -40,6 +40,7 @@ u8  g8  = 200;
 u16 g16 = 40000;
 u32 g32 = 3000000000;
 i64 gzero = 0;
+u64 gbit63 = 0x8000000000000000;      // the value a signed comparison reads as negative
 
 void sweep_arith() {
     i64 a = g64;
@@ -77,6 +78,16 @@ void sweep_compare() {
     check(27, b8 > 100, 1);
     u32 b32 = g32;
     check(28, b32 > 1, 1);
+    // Contract version 6: a comparison with a u64 on either side is UNSIGNED,
+    // so it reaches this machine as MCOND_ULT..UGE and the branch is brlo/brsh
+    // (the C flag the cp/cpc chain leaves) and not brlt/brge (the S flag). With
+    // the signed condition 2 >= 2^63 answers true.
+    u64 hi = gbit63;
+    u64 lo = gzero + 2;
+    check(29, lo < hi,  1);
+    check(30, lo >= hi, 0);
+    check(31, hi > lo,  1);
+    check(32, hi <= lo, 0);
 }
 
 void sweep_narrow() {
