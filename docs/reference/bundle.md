@@ -242,8 +242,29 @@ Three modules the core has never heard of, each with an empty `git diff src/`.
 | `<i128>` | `lib/i128.mc` | 128-bit integers `i128` (signed) and `u128` (unsigned): `type_new(..., 16, 16, TK_WIDE)`, memory-resident in ONE depth, `adds`/`adc` (`add`/`adc` on x86), `subs`/`sbc` (`sub`/`sbb`), `mul`/`umulh` (`mul` + `imul` cross-terms), a compare that is not just the 64-bit one twice, and a literal through a module-private global with an `N_BLOB` initializer. **`u128` is `i128` with an unsigned compare** — the only difference is the six ordering comparisons; the machine keys on the id (`walk_depth_type(d) == ty_u128`). On **arm64, x86-64 (SysV) and x86-64-win (Win64)** — the ISAs with a native carry chain and a wide multiply, the same coverage as `<float>`. The Win64 ABI passes a 16-byte value **by reference** (caller allocates a copy, passes a pointer; a wide return is a hidden pointer as the first argument). Op set is `+ - *`, the six comparisons, load/store, call/ret, the literal, and `lo`/`hi` — no divide, shift or bitwise (M24 defers them; a language building `decimal` on top does its division in its own runtime, from `lo`/`hi`) |
 | `<u128>` | `lib/u128.mc` | a second door into `<i128>`: it registers the same two types and the same machine (`u128_init()` == `i128_init()`), so a program includes ONE of `<i128>` or `<u128>` and gets both types. They must not both be included in one unit |
 | `<mc_i128>` / `<mc_u128>` | `lib/mc_i128.mc` / `lib/mc_u128.mc` | the compiler that carries it |
-| `<f16>` | `lib/f16.mc` | half precision as a STORAGE type, on top of `<float>`'s machine: four slots and two `fcvt`s, because `<float>` dispatches on the KIND and not on the id. AArch64 only |
+| `<f16>` | `lib/f16.mc` | half precision as a STORAGE type. On AArch64: four slots and two `fcvt`s on top of `<float>`'s machine, because `<float>` dispatches on the KIND and not on the id. Anywhere else: the same four names as ordinary functions (see below) |
 | `<mc_f16>` | `lib/mc_f16.mc` | `<float>` plus `<f16>`, in one compiler |
+
+**What `<f16>` promises per architecture.** It drives ONE machine — the `arm64` table `<float>`
+registered — and the type it registers says so: `TK_FLOAT` where a half lives in a v register
+beside every other float, `TK_INT` where it does not, which is what a half with no arithmetic unit
+is: two bytes of storage the core moves. On the second road no intrinsic is registered at all and
+the module pushes `f16_to_f32`, `f32_to_f16`, `ldf16` and `stf16` as ordinary functions in a second
+source (`p_push_source`, the shape `docs/specs/M24.md` § Generality asks for) — the softfloat
+conversion, in integer arithmetic, rounding to nearest with **ties to even** and quietening a NaN
+exactly as `fcvt` does. It is pushed rather than left to the program as an include, the way
+`<float_rt>` is, because a program cannot include a file on one target and not on another.
+
+The same source compiles and prints the same numbers either way; `tests/wide/031-f16.mc` is run on
+macos/aarch64, linux/aarch64 and linux/x86_64 and cross-compiled for both Windows architectures by
+`make check-wide`. What the fallback costs is four small functions in every object and four names a
+program may not define itself.
+
+The road it decides on is `[target].arch`, which `mc build` has already read when `user_init` runs;
+with no `[target]`, the host. `--machine=` and `--backend=` are read *after* `user_init` and cannot
+be seen from there, so `mc --backend=elf-obj-x86_64` on an aarch64 host is refused by the machine
+instead — `opcode 303 is not x86-64's: no machine claims it`
+([machine.md](machine.md) § The opcode bands).
 
 `<float>`, `<f16>` and `<i128>`/`<u128>` **coexist in one compiler, in either registration order**.
 Each derived machine claims a band of the opcode space they share -- `<float>` 100..199, `<i128>`

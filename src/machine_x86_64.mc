@@ -237,8 +237,23 @@ i64  x86_argreg_at(i64 i) { return ld64(x86_args + i * 8); }
 i64  x86_cond_at(i64 i)   { return ld64(x86_cond + i * 8); }
 i64  x86_binop_at(i64 i)  { return ld64(x86_binop + i * 8); }
 i64  x86_memop_at(i64 i)  { return ld64(x86_memop + i * 8); }
-uptr x86_name_at(i64 i)   { return ld64(x86_name + i * 8); }
-i64  x86_d(i64 op, i64 c) { return ld64(x86_desc + (op * XD_N + c) * 8); }
+// A derived machine claims a BAND of the opcode space above X_COUNT and passes
+// everything else down to this table (docs/reference/machine.md § 3). Seen from
+// here, the rule has a second half: an opcode this machine does not own must be
+// REFUSED, not looked up. x86_desc and x86_name are INDEXED by the opcode, so
+// every reader of either -- x86_form, the five column reads inside x86_put
+// (MTASK_ENCODE and, through the scratch buffer, MTASK_INS_SIZE) and x86_dump --
+// used to read past the end of the array for a band nobody claimed. That is what
+// <f16>'s HI_* opcodes (300..303) did when an f16 program was compiled for a
+// machine <f16> does not drive. The guard sits in the two accessors, which is
+// the only place every one of those readers goes through.
+void x86_claim(i64 op) {
+    if (op >= 0 && op < X_COUNT) return;
+    die(tm_cat(tm_cat("opcode ", tm_num_str(op)),
+               " is not x86-64's: no machine claims it"));
+}
+uptr x86_name_at(i64 i)   { x86_claim(i); return ld64(x86_name + i * 8); }
+i64  x86_d(i64 op, i64 c) { x86_claim(op); return ld64(x86_desc + (op * XD_N + c) * 8); }
 i64  xdslot_at(i64 i)     { return ld64(xdslot + i * 8); }
 void set_xdslot_at(i64 i, i64 v) { st64(xdslot + i * 8, v); }
 i64  xalias_at(i64 i)     { return ld64(xdslot + (MAXDEPTH + i) * 8); }

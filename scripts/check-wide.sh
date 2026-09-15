@@ -61,6 +61,7 @@ have() { command -v "$1" > /dev/null 2>&1 || [ -x "$llvm/$1" ]; }
 # run-time checks below. Each is `#include <mc/core>` plus the module.
 build_wide_compilers() {
     for pair in "lib/mc_i128.mc build/mc-i128" "lib/mc_u128.mc build/mc-u128" \
+                "lib/mc_f16.mc build/mc-f16" \
                 "lib/mc_float_wide.mc build/mc-float-wide" \
                 "lib/mc_wide_float.mc build/mc-wide-float"; do
         set -- $pair
@@ -77,6 +78,7 @@ build_wide_compilers() {
 wide_compiler() {
     case "$1" in
         *u128*)   echo build/mc-u128 ;;
+        *f16*)    echo build/mc-f16 ;;
         *coexist*) echo build/mc-float-wide ;;
         *)        echo build/mc-i128 ;;
     esac
@@ -92,7 +94,7 @@ if [ "$mode" = "build" ]; then
     if [ "$bos" = "windows" ]; then lmode="kernel32"; ext="obj"; fi
     tmpb="$tmp/build"; mkdir -p "$tmpb"
     n=0
-    for f in tests/wide/030-i128.mc tests/wide/032-u128.mc \
+    for f in tests/wide/030-i128.mc tests/wide/031-f16.mc tests/wide/032-u128.mc \
              tests/wide/033-wide-abi.mc tests/wide/034-cast-narrow.mc \
              tests/wide/035-coexist.mc; do
         [ -f "$f" ] || continue
@@ -470,6 +472,96 @@ else
     fails=$((fails + 1))
 fi
 
+# ---- <f16> on a machine it does not drive ----
+# <f16> drives ONE machine, the `arm64` table <float> registered. Everywhere else
+# a half is two bytes of storage (TK_INT), nothing is registered on the machine,
+# and the four names are the ordinary functions the module pushes as a second
+# source -- so the SAME source runs on both roads with the same numbers, which is
+# what these two Docker runs are. The decision is read from [target].arch, which
+# `mc build` has already parsed when user_init runs; the single-file `--backend=`
+# road cannot be read there and is the refusal two blocks down.
+f16want="15360 15362 15361 1065353216 15360"
+if docker info > /dev/null 2>&1 && have ld.lld; then
+    wide_linux aarch64 linux/arm64 f16 tests/wide/031-f16.mc f16 0 "$f16want"
+    wide_linux x86_64  linux/amd64 f16 tests/wide/031-f16.mc f16 0 "$f16want"
+    # ...and the two roads are visibly different roads: the fallback leaves a
+    # CALL to a function of that name in the object, the hardware one leaves an
+    # instruction and no symbol at all
+    if [ -f build/wide-lin/f16-x86_64.o ] && [ -f build/wide-lin/f16-aarch64.o ]; then
+        if grep -q f32_to_f16 build/wide-lin/f16-x86_64.o \
+           && ! grep -q f32_to_f16 build/wide-lin/f16-aarch64.o; then
+            echo "ok   f16: the x86-64 object calls f32_to_f16, the aarch64 one has no such symbol"
+        else
+            echo "FAIL f16: the two roads are not the two roads"
+            fails=$((fails + 1))
+        fi
+    fi
+fi
+
+# windows/aarch64 (the hardware road) and windows/x86_64 (the fallback), through
+# `mc build` for the reason above, and LINKED with the same three objects a
+# Windows binary needs. Executed on the CI leg, which gets them from the
+# --build-only half.
+f16_windows() {                         # arch, lld machine
+    warch="$1"; lmach="$2"
+    if ! have lld-link || ! have llvm-dlltool; then
+        echo "skip windows/$warch f16: lld-link or llvm-dlltool not found"; return 0
+    fi
+    sysroot="build/sysroot/windows-$warch"
+    support="build/wide-windows-$warch"
+    if [ ! -f "$sysroot/kernel32.lib" ] || [ ! -f "$support/sys_windows.obj" ]; then
+        echo "skip windows/$warch f16: no sysroot or support objects"; return 0
+    fi
+    out="build/wide-windows-$warch"
+    {
+        echo '[project]'
+        echo "entry = \"$root/tests/wide/031-f16.mc\""
+        echo "out   = \"$root/$out/031-f16.obj\""
+        echo 'kind  = "obj"'
+        echo
+        echo '[target]'
+        echo 'os   = "windows"'
+        echo "arch = \"$warch\""
+    } > "$tmp/win-f16.toml"
+    if ! msg=$(build/mc-f16 build "$tmp" --config "$tmp/win-f16.toml" 2>&1); then
+        echo "FAIL windows/$warch f16 (compile: $msg)"; fails=$((fails + 1)); return 0
+    fi
+    if ! msg=$($(tool lld-link) -machine:$lmach -subsystem:console -entry:mc_start \
+               -nodefaultlib -out:"$out/031-f16.exe" "$out/031-f16.obj" \
+               "$out/sys_windows.obj" "$out/sys_windows_start.obj" \
+               "$sysroot/kernel32.lib" 2>&1); then
+        echo "FAIL windows/$warch f16 (link: $msg)"; fails=$((fails + 1)); return 0
+    fi
+    echo "ok   windows/$warch f16: cross-compiled and linked (executed on the CI leg)"
+}
+f16_windows aarch64 arm64
+f16_windows x86_64  x64
+
+# ---- a bundled machine refuses an opcode nobody claims ----
+# The other half of the band rule (docs/reference/machine.md § 3), seen from the
+# bundled side. Both cases are a module whose intrinsics outlive its machine:
+# <f16> reached through `--backend=`, where the flag is read after user_init and
+# the decision above cannot see it, and examples/avx (x86-64 only) dumped on the
+# host's arm64 machine. Before, the first wrote an OBJECT -- x86_desc is INDEXED
+# by the opcode, so it read past the end of the table and encoded `strw %ds:(%rax)`
+# where `str h` belonged, and the binary segfaulted -- and the second said
+# `instruction with no dump`, naming neither the opcode nor the machine.
+guard_case() {                          # command..., expected message
+    want="$1"; shift
+    msg=$("$@" 2>&1)
+    if [ $? = 0 ]; then
+        echo "FAIL guard: '$*' was accepted"; fails=$((fails + 1)); return 0
+    fi
+    case "$msg" in
+        *"$want"*) echo "ok   guard: $want" ;;
+        *) echo "FAIL guard: '$*' said '$msg', expected '$want'"; fails=$((fails + 1)) ;;
+    esac
+}
+guard_case "opcode 303 is not x86-64's: no machine claims it" \
+           build/mc-f16 --backend=elf-obj-x86_64 tests/wide/031-f16.mc -o "$tmp/g1.o"
+guard_case "opcode 303 is not x86-64's: no machine claims it" \
+           build/mc-f16 --dump-asm --machine=x86_64 tests/wide/031-f16.mc
+
 # ---- examples/avx: the object, and llvm-mc on every instruction it invented ----
 avx="build/mc-avx"
 rm -f "$avx"
@@ -485,6 +577,8 @@ else
     else
         echo "ok   avx: the default compiler refuses it ($msg)"
     fi
+    guard_case "opcode 400 is not arm64's: no machine claims it" \
+               "$avx" --dump-asm examples/avx/main.mc
     if ! have llvm-objdump || ! have llvm-mc; then
         echo "skip avx sweep: llvm-objdump/llvm-mc not found"
     else

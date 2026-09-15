@@ -7426,3 +7426,86 @@ agents (`.claude/agents/`): `stage0-dev` (C23), `mc-dev` (`.mc` code), `reviewer
   keys / 10 directives / 52 samples / 570 links; 420 frozen entries).
   Counts: `check-lex` **177/177 (5 skipped) -> 108/108 (0 skipped)**, `check-ast`/`check-asm`
   **178/178 (4 skipped) -> 108/108 (0 skipped)**.
+- `<f16>` on a machine it does not drive, and a bundled machine that refuses a foreign opcode
+  (the two halves of the defect PR #93 reported and did not fix). `stage0/` untouched
+  (`/usr/bin/git diff origin/main -- stage0/` empty); the whole compiled change in `src/` is
+  **35 added lines, 16 of them neither comment nor blank**, and `lib/f16.mc` is +154/-11.
+  1. **`<f16>` registered its machine on `arm64` alone but its four intrinsics unconditionally.**
+     Reproduced first, with a `mc-f16` built from `origin/main` 8a03803: an f16 program compiled
+     for linux/x86_64 through `mc build` **built and linked with no diagnostic at all** and then
+     died in Docker with **SIGSEGV, exit 139** -- `llvm-objdump` shows `3e 4c 0f 00 08 strw
+     %ds:(%rax)`, a system instruction, where `str h` belonged, because `x86_desc` is INDEXED by
+     the opcode and `HI_STR_H` is 303. The dump road said `x86 instruction with no dump`.
+     The promise `lib/f16.mc`'s own header made -- "on any other machine they are NOT registered,
+     and the identically-named ordinary functions are called instead" -- is now implemented, in
+     the shape `docs/specs/M24.md` § Generality asks for ("the module pushes as a second source",
+     `p_push_source`, the `sd_rt` pattern) rather than the `<f16_rt>` include the header invented,
+     because a program cannot include a file on one target and not on another.
+     **The KIND is one of the two roads' differences, and that is the point**: `TK_FLOAT` is a
+     claim about the MACHINE, so it is registered only where this module has one; elsewhere `f16`
+     is `TK_INT` of width 2 -- two bytes the core moves, with no float machine involved and no
+     8-byte `movsd` over a 2-byte global -- which is also the only shape in which the fallback can
+     be WRITTEN (`fx_cast`/`fx_need_ds` refuse a width-2 float, so with `TK_FLOAT` there is no bit
+     bridge between a half and its 16 bits and `ldf16`/`stf16` are not expressible in `mc`).
+     The road is chosen from `[target].arch` -- what `mc build` has already parsed when
+     `user_init` runs (M39.5) -- falling back to the host; `--machine=`/`--backend=` are read
+     AFTER `user_init` (`src/cli.mc`) and cannot be seen from there, which is exactly the case
+     half 2 turns into a diagnostic.
+     **The fallback is bit-exact against the hardware, measured both directions**: the same source
+     compiled by the same compiler for macos/aarch64 (`fcvt`) and for linux/x86_64 (softfloat),
+     dumping every result -- **768192 f32 inputs** (scattered over the whole 32-bit space, every
+     NaN payload of both signs, the subnormal edge and the overflow edge) and **all 65536 halves**
+     back to f32: **0 differing**. Two rounding facts came out of that differential and are in the
+     code: `fcvt h, s` propagates a NaN payload and quietens it (`sign | 0x7e00 | ((m >> 13) &
+     0x1ff)`, not a bare quiet NaN), and `fcvt s, h` sets the f32 quiet bit on a signaling half
+     (1022 of the 65536 disagreed before that line). Ties-to-even -- M24's acceptance case, 1 +
+     2^-11 -> `0x3c00` -- is what `tests/wide/031-f16.mc` already pinned and what both roads print.
+  2. **A bundled machine refuses an opcode nobody claims, instead of indexing past its table.**
+     The general form of #93's band rule seen from the bundled side. `a64_claim(op)` (`op < I_COUNT`,
+     new: 53) at the head of `a64_ins_size`, `encode` and `dump_ins`; `x86_claim(op)`
+     (`op < X_COUNT`, 52) in `x86_d` and `x86_name_at`, the two accessors every reader goes through
+     (`x86_form`, the five column reads in `x86_put` -- `MTASK_ENCODE` and, over the scratch
+     buffer, `MTASK_INS_SIZE` -- and `x86_dump`). **Five call sites, and the `--dump-asm` delta
+     over `src/mc.mc` is exactly those**: the same compiler on the old and the new tree adds
+     `_a64_claim` and `_x86_claim` (52 instructions between them), 3 `bl _a64_claim`, 2
+     `bl _x86_claim`, and nothing else but `l_strN` index shifts.
+     `mc: opcode 303 is not x86-64's: no machine claims it` / `opcode 400 is not arm64's: ...` --
+     the second is `examples/avx` (x86-64 only, intrinsics unconditional) dumped on the host's
+     arm64 machine, which said `instruction with no dump` before, naming neither.
+     **`check-asm` is 108/108 identical with the #92 allow-list unchanged** (`seed-cmp.txt` still
+     371): both compilers compile the same source, and the guard compares two `i64`s, so it adds
+     no signed/unsigned divergence.
+  Gate: `scripts/check-wide.sh` (+95/-1) -- `tests/wide/031-f16.mc` joins the `--build-only`
+  corpus, so the CI legs RUN it on linux/aarch64, linux/x86_64, windows/aarch64 and
+  windows/x86_64; locally it is RUN in Docker on both Linux architectures (same stdout as the
+  native hardware road) and cross-compiled and LINKED with `lld-link` for both Windows ones. Two
+  assertions say the two roads really are two roads -- the x86-64 object CALLS `f32_to_f16` and
+  the aarch64 object has no such symbol -- and three `guard_case`s pin the refusals verbatim.
+  -- `make bundle` re-run before bootstrapping (60 files, raw 1255250 -> LZ 569393, blob
+  570167 B). `make check` green end to end (**RC 0**): `check-lex`/`check-ast`/`check-asm`
+  **108/108**, `check-obj` **32/32 identical to the frozen seed**, both fixed points
+  (`mc2.o == mc3.o`, 1454408 B, `mc2o.o == mc3o.o`, and the cross-road identity), the `--dump-asm`
+  diff between `mc1` and `mc2` **empty**, `check-wide` ok, `check-float` ok on all five legs,
+  `check-freeze` **421 entries unmoved**, `check-docs` 209 symbols / 581 links, `check-pkg` 200/200, `check-limits` 17/17, `test-sandbox` 73 ok / 0 failed / 1 skipped.
+  `scripts/check-inert.sh <mc1 from origin/main 8a03803> build/mc1`: **33 objects identical on
+  both roads** (`tests/*.mc` and `src/mc.mc`) plus byte-identical `examples/api`, `lang`, `conc`,
+  `desktop` and `kernel`. `make check-linux-host` RC 0 over all four cells (aarch64 musl 57/57 +
+  31/31 via `--exe`, aarch64 gnu 58/58, x86_64 musl 53/53 + 29/29, x86_64 gnu 54/54), each after
+  its own fixed point and with the cross proof green. No new instruction form, so the sweeps are
+  unchanged (`check-wide`: 139/147/144/151/122/141/102/103/130/131 and 11 VEX, 0 mismatches).
+  **All ten goldens rewritten once**, each after its own criterion: `mc2.sha256`
+  `f194f5ed...27e09e` -> `9ccd1c335346820881792308d532a189b7bae6d6ceba8f6d154fd4ada2879489`,
+  `mc2-opt.sha256` `dd42fe0af28927ffa362ca5277d1b57bb2ec9770796c2179b7abab0e07f25729`; the four
+  Linux ones deleted and re-recorded by `make check-linux-host` --
+  `mc2-linux-arm64` `19386bdb579141c75a3e7aa7dce1b3b94f1f523ab6ad24cba9ab65892c14f55b`,
+  `mc2-linux-arm64-opt` `27c40fe2a4e792fe86fa7fbd7d3439d30538b6e2a4669f877c5e35f60bf2c99a`,
+  `mc2-linux-x86_64` `6eb6eb4ca829059be0bb144552c09c8158557d53eece55bff1ff3b280da5e233`,
+  `mc2-linux-x86_64-opt` `651496c8c30fae4eccb3b2a1b2e94ea2670261e6a14b4b21c4d20e2e33fe5401`;
+  the four Windows ones cross-computed per `tests/golden/README.md` --
+  `mc2-windows-arm64` `bb8a138488ab2c152ca61bf81b01645e93635412984d73d676af3fc15cc2451c`,
+  `mc2-windows-arm64-opt` `986d0104304189934c417dce65622577dbf02fc0da7f4b8d09aeddab85fed7ee`,
+  `mc2-windows-x86_64` `22eb73798a91e640e2166b88d885bb7416d1634fec9b4b2363564ad810ba32dd`,
+  `mc2-windows-x86_64-opt` `d236b3267e15102e1eb4b519bcfe990e8006dcad155841a9e32ae031931f9c47`.
+  Docs: `docs/reference/bundle.md` § `<f16>` (what it promises per architecture and what the
+  fallback costs), `docs/reference/machine.md` § The opcode bands (the bundled side's refusal),
+  `docs/reference/diagnostics.md`, `docs/guide/96-a-new-primitive.md`.

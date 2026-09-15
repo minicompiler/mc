@@ -851,6 +851,26 @@ Two rules, and a registry. Both are obligations of a derived machine:
 A module-private RELOCATION kind is a separate space and has its own convention
 (`examples/kernel/machine_riscv64.mc` uses 32 and 33).
 
+**Seen from the bundled side, the rule has a second half: an opcode no machine claims is
+refused.** `src/machine_arm64.mc` and `src/machine_x86_64.mc` check `op < I_COUNT` / `op < X_COUNT`
+and die with
+
+```
+mc: opcode 303 is not x86-64's: no machine claims it
+```
+
+naming the opcode and the table. It is the one message either of them has for a band whose owner is
+not in the compiler that is running — which happens when a module's `intrinsic` registrations
+outlive its machine: `<f16>` drives `arm64` alone, so an f16 program compiled for x86-64 through
+`--backend=` or `--machine=` (both read *after* `user_init`, so a module cannot see them) reaches
+the x86 table with `HI_*` in hand. On arm64 the tables are searched and the old answer was
+`instruction with no dump` / `instruction with no encoder`, which named neither; on x86-64
+`x86_desc` and `x86_name` are **indexed by the opcode**, so the encoder read past the end of the
+array and emitted whatever the next rows happened to say — a program that segfaulted with no
+diagnostic anywhere. The guard sits in `x86_d` and `x86_name_at`, the two accessors every reader
+(`x86_form`, `x86_put` for `MTASK_ENCODE` and `MTASK_INS_SIZE`, `x86_dump`) goes through, and at
+the head of `a64_ins_size`, `encode` and `dump_ins`.
+
 `tests/wide/035-coexist.mc` is the gate: `<float>`, `<f16>` and `<i128>`/`<u128>` in one compiler,
 built in both registration orders (`lib/mc_float_wide.mc`, `lib/mc_wide_float.mc`), producing the
 same object and the same output.
