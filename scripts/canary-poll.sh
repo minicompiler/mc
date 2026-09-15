@@ -128,7 +128,7 @@ while :; do
     # API is public; the job's GITHUB_TOKEN, when present, only lifts the
     # unauthenticated 60/h ceiling, which ninety one-minute polls would hit.
     body=$(curl -fsSL --max-time 30 "$url?t=$(date +%s)" 2>/dev/null) || body=
-    if [ -z "$body" ] && [ -z "$CANARY_URL" ]; then
+    if [ -z "$body" ] && [ -z "${CANARY_URL:-}" ]; then
         api="https://api.github.com/repos/$repo/contents/$version.json?ref=$branch"
         tok=${GITHUB_TOKEN:-${GH_TOKEN:-}}
         if [ -n "$tok" ]; then
