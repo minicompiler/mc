@@ -7041,6 +7041,99 @@ agents (`.claude/agents/`): `stage0-dev` (C23), `mc-dev` (`.mc` code), `reviewer
   `docs/reference/toml.md` (`[deps]`/`[tools]` and the lock; the stale "`mc tool`, which does not
   exist yet" corrected), `docs/reference/diagnostics.md` (the `mc.lock is stale` row names both
   tables), `docs/specs/M48.md`.
+- A vendored tree at another version is named, never hashed (0.16.1; reported by the consumer --
+  teko -- with a pure reproducer; `docs/specs/M44.md` § Implementation notes -- the vendored tree
+  at another version): **the version comes before the hash.** `stage0/` untouched (2848/3000).
+  The consumer's dev loop is a git checkout at `deps/teko`, and `deps/` wins over the cache
+  (M44 D10', § 3) -- but `pkg_present`/`pkg_tree_dir` decided that on ONE question, "is there an
+  `mc.toml` under `deps/<pack>/`?", so a project whose `[deps]` had moved to version A while the
+  checkout was still at B did not fetch A at all: it hashed B and compared that hash with A's
+  `sha256`. Reproduced here before a line was written, with `[deps] zero = "0.2.0"` and
+  `deps/zero` a copy of the 0.1.0 fixture:
+  `mc: checksum mismatch for zero 0.2.0 / expected 1177e8ee… / got 9943772d…`, exit 2, nothing
+  fetched -- and `got` is `mc pkg hash deps/zero` exactly. The diagnosis is wrong twice over:
+  nothing is corrupt, and the advice a checksum mismatch carries (re-fetch, look for a tampered
+  byte) does not apply. Moving `deps/zero` aside made the same command fetch and lock.
+  **`mc build` said the same thing in its own words** and the check confirmed it is the same
+  defect: `dep_resolve` picked the vendored tree on the same one question and `dep_scan` produced
+  `mc: zero 0.2.0: the tree does not match mc.lock` with `run: mc pkg verify` -- and `mc pkg
+  verify` repeats it, so the advice is a loop.
+  * **One function, called from all three places**: `dep_vendored_at(name, dir, ver, from)`
+    (`src/deps.mc`) answers "is `deps/<name>/` this package at this version?" and is the sole
+    reader of the vendored tree's own `[package].version` -- a new, OPTIONAL key. 0 is "no tree
+    there", 1 is "a tree that declares nothing, or declares this version", and a tree that
+    declares another one never comes back:
+    `mc: deps/zero is 0.1.0, [deps] wants 0.2.0: update the checkout or remove deps/zero`, exit 2.
+    `from` is where the requirement was read, the only part that differs between the roads:
+    `[deps]` for `mc pkg sync` (`pkg_vendored`, called by `pkg_present` and `pkg_tree_dir`) and
+    `mc.lock` for `mc build`, `mc pkg verify`, `mc pkg list` and `mc pkg vendor` (`dep_resolve`).
+    Nothing is fetched and no lock is written; `mc pkg vendor` refuses too, and the answer there
+    is the one the message already gives -- remove the checkout, then vendor.
+  * **A tree that declares no version behaves exactly as before**, which is what makes the change
+    inert for every package published so far (none carries the key) and for every fixture but the
+    two the gate uses. That is also the honest limit: without a declaration there is nothing to
+    compare, and a mismatched checkout can still only be reported as a hash. The key resolves
+    NOTHING -- the registry picks a version, `mc.lock` pins it, and a fetched or installed tree
+    carries its version in the manifest beside it -- and it is read in this one place. A malformed
+    value is `deps/<pack>/mc.toml:L:C: not a usable version`, exit 2, at its own position and with
+    the same code `[package].mc` uses (`toml_err_key_code`): a dependency's manifest is part of
+    the environment, not of the program being compiled.
+  -- cost: `src/deps.mc` **+39/-5** and `src/pkg.mc` **+11/-4** = **50 added lines, 24 of them
+  neither comment nor blank**; **zero new globals** (`build/mc1 limits src/mc.mc` reports
+  `globals 446/512` before and after). `tests/pkg/src/zero-0.1.0` and `zero-0.2.0` gained the key;
+  no committed hash names them, so no lock and no golden moved for it. The one new public name is
+  a TOML key, so the M53 surface inventory moves: `check-freeze` goes **420 -> 421 entries**
+  (`toml package.version`, additive, re-recorded with `make record-surface` in this commit, the
+  M53 step A rule) and `check-docs` from 35 to **36 TOML keys**.
+  Gate: `scripts/check-pkg.sh` § 39, **194 -> 200/200**, offline like everything above it -- the
+  reproducer itself (exit 2, the exact sentence, no `checksum mismatch` anywhere, no lock and an
+  empty `<libs>`), the checkout updated to 0.2.0 (vendored wins, exit 0, a lock, still nothing
+  fetched), `mc build` and `mc pkg verify` naming the version instead of the bytes, a tree with no
+  declaration still taking the hash road, and a malformed declaration.
+  `make bundle` re-run BEFORE bootstrapping (60 files, raw 1249577 -> LZ 566437, blob 567211 B --
+  unchanged by the rebase onto #89, since M52 step B's blob holds only the `src/` rows).
+  `make check` green end to end (**RC 0, zero FAIL**): `budget` 2848/3000, `test` 32/32,
+  `check-lex`/`check-ast`/`check-asm` 108/108 (#89's corpus), `check-obj` **32/32 identical to the
+  frozen seed**, `check-bundle`, `bootstrap` at BOTH fixed points (`mc2.o == mc3.o`, 1449096 B;
+  `mc2o.o == mc3o.o`) with the cross-road identity (`mc2o-plain.o == mc2.o`) and **both
+  `--dump-asm` diffs between `mc1` and `mc2` empty** (plain and `--opt=1`), `check-surface` 32/32,
+  `check-opt`, `test-exe` 32/32, `check-mc`, `check-standalone`, `check-parts`, `check-libroot`,
+  `check-toml`, `check-build`, **`check-pkg` 200/200**, `check-tool` 31/31, `check-sysroots`,
+  `check-stubs`, `check-limits` **17/17 seed limits under 90%**, `check-freeze` **421 entries**,
+  `check-minimal`, `test-linux`/`test-linux-x86_64` and the four `--exe` cells,
+  `test-windows`/`test-windows-x86_64`, `check-examples`, `check-lang`, `check-conc`,
+  `check-desktop`, `check-float`, `check-wide`, `check-kernel`, `check-avr`, **`test-sandbox`
+  73 ok / 0 failed / 1 skipped**, `check-docs` (209 symbols, 50 flags, **36** TOML keys,
+  10 directives, 52 samples, 574 links), `site` + `check-site` + `check-site-linux`.
+  `scripts/check-inert.sh <mc1 from origin/main> build/mc1`: **33 objects identical on the plain
+  road and 33 with `--opt=1`** (`tests/*.mc` and `src/mc.mc`) plus byte-identical artefacts for
+  `examples/api`, `lang`, `conc`, `desktop` and `kernel` -- nothing in the corpus vendors a tree,
+  so nothing the compiler emits could move.
+  `make check-linux-host` **RC 0 over all four cells** (aarch64 and x86_64 x musl and gnu), each
+  after its own plain AND optimized fixed point, its own cross-road identity and the cross proof
+  (`mc2l --backend=macho src/mc.mc` byte for byte the macOS `build/mc2.o`).
+  **The ten goldens rewritten once**, each only after its own criterion: `mc2.sha256`
+  `e1dbf531…cab4c1` -> `4ee1f9ea2fdeb25a253fc260a9d132596154894e5240f76fa8d98cc5ea779e03`,
+  `mc2-opt.sha256` -> `eb2dffe9b4b08fa18b96a45503a15594c4991c7d8fcc16480bb4afb2521dd0d7` (both by
+  `scripts/bootstrap.sh`, after the two empty `--dump-asm` diffs and the two `cmp`s); the four
+  Linux ones deleted and re-recorded by `make check-linux-host` -- `mc2-linux-arm64`
+  `9b0a6feadae95cbbc6bb9effd63c8b31fcc3ed11591075398a6ff75c478852ce`, `mc2-linux-arm64-opt`
+  `02296a3bfd8ec541068a83e87bfc52bece4f870c46ccdd33113fb4e1acb0f259`, `mc2-linux-x86_64`
+  `ba46a89ca8e4714d00995d438d6effceefc91cb6f643f89142221371c769216e`, `mc2-linux-x86_64-opt`
+  `9f0fda209805be51799eb218b85ac6d4057983b99cfd5934b4a35d6cff668a56`; the four Windows ones
+  cross-computed on macOS per `tests/golden/README.md` -- `mc2-windows-arm64`
+  `ebdcd720df64942f108f68622cb548186443127a87b3c428d1d23dc58163f4b6` (1484206 B),
+  `mc2-windows-arm64-opt`
+  `6c74f4c8d94131755ba95034a558be88911b006a7eba0bb3e330ceb49d45f415` (1425390 B),
+  `mc2-windows-x86_64`
+  `04a0e1ff2cc2277015e72de7e5f3fc751e873397ea9835814e27edbf5a447312` (1540078 B),
+  `mc2-windows-x86_64-opt`
+  `87828952b1e1b4124f5865a1ef2c39e4d61b9b67dcc657569e470fd1c0a8c29b` (1467894 B), the two plain
+  ones also written byte for byte by `build/mc2`.
+  Docs: `docs/reference/packages.md` § 2 (the version before the hash, with the message and what
+  `from` names) and § 3 (`[package].version`, what it is not), § 8 (two rows) and § 10 (the
+  vendored road), `docs/reference/toml.md` (the `package.version` row and its paragraph),
+  `docs/reference/diagnostics.md` (two rows), `docs/specs/M44.md`.
 - Next: the **site + registry server, M47 S4-S6**, in
   `minicompiler/mc-registry`; then **M42 step 2** (PE `--exe`, CI-gated on the Windows runners).
   **M46** only on the owner's request; **M43 Layer 2** after 1.0.0. M13 and M18 stay in the backlog

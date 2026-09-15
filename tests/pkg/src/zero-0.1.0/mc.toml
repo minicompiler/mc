@@ -1,5 +1,8 @@
 # zero 0.1.0 -- a fixture package with 0.x versions, for the caret's 0.x rule.
+# It also declares the optional `version`, which is what lets a CHECKED-IN copy
+# of this tree say which version it is (docs/reference/packages.md § 3).
 [package]
-name  = "zero"
+name    = "zero"
+version = "0.1.0"
 files = ["zero.mc"]
 lib   = "zero.mc"

@@ -1521,6 +1521,40 @@ void dep_read_lock(uptr cfg) {
     }
 }
 
+// ---- a checked-in tree, and the version it says it is ----
+// `deps/<pack>/` wins over the cache (D10'), but only when it IS the version
+// the resolution chose. A tree may declare `[package].version`; when it does
+// and the two differ, the answer is that sentence and not a hash.
+//
+// Without this, a checkout at another version was hashed against the TARGET
+// version's sha256 and came out as `checksum mismatch ... got <hash>` -- the
+// hash `mc pkg hash deps/<pack>` prints, on a tree that is not corrupt at all.
+// One version check, at the one place every road asks "is the tree here?":
+// `mc pkg sync` (pkg_present, pkg_tree_dir) and `mc build`/`verify`/`list`
+// (dep_resolve, below).
+//
+// 0: no tree there. 1: a tree that says nothing about its version -- which is
+// every package published before the key existed -- or says this one.
+i64 dep_vendored_at(uptr name, uptr dir, uptr ver, uptr from) {
+    uptr mt = dep_in(dir, "mc.toml");
+    if (!lex_readable(mt)) return 0;
+    uptr frame = toml_push();
+    toml_parse(mt);
+    uptr have = toml_get("package.version");
+    // a declaration that is not a version is refused at its own position and
+    // with exit 2, like `[package].mc` above: a dependency's manifest is part
+    // of the environment, not of the program being compiled
+    if (have != 0 && !dep_ver_ok(have))
+        toml_err_key_code("package.version", "not a usable version", 2);
+    toml_pop(frame);
+    if (have == 0 || str_eq(have, ver)) return 1;
+    uptr what = tm_cat("deps/", name);
+    uptr msg = tm_cat(what, tm_cat(" is ", have));
+    msg = tm_cat(msg, tm_cat(tm_cat(", ", from), tm_cat(" wants ", ver)));
+    dep_die(msg, tm_cat("update the checkout or remove ", what), 0);
+    return 0;
+}
+
 // ---- where a locked package's tree is (D10') ----
 // deps/<pack>/ wins when it is there -- that is the fully offline project, and
 // it is a choice the developer made by checking the tree in. Otherwise
@@ -1528,11 +1562,11 @@ void dep_read_lock(uptr cfg) {
 // never opened, so `v1.0.0/` sitting beside `v1.2.0/` cannot change a byte.
 void dep_resolve(i64 pk, uptr cfg) {
     uptr e = dp_at(pk);                        // PK_MAN is written straight
-    uptr vend = path_join(cfg, tm_cat(tm_cat("deps/", dp_name(pk)), "/mc.toml"));
-    if (lex_readable(vend)) {
-        // the trailing '/' is re-attached AFTER path_join: path_norm drops it,
-        // and a directory without it is a file name to the next join
-        dp_set_dir(pk, tm_cat(path_join(cfg, tm_cat("deps/", dp_name(pk))), "/"));
+    // the trailing '/' is re-attached AFTER path_join: path_norm drops it, and
+    // a directory without it is a file name to the next join
+    uptr vend = tm_cat(path_join(cfg, tm_cat("deps/", dp_name(pk))), "/");
+    if (dep_vendored_at(dp_name(pk), vend, dp_ver(pk), "mc.lock")) {
+        dp_set_dir(pk, vend);
         return;
     }
     uptr root = deps_libs_root();

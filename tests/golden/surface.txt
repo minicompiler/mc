@@ -403,6 +403,7 @@ toml	package.licence
 toml	package.mc
 toml	package.name
 toml	package.repo
+toml	package.version
 toml	project
 toml	project.entry
 toml	project.kind

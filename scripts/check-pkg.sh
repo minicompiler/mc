@@ -2357,5 +2357,102 @@ fi
 
 rm -f tests/pkg/sync/reg.toml tests/pkg/sync/reg-teach.toml
 
+# ---- 39. a vendored tree at ANOTHER version is named, never hashed ----
+# The consumer's dev loop: `deps/<pack>/` is a git checkout, and it is at a
+# version the project's [deps] does not ask for. `deps/` wins over the cache
+# (M44 D10'), so the tree was hashed against the TARGET version's sha256 and the
+# run ended `checksum mismatch ... got <hash>` -- the hash `mc pkg hash deps/x`
+# prints, on a checkout that is not corrupt at all. `mc build` said the same
+# thing in its own words, `the tree does not match mc.lock`, and pointed at
+# `mc pkg verify`, which repeats it.
+#
+# A tree may declare `[package].version` (the two zero fixtures do); when it
+# does and it is not the version that was resolved, that is the answer. A tree
+# that declares nothing is what every package published before the key existed
+# looks like, and it still takes the hash road -- case (e).
+vd="$tmp/vend"
+rm -rf "$vd" "$tmp/vlibs"
+mkdir -p "$vd/deps" "$tmp/vlibs"
+printf 'i64 main() { return 42; }\n' > "$vd/main.mc"
+printf '[project]\nname = "vend"\nentry = "main.mc"\nout = "build/vend"\nkind = "exe"\n\n[deps]\nzero = "0.2.0"\n\n[limits]\ntolerance = 1.0\n' > "$vd/mc.toml"
+vend_at() {                           # vend_at VERSION -- the checkout deps/zero is at
+    rm -rf "$vd/deps/zero"
+    cp -R "tests/pkg/src/zero-$1" "$vd/deps/zero"
+}
+vend_fetched() { ls "$tmp/vlibs" 2>/dev/null | tr '\n' ' '; }
+
+# (a) the mismatch: named, exit 2, and nothing fetched
+vend_at 0.1.0
+pkg sync "$vd" --registry "$reg" --libs-dir "$tmp/vlibs" --yes
+if [ "$rc" != 2 ]; then
+    fail "a vendored tree at another version" "exit $rc, expected 2: $(cat "$tmp/o")"
+elif ! grep -q "^mc: deps/zero is 0.1.0, \[deps\] wants 0.2.0: update the checkout or remove deps/zero$" "$tmp/o"; then
+    fail "a vendored tree at another version" "$(cat "$tmp/o")"
+elif grep -q "checksum mismatch" "$tmp/o"; then
+    fail "a vendored tree at another version" "it hashed the tree anyway: $(cat "$tmp/o")"
+elif [ -f "$vd/mc.lock" ] || [ -n "$(vend_fetched)" ]; then
+    fail "a vendored tree at another version" "a lock or a fetch happened: $(vend_fetched)"
+else
+    ok "sync: $(head -1 "$tmp/o")"
+fi
+
+# (b) the checkout updated: the vendored tree wins, and nothing is fetched
+vend_at 0.2.0
+pkg sync "$vd" --registry "$reg" --libs-dir "$tmp/vlibs" --yes
+if [ "$rc" != 0 ]; then
+    fail "the checkout at the resolved version" "exit $rc: $(cat "$tmp/o")"
+elif [ ! -f "$vd/mc.lock" ]; then
+    fail "the checkout at the resolved version" "no lock was written: $(cat "$tmp/o")"
+elif [ -n "$(vend_fetched)" ] || grep -q '^fetch  ' "$tmp/o"; then
+    fail "the checkout at the resolved version" "it fetched: $(vend_fetched) $(cat "$tmp/o")"
+else
+    ok "sync: the checkout at 0.2.0 IS the resolved version -- vendored wins, nothing fetched"
+fi
+
+# (c) mc build on the mismatched tree reports the version, not a hash
+vend_at 0.1.0
+build "$vd" "" "$tmp/vlibs"
+if [ "$rc" != 2 ]; then
+    fail "mc build on a mismatched checkout" "exit $rc, expected 2: $(cat "$tmp/o")"
+elif ! grep -q "^mc: deps/zero is 0.1.0, mc.lock wants 0.2.0: update the checkout or remove deps/zero$" "$tmp/o"; then
+    fail "mc build on a mismatched checkout" "$(cat "$tmp/o")"
+elif grep -q "does not match mc.lock" "$tmp/o"; then
+    fail "mc build on a mismatched checkout" "it still blames the bytes: $(cat "$tmp/o")"
+else
+    ok "mc build: $(grep -m1 '^mc: deps/zero' "$tmp/o")"
+fi
+
+# (d) and `mc pkg verify` -- deps_apply is the same road
+PATH="$tmp/bin2:$realpath_env" "$mc" pkg verify "$vd" --libs-dir "$tmp/vlibs" > "$tmp/o" 2>&1
+rc=$?
+if [ "$rc" = 2 ] && grep -q "^mc: deps/zero is 0.1.0, mc.lock wants 0.2.0" "$tmp/o"; then
+    ok "mc pkg verify: the same sentence, not 'mc pkg verify' as its own advice"
+else
+    fail "mc pkg verify on a mismatched checkout" "exit $rc: $(cat "$tmp/o")"
+fi
+
+# (e) a tree that declares no version takes the hash road, exactly as before
+vend_at 0.1.0
+grep -v '^version' "tests/pkg/src/zero-0.1.0/mc.toml" > "$vd/deps/zero/mc.toml"
+PATH="$tmp/bin2:$realpath_env" "$mc" pkg verify "$vd" --libs-dir "$tmp/vlibs" > "$tmp/o" 2>&1
+rc=$?
+if [ "$rc" = 2 ] && grep -q "zero 0.2.0: the tree does not match mc.lock" "$tmp/o"; then
+    ok "a tree that declares no version is unchanged: $(head -1 "$tmp/o")"
+else
+    fail "a tree with no [package].version" "exit $rc: $(cat "$tmp/o")"
+fi
+
+# (f) a declaration that is not a version: the tree's own file:line:col, exit 2
+vend_at 0.1.0
+sed 's|^version = .*|version = "../../etc"|' "tests/pkg/src/zero-0.1.0/mc.toml" > "$vd/deps/zero/mc.toml"
+PATH="$tmp/bin2:$realpath_env" "$mc" pkg verify "$vd" --libs-dir "$tmp/vlibs" > "$tmp/o" 2>&1
+rc=$?
+if [ "$rc" = 2 ] && grep -q "deps/zero/mc.toml:[0-9]*:[0-9]*: not a usable version" "$tmp/o"; then
+    ok "a malformed [package].version: $(sed -E 's|^.*/(deps/zero.*)|\1|' "$tmp/o" | head -1)"
+else
+    fail "a malformed [package].version" "exit $rc: $(cat "$tmp/o")"
+fi
+rm -rf "$vd" "$tmp/vlibs"
+
 echo "check-pkg: $((total - fails))/$total"
 [ "$fails" -eq 0 ]
