@@ -1785,6 +1785,90 @@ agents (`.claude/agents/`): `stage0-dev` (C23), `mc-dev` (`.mc` code), `reviewer
   fix and the lex-skip wording): `mc2.sha256` `5d2db5f9e94d33422d6d812d1143dc1cdd9f3bc2a1e8727a6ea113060e67ae55`, Linux
   `9161fb1b…e17f8d` / `1ea7dc83…90d1cb`, Windows `831a422a…64b068` / `6224c4a9…9b570b` -- all
   five in the scripts' `hash  file` format.
+- `mc --exe`: an executable's exports survive its own zerofill (0.16.x patch; reported by the
+  mc-php consumer with a reproducer, `docs/macho-notes.md` § M11 § Segment layout). `stage0/`
+  untouched (2848/3000); the whole code change is **`src/backend_exe.mc` +49/-32, 37 of the added
+  lines neither comment nor blank**, and **zero new public names** (`check-freeze` 423 entries,
+  unchanged).
+  **The defect**, reproduced before anything was written: an `mc --exe` host that `dlopen`s a
+  flat-namespace bundle (`clang -bundle -flat_namespace -undefined suppress`) referencing a symbol
+  the host DEFINES worked with a 16000-byte `__bss` and failed with a 16384-byte one --
+  `symbol not found in flat namespace '_mc_answer'` -- while the binary itself still ran.
+  **The mechanism.** `mc` writes no export trie (`LC_DYLD_INFO_ONLY`'s `export_off` is 0), so
+  `dyld` resolves the bundle's undefined symbols against the classic `LC_SYMTAB`, and it only
+  reads that table when `__LINKEDIT`'s offset from the mach header **in memory** equals its offset
+  **in the file**. `exe_layout` advanced `vm` by `vmsize` and `fo` by `filesize` independently
+  (which is what keeps a 32 MiB `__bss` out of the file), so one whole page of zerofill in
+  `__DATA` put `__LINKEDIT` at `vmaddr 0x10000c000` with `fileoff 32768` -- a 16 KiB skew -- and
+  every symbol the binary exported became invisible. Measured in both directions rather than
+  argued: `ld`'s OWN output with its `export_off`/`export_size` patched to 0 and re-signed fails
+  identically with a 16 KiB `__bss` (`ld` never hits it because it always emits
+  `LC_DYLD_EXPORTS_TRIE`) and works without one; and `mc`'s failing binary, patched so that
+  `__LINKEDIT.vmaddr - __TEXT.vmaddr == __LINKEDIT.fileoff`, finds the symbol with the same symbol
+  table and the same `LC_DYSYMTAB`.
+  **The fix is the layout, not a trie.** `exe_plan_sections` now groups sections by
+  **(segname, zerofill)** and emits every zerofill-only segment FIRST, below `__TEXT`, with
+  `fileoff 0 / filesize 0`; from `__TEXT` on, no segment has `vmsize > filesize`, so VM and file
+  advance in lockstep and the skew is 0 by construction. A module with a `__bss` therefore gets a
+  second `LC_SEGMENT_64` also named `__DATA` (the section keeps its own `segname`, so `nm -m`
+  still says `(__DATA,__bss)`). Three places that assumed `__TEXT` was group 0 follow it:
+  `exe_layout`'s header offset, `LC_MAIN`'s `entryoff` (now `addr(_main) - __TEXT.vmaddr`) and
+  `exe_sig`'s `execSegBase`/`execSegLimit`. Placing the zerofill AFTER `__LINKEDIT` also works
+  (measured) but would need the linkedit's size before the relocations are patched; padding the
+  file to `filesize == vmsize` is what the 32 MiB `heap[]` forbids.
+  **Measured**: the four `--bss` sizes of the consumer's probe (8192, 16000, 16384, 65536) all
+  return 42; `build/mc-exe` comes out at the same 1.2 MB with a zerofill `__DATA` of
+  `vmsize 0x2064000 / filesize 0` at `0x100000000` and `__TEXT` at `0x102064000`, runs, and
+  compiles `src/mc.mc` to an object identical to `build/mc1`'s; `codesign --verify` and
+  `nm -m`/`otool -l` are clean. A program with no zerofill (`tests/021-strings.mc`) is
+  byte-identical to before. `examples/api`'s binary is the **same 55632 bytes**, differing from
+  byte 17 (`ncmds`) on -- the load commands and the addresses in them, nothing else.
+  Gate: `scripts/test-exe.sh` gained two macOS-only cases (self-skipping without `clang`),
+  `bss-exports` (the host + the clang bundle, exit 42) and `bss-exports-mc` (the compiler's own
+  32 MiB `__bss`: `__LINKEDIT` skew 0 and `nm -g` showing ` T _lex_next`). Proved to have teeth:
+  with a `build/mc1` from `main` the script is **32/34, exit 1**, both new cases failing
+  (`exit 4` -- `dlopen` itself refuses the bundle); with the fix, **34/34**.
+  -- `make bundle` re-run BEFORE bootstrapping (60 files, raw 1256996 -> LZ 570125, blob
+  570899 B). `make check` green end to end (**RC 0, zero FAIL**): `budget` 2848/3000, `test`
+  32/32, `check-lex`/`check-ast`/`check-asm` 108/108, `check-obj` **32/32 identical to the frozen
+  seed** and 32/32 `arm64-surface` against `macho`, `check-bundle` (lz round trip 125 cases),
+  `bootstrap` at BOTH fixed points (`mc2.o == mc3.o`, 1456184 B; `mc2o.o == mc3o.o`) with the
+  cross-road identity (`build/mc2o src/mc.mc == build/mc2.o`) and **both `--dump-asm` diffs
+  between `mc1` and `mc2` empty**, `check-surface` 32/32, `check-opt` 76/76, **`test-exe` 34/34
+  via `--exe`**, `check-mc`, `check-standalone`, `check-parts`, `check-libroot` 11/11,
+  `check-toml`, `check-build`, `check-pkg` 200/200, `check-tool` 31/31, `check-sysroots`,
+  `check-stubs`, `check-limits` 17/17 under 90%, `check-minimal`, `test-linux` 57/57 and
+  `test-linux-x86_64` 53/53, the four `--exe` cells, `test-windows` 59/59 and
+  `test-windows-x86_64` 55/55 objects cross-compiled, `check-examples`, `check-lang`,
+  `check-conc`, `check-desktop`, `check-float`, `check-wide`, `check-kernel`, `check-avr`,
+  `test-sandbox` 73 ok / 0 failed / 1 skipped, `check-docs` (211 symbols, 50 flags, 36 TOML keys,
+  10 directives, 52 samples, 588 links), **`check-freeze` 423 entries unchanged**, `site` 100
+  pages + `check-site` + `check-site-linux` 21/21. `make check-linux-host` **RC 0 over all four
+  cells** (aarch64 and x86_64 x musl and gnu), each after its own plain AND optimized fixed point
+  and with the cross proof green.
+  `scripts/check-inert.sh <mc1 from main 210af6b> build/mc1`: **33 objects identical on the plain
+  road and 33 with `--opt=1`** (`tests/*.mc` and `src/mc.mc`) -- the object writers are untouched
+  -- plus `examples/kernel`'s flat image identical; the four taught examples whose artefact is a
+  Mach-O EXECUTABLE (`api`, `lang`, `conc`, `desktop`) differ, which is the fix, at the same file
+  size.
+  **All ten goldens rewritten once**, each only after its own criterion: `mc2.sha256`
+  `dcbc2711...5a1443` -> `6db8b89bea7d0f3e7052b5c99093e614b9c4a13641dbfafbf8d28dc5c50a9596`,
+  `mc2-opt.sha256` `5c23323e3c383b2c9671e60bfb696878ecc04fa3e57bae72f6a37d505da7635f` (both by
+  `scripts/bootstrap.sh`, after the two empty `--dump-asm` diffs and the two `cmp`s); the four
+  Linux ones deleted and re-recorded by `make check-linux-host` -- `mc2-linux-arm64`
+  `570cf9e2f6a5068a6894db05f2d9ce26316c5a5246909f126fd003469a24b499`, `mc2-linux-arm64-opt`
+  `bf31b307ffd99f21f09cfd8810f1a7c17c1a273fb3ebac7c95d4b8e45ea68831`, `mc2-linux-x86_64`
+  `3202ed8dfb8302b1c14dc4337a3651affa41360062f78bdd89acd88a2325eb8e`, `mc2-linux-x86_64-opt`
+  `fe138b78765fa21ac0f704bbda2eeee54da4ad3e1fe3816cf7b4718635d0a295`; the four Windows ones
+  cross-computed on macOS per `tests/golden/README.md` -- `mc2-windows-arm64`
+  `fc4d366df3964c3e5d3111e57eb9cdbe605d5c57c413a75cbc30cefc24204c6c` (1491507 B),
+  `mc2-windows-arm64-opt`
+  `2274b27c8291f885bc01222530f5990ca8ebe16dd6c26af50511940b0f8f3a02` (1432515 B),
+  `mc2-windows-x86_64`
+  `0d5f4bb6b1eae630335a7c065a956ba40ef850e69f65194feeada37e9f29f1bf` (1547503 B),
+  `mc2-windows-x86_64-opt`
+  `327b4988a5e18c746e41e2626d7a8f3aaa8333064f4290580336fa51756f4dfa` (1475047 B), the two plain
+  ones also written byte for byte by `build/mc2`.
 - Next: M18 or M24 (`docs/plan.md`); M40 (the word-size sweep AVR/PIC need) is
   named in `docs/plan.md`; M13 stays in the backlog (`docs/specs/M13.md`:
 - M24 step A ✔ (`docs/specs/M24.md` § M1-M6, M8 and decision D5): **Tier 4 -- the inert half.

@@ -85,6 +85,70 @@ for f in tests/*.mc; do
     echo "ok $name"
 done
 
+# The exports of an --exe binary have to survive its own zerofill. An executable
+# mc writes carries no export trie, so dyld resolves a flat-namespace bundle's
+# undefined symbols against the classic LC_SYMTAB -- and it only reads that table
+# when __LINKEDIT sits at the same offset from the mach header in memory as it
+# does in the file. A zerofill section between __TEXT and __LINKEDIT used to break
+# that equality and every symbol the binary exported became invisible to dlopen
+# (docs/macho-notes.md section M11). macOS only: the bundle is built with clang,
+# as an oracle, the way check-float.sh uses llvm-mc.
+if [ "$host_os" = "macos" ] && command -v clang >/dev/null 2>&1; then
+    d=build/tests-exe/bss-exports
+    rm -rf "$d"; mkdir -p "$d"
+    cat > "$d/host.mc" <<'HOSTEOF'
+extern uptr dlopen(uptr path, i64 mode);
+extern uptr dlsym(uptr handle, uptr name);
+u8 pad[16384];                  // one whole 16 KiB page of __bss
+i64 mc_exported() { return 42; }
+i64 main(i64 argc, uptr argv) {
+    st8(pad, 1);
+    if (argc < 2) return 3;
+    uptr h = dlopen(ld64(argv + 8), 2);
+    if (h == 0) return 4;
+    uptr f = dlsym(h, "go");
+    if (f == 0) return 5;
+    return callp(f);
+}
+HOSTEOF
+    cat > "$d/caller.c" <<'CEOF'
+long mc_exported(void);
+long go(void) { return mc_exported(); }
+CEOF
+    total=$((total + 1))
+    if ! clang -bundle -flat_namespace -undefined suppress -o "$d/caller.so" "$d/caller.c" 2>/dev/null; then
+        echo "FAIL bss-exports (clang could not build the bundle)"; fails=$((fails + 1))
+    elif ! msg=$("$mc" --exe "$d/host.mc" -o "$d/host" 2>&1); then
+        echo "FAIL bss-exports (compile: $msg)"; fails=$((fails + 1))
+    else
+        "$d/host" "$d/caller.so" >/dev/null 2>&1
+        got=$?
+        if [ "$got" != 42 ]; then
+            echo "FAIL bss-exports (exit $got, expected 42: the host is invisible to dlopen)"
+            fails=$((fails + 1))
+        else
+            echo "ok bss-exports"
+        fi
+    fi
+    # the same property on the compiler's own 32 MiB __bss
+    total=$((total + 1))
+    "$mc" --exe src/mc.mc -o "$d/mc-exe" >/dev/null 2>&1
+    seg=$(otool -l "$d/mc-exe" | awk '
+        /segname __TEXT$/     { t = 1 }
+        /segname __LINKEDIT$/ { l = 1 }
+        t && !tv && /vmaddr/  { tv = $2; t = 0 }
+        l && !lv && /vmaddr/  { lv = $2 }
+        l && lv && /fileoff/  { print tv, lv, $2; exit }')
+    skew=$(( $(echo "$seg" | cut -d' ' -f2) - $(echo "$seg" | cut -d' ' -f1) \
+             - $(echo "$seg" | cut -d' ' -f3) ))
+    if [ "$skew" != 0 ] || ! nm -g "$d/mc-exe" | grep -q ' T _lex_next'; then
+        echo "FAIL bss-exports-mc (__LINKEDIT vm/file skew $skew; _lex_next exported?)"
+        fails=$((fails + 1))
+    else
+        echo "ok bss-exports-mc"
+    fi
+fi
+
 if [ -n "$libcflag" ]; then
     echo "$((total - fails))/$total tests passed via --exe $libcflag"
 else
