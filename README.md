@@ -5,19 +5,26 @@
 
 **A compiler small enough to read, written in itself.**
 
-`mc` compiles a schoolbook-C language — seven types, one opaque pointer, `loop` and `if` — into
-Mach-O for AArch64. A 2,846-line C23 seed is compiled by `clang` exactly once; after that `mc`
-compiles its own source, writes and signs the executable itself, and reaches a fixed point where
-one generation is byte-identical to the next. Everything the core leaves out — `while`, `for`,
-`+=`, a second backend, a whole object model — you teach it from ordinary `mc` source.
+`mc` compiles a schoolbook-C language — seven types, one opaque pointer, `loop` and `if` — for
+macOS, Linux and Windows, on arm64 and x86-64. A 2,848-line C23 seed is compiled by `clang`
+exactly once; after that `mc` compiles its own source, writes and signs (or directly writes) the
+executable itself, and reaches a fixed point where one generation is byte-identical to the next.
+Everything the core leaves out — `while`, `for`, `+=`, a second backend, a whole object model —
+you teach it from ordinary `mc` source.
 
 - **Website** — <https://minicompiler.dev>
 - **The plan** — [`docs/plan.md`](docs/plan.md): the language, the teaching surface, the
   architecture, the budget and the milestones
 - **Projects, the bundled library, cross-compiling** — [`docs/build.md`](docs/build.md):
-  `mc build`, `mc.toml`, `#include <name>`, `#embed`, Linux targets
+  `mc build`, `mc.toml`, `#include <name>`, `#embed`, Linux and Windows targets
+- **How it compares** — [`docs/comparison.md`](docs/comparison.md): compile time, binary size and
+  run time against C, Go, Zig, Rust and C#
 - **CI and releases** — [`docs/ci.md`](docs/ci.md)
 - **Examples** — [`examples/`](examples/)
+- **On the road to 1.0.0** — the public surface is recorded and frozen against removal
+  (`docs/reference/hooks.md` § 8), gated by an out-of-tree consumer's own build before every
+  release publishes (`docs/ci.md` § The canary); see [`docs/plan.md`](docs/plan.md) §
+  "What 1.0.0 promises, and what it does not"
 
 <!-- release-excerpt-end -->
 

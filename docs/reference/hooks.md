@@ -1588,7 +1588,7 @@ registry-index key documented elsewhere in `docs/reference/` — is in the recor
 [`../../tests/golden/surface.txt`](../../tests/golden/surface.txt), extracted by
 `scripts/surface-extract.sh` and compared on every `make check` by `check-freeze`
 ([`../../tests/golden/README.md`](../../tests/golden/README.md)). Seven kinds, **423 entries**
-today, none of them written by hand:
+today (the count moves only by `--record`, never by hand), none of them written by hand:
 
 | kind | is | count |
 |---|---|---|

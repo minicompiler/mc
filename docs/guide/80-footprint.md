@@ -158,10 +158,12 @@ is caught here rather than in a release.
 
 ## What is not measured yet
 
-There is no Windows (COFF) and no wasm backend, so those rows do not exist — see the target
-table in [50-cross-compile.md](50-cross-compile.md) for what is planned and what the
-machine-interface split in [../reference/machine.md](../reference/machine.md) has to land first.
-Each of them will bring its own floor: a COFF image has a section alignment far larger than its
+The Windows COFF backend and the machine-interface split it needed both landed (M17, M19, M20 —
+see the target table in [50-cross-compile.md](50-cross-compile.md)), but `examples/minimal/measure.sh`
+does not have a Windows row yet: it needs a `windows-11-arm`/`windows-2025` runner or a local
+Windows host to measure a real `PT_LOAD`/section alignment floor, which this Mac cannot produce.
+WebAssembly (M33) has not landed at all, so there is nothing to measure there either. Each will
+bring its own floor when it arrives: a COFF image has a section alignment far larger than its
 contents, and a wasm module under WASI pays for the module preamble and for whatever the host
 runtime instantiates before the entry point runs. The shape of this page — one table, one
 paragraph per floor — is meant to survive their arrival.

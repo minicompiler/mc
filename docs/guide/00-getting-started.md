@@ -8,10 +8,14 @@ This page gets you from nothing to a running binary. It takes about two minutes.
 
 ## What you need
 
-- **macOS on Apple Silicon (arm64).** That is the only host today. `mc` *targets* Linux arm64 as
-  well ([50-cross-compile.md](50-cross-compile.md)), but the compiler itself runs on macOS.
+- **A host.** `mc` runs on macOS (arm64), Linux (arm64 or x86-64) and Windows (arm64 or x86-64)
+  — see [90-linux-host.md](90-linux-host.md) and [95-windows-host.md](95-windows-host.md) for the
+  other two. This page's examples assume macOS; the same commands work on the others with the
+  host's own binary and `.exe` suffix where it applies.
 - Nothing else. No `make`, no `clang`, no linker, no SDK, no package manager. The standard
-  library travels inside the binary, and `mc --exe` writes a signed executable with no `ld`.
+  library travels beside the binary ([reference/packages.md](../reference/packages.md) § 2), and
+  `mc --exe` writes a signed/runnable executable with no external linker on every host it targets
+  ([50-cross-compile.md](50-cross-compile.md)).
 
 ## Install
 
@@ -50,7 +54,7 @@ what it does not.
 ### From source
 
 ```sh
-make stage0     # clang compiles the 2,846-line C23 seed — once, and never again
+make stage0     # clang compiles the 2,848-line C23 seed — once, and never again
 make mc1        # the seed compiles src/mc.mc into the real compiler: build/mc1
 make check      # everything: tests, the fixed point, the demos, the examples
 ```
