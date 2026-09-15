@@ -1396,6 +1396,38 @@ else
     fi
 fi
 
+# ---- cmp_cond(op): a public parameter list ----
+# The consumer's exact shape, and the regression PR #92 shipped: `cmp_cond` took
+# one argument, #92 gave it two, and every module outside src/ that called it --
+# teko's typeof, transliterated in lib/user_cmpcond.mc -- stopped compiling with
+# `wrong number of arguments`. A signature change is a rename
+# (docs/reference/hooks.md § 8): the two-argument form is `cmp_cond_of` now, and
+# the module below both COMPILES (the arity) and RUNS (the meaning: its pass
+# asserts the signed condition, the -1, and the unsigned twin under the new
+# name). tests/golden/surface.txt records the arity, so check-freeze catches the
+# next one without a consumer having to.
+ccnop="build/mc-cmpcond"
+rm -f "$ccnop"
+if ! msg=$("$mc1" --exe lib/mc_cmpcond.mc -o "$ccnop" 2>&1); then
+    echo "FAIL: compiling lib/mc_cmpcond.mc: $msg"
+    fails=$((fails + 1))
+else
+    ccout="$tmp/cc-prog"
+    rm -f "$ccout"
+    if ! msg=$("$ccnop" --exe tests/001-return42.mc -o "$ccout" 2>&1); then
+        echo "FAIL cmp_cond(op): the taught compiler's pass: $msg"
+        fails=$((fails + 1))
+    else
+        "$ccout"; rc=$?
+        if [ "$rc" = 42 ]; then
+            echo "ok cmp_cond(op): one argument, the signed condition, and cmp_cond_of for the unsigned half"
+        else
+            echo "FAIL cmp_cond(op): the program exited $rc, want 42"
+            fails=$((fails + 1))
+        fi
+    fi
+fi
+
 # ---- on_source: every source the lexer pushes ----
 # The demo counts the sources it is told about and joins their names. Four roads
 # reach the handler and the program reads both counters back: the ENTRY (which

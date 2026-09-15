@@ -13,6 +13,15 @@
 #                      file is re-recorded, so that every surface change costs
 #                      one committed line in the same pull request and the diff
 #                      IS the announcement (M53 D10).
+#   an arity CHANGED   a `sym` line carries the number of parameters its
+#                      definition declares, and a change to it is a MAJOR that
+#                      may never be re-recorded for a public name: the parameter
+#                      list is part of the frozen surface, and the replacement
+#                      for a new signature is a NEW NAME with the old one kept
+#                      as a one-line wrapper (docs/reference/hooks.md § 8, the
+#                      deprecation lane). PR #92 gave `cmp_cond` a second
+#                      parameter and every consumer got `wrong number of
+#                      arguments`; this column is what that cost.
 #   the machine kind   the contract version may only go up, and only in a commit
 #                      that adds a `Version N → M` paragraph to
 #                      docs/reference/machine.md (M53 D5).
@@ -39,7 +48,8 @@ sh "$extract" > "$tmp/now" || { echo "FAIL: $extract failed"; exit 1; }
 if [ "$1" = "--record" ]; then
     {
         echo "# mc public surface -- recorded by scripts/check-freeze.sh --record."
-        echo "# One line per entry: <kind> <TAB> <name> [<TAB> deprecated <version> -> <replacement>]"
+        echo "# One line per entry: <kind> <TAB> <name> [<TAB> <arity>] [<TAB> deprecated <version> -> <replacement>]"
+        echo "# The arity column is a sym's parameter count and is frozen with its name."
         echo "# Read $policy before editing this file by hand. Do not."
         cat "$tmp/now"
     } > "$golden"
@@ -49,9 +59,19 @@ fi
 
 [ -f "$golden" ] || { echo "FAIL: $golden is missing -- record it: scripts/check-freeze.sh --record"; exit 1; }
 
-# The golden's first two columns are the entry; a third, `deprecated <version> ->
-# <replacement>`, is the only expressible removal (M53 § 5.2).
-grep -v '^#' "$golden" | cut -f1,2 > "$tmp/was"
+# The golden's first two columns are the entry, and a `sym` carries its arity in
+# a third; a field reading `deprecated <version> -> <replacement>` is the only
+# expressible removal (M53 § 5.2), and it is found by its text, not by its
+# position, so it sits after the arity on a sym line and after the name on any
+# other.
+#
+# `wasa`/`nowa` are the entry plus its arity ("" where there is none), `was`/
+# `now1` the entry alone: one pair answers "was it here?", the other "did its
+# parameter list move?".
+arity='{ a = ""; for (i = 3; i <= NF; i++) if ($i ~ /^[0-9]+$/) a = $i; print $1 "\t" $2 "\t" a }'
+grep -v '^#' "$golden" | awk -F'\t' "$arity" > "$tmp/wasa"
+awk -F'\t' "$arity" "$tmp/now" > "$tmp/nowa"
+cut -f1,2 "$tmp/wasa" > "$tmp/was"
 
 fails=0
 
@@ -78,7 +98,7 @@ fi
 
 # ------------------------------------------------------- removed, then added
 grep -v '^machine	' "$tmp/was" | sort > "$tmp/was1"
-grep -v '^machine	' "$tmp/now" | sort > "$tmp/now1"
+grep -v '^machine	' "$tmp/nowa" | cut -f1,2 | sort > "$tmp/now1"
 
 comm -23 "$tmp/was1" "$tmp/now1" > "$tmp/gone"
 comm -13 "$tmp/was1" "$tmp/now1" > "$tmp/new"
@@ -93,7 +113,9 @@ if [ -s "$tmp/gone" ]; then
     # and a `flag` carries dashes, and a loose match here would read one entry's
     # marker as another's.
     undeprecated=$(awk -F'	' '
-        NR == FNR { if ($3 ~ /^deprecated /) mark[$1 "	" $2] = 1; next }
+        NR == FNR { for (i = 3; i <= NF; i++)
+                        if ($i ~ /^deprecated /) mark[$1 "	" $2] = 1
+                    next }
         !(($1 "	" $2) in mark) { bad = 1 }
         END { print bad + 0 }
     ' "$golden" "$tmp/gone")
@@ -112,6 +134,25 @@ if [ -s "$tmp/new" ]; then
         printf 'new: %s %s -- additive, a MINOR\n' "$k" "$n"
     done < "$tmp/new"
     echo "FAIL re-record: scripts/check-freeze.sh --record"
+    fails=$((fails + 1))
+fi
+
+# ------------------------------------------------------------ a moved arity
+# Only for an entry present on both sides: one that arrived or left is already
+# reported above, and its arity is not a second finding.
+awk -F'	' '
+    NR == FNR { was[$1 "	" $2] = $3; next }
+    ($1 "	" $2) in was && was[$1 "	" $2] != $3 {
+        printf "changed: %s %s %s->%s\n", $1, $2, was[$1 "	" $2], $3
+    }
+' "$tmp/wasa" "$tmp/nowa" > "$tmp/moved"
+
+if [ -s "$tmp/moved" ]; then
+    cat "$tmp/moved"
+    echo "FAIL a public function's parameter list is frozen: add a new name instead"
+    echo "     (docs/reference/hooks.md § 8 -- keep the old name as a one-line"
+    echo "     wrapper over the new one). Re-record ONLY if this entry is not"
+    echo "     public in the first place: scripts/check-freeze.sh --record"
     fails=$((fails + 1))
 fi
 

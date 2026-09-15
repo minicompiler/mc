@@ -1170,6 +1170,29 @@ if (decl_ret(d) == TY_VOID) err_at2(fl, line, "widen: cannot bind a void result"
 i64 pt = decl_param_type(d, i);          // -1: more arguments than parameters
 ```
 
+### Asking about an operator token
+
+A module that types or lowers a binary expression asks the same question the core asks: is this
+token a comparison, and which condition code is it?
+
+| function | returns |
+|---|---|
+| `i64 cmp_cond(i64 op)` | the signed `MCOND_*` for the comparison token `op`, or -1 when `op` is not a comparison |
+| `i64 cmp_cond_of(i64 op, i64 uns)` | the same, from the signed half (`uns` 0) or the unsigned one (`uns` 1) |
+
+The six comparison tokens are `K_EQ K_NE K_LT K_LE K_GT K_GE`; everything else answers -1, which is
+what makes `cmp_cond(op) >= 0` the test for "this operator yields a boolean" (`res_binary` in
+`src/gen_resolve.mc` is that line). `cmp_cond_of(op, 1)` gives the unsigned twin of an ordering —
+`MCOND_ULT`, `MCOND_ULE`, `MCOND_UGT`, `MCOND_UGE` — which is what the walker asks for once
+`cmp_unsigned` has decided that neither operand is signed (machine contract version 6); `MCOND_EQ`
+and `MCOND_NE` are the same code in both halves.
+
+`cmp_cond` is the one-argument function it has always been, and that is the point: PR #92 gave it
+the second parameter instead of giving the new behaviour a new name, and every module outside
+`src/` that called it stopped compiling with `wrong number of arguments`. A parameter list is part
+of the frozen surface (§ 8), so the two-argument form is `cmp_cond_of` and `cmp_cond(op)` is a
+one-line wrapper over it.
+
 ### Record and replay
 
 The four functions that let a module read a region now and parse it later — what a generic
@@ -1564,18 +1587,26 @@ Every name on this page — and every CLI flag, TOML key, directive, `<mc/*>` na
 registry-index key documented elsewhere in `docs/reference/` — is in the recorded public surface:
 [`../../tests/golden/surface.txt`](../../tests/golden/surface.txt), extracted by
 `scripts/surface-extract.sh` and compared on every `make check` by `check-freeze`
-([`../../tests/golden/README.md`](../../tests/golden/README.md)). Seven kinds, **420 entries**
+([`../../tests/golden/README.md`](../../tests/golden/README.md)). Seven kinds, **423 entries**
 today, none of them written by hand:
 
 | kind | is | count |
 |---|---|---|
-| `sym` | a function a module outside `src/` may call | 209 |
+| `sym` | a function a module outside `src/` may call, **with its parameter count** | 211 |
 | `flag` | a command-line option `mc` accepts | 50 |
-| `toml` | a key `mc.toml` may carry | 35 |
+| `toml` | a key `mc.toml` may carry | 36 |
 | `dir` | a `#directive` | 10 |
 | `bundle` | a name `#include <…>` resolves — a library and a `<mc/*>` PART, one kind ([bundle.md](bundle.md)) | 101 |
 | `lock` | a key of an `mc.lock` row or a registry index row ([packages.md](packages.md) § 4) | 14 |
 | `machine` | the machine task contract's version ([machine.md](machine.md)) | 1 |
+
+**A parameter list is part of the frozen surface, and `check-freeze` records the arity**: a `sym`
+line in the inventory is `sym<TAB>name<TAB>arity`, and a definition that gains or loses a parameter
+is reported as `changed: sym <name> <old>-><new>` and FAILS — the one finding that may not be
+re-recorded away for a public name, because the replacement for a new signature is a new name with
+the old one kept as a one-line wrapper (the deprecation lane below). The column exists because PR
+#92 gave `cmp_cond` a second parameter: the inventory knew names only, said nothing, and the
+consumers found it.
 
 There is **one** extractor and every gate reads it: `check-docs.sh` asks "is this documented?" and
 `check-freeze.sh` asks "was it here last time?" of the exact same list. Neither script carries a

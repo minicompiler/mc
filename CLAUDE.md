@@ -7509,3 +7509,84 @@ agents (`.claude/agents/`): `stage0-dev` (C23), `mc-dev` (`.mc` code), `reviewer
   Docs: `docs/reference/bundle.md` § `<f16>` (what it promises per architecture and what the
   fallback costs), `docs/reference/machine.md` § The opcode bands (the bundled side's refusal),
   `docs/reference/diagnostics.md`, `docs/guide/96-a-new-primitive.md`.
+- `cmp_cond(op)` restored, and `check-freeze` records each symbol's arity (the first freeze
+  regression; `docs/specs/M53.md` § Implementation notes -- the first freeze regression (#92) and
+  the arity column). `stage0/` untouched (2848/3000).
+  1. **The regression.** PR #92 (machine contract v6, unsigned comparisons) needed the unsigned
+     half of the comparison table and gave the EXISTING function the parameter: `cmp_cond(op)`
+     became `cmp_cond(op, uns)`. The consumer's `teko_typeof.tk:318` is
+     `if (cmp_cond(op) >= 0) return TY_I64;` -- one argument -- so every taught compiler built on
+     0.17.3/0.17.4 died with `wrong number of arguments` before it compiled a line of its own
+     language. The canary held both as pre-releases; this is the first regression the canary caught
+     and the gates did not. `docs/reference/hooks.md` § 8 already forbade it -- a signature change
+     is a rename -- and nothing enforced it.
+  2. **The fix is the deprecation lane's steps 1 and 2**: the new behaviour got a new name,
+     `cmp_cond_of(op, uns)` in `src/gen_walk.mc`, and `cmp_cond(op)` is the one-line wrapper
+     `cmp_cond_of(op, 0)` it always was in meaning -- not a deprecated alias, so no marker and no
+     version are written. `gen_binary` asks `cmp_cond_of(op, cmp_unsigned(...))` and `res_binary`
+     asks `cmp_cond(op)`, the signed half by definition; v6 is untouched.
+     **4 added code lines in `src/`** (`gen_walk.mc` +15/-5, `gen_resolve.mc` +1/-1), one of them
+     the new wrapper and three renamed call sites. **Zero new globals** -- `check-limits` reports
+     `globals 268/512 (52%)` before and after; `funcs` 924 -> 925.
+  3. **Two gate holes, both closed.** `cmp_cond` was not in `tests/golden/surface.txt` at all (the
+     `sym` regex reaches a name through one of 17 prefixes or an exact-name list, and `cmp_` is
+     neither), and the inventory recorded NAMES, so even a listed name could grow a parameter
+     silently. `scripts/surface-extract.sh` now emits `sym<TAB>name<TAB>arity` -- the parameter
+     count read from the definition's own `(...)` in `src/*.mc`, 0 for `()`, otherwise commas + 1 --
+     and `cmp_cond`/`cmp_cond_of` join the exact-name list. `scripts/check-freeze.sh` gained a
+     THIRD verdict beside removed and added, and the only one whose remedy is not "re-record":
+     `changed: sym cmp_cond 1->2` with `FAIL a public function's parameter list is frozen: add a
+     new name instead`. The deprecation marker is found by its TEXT now and not by its column, so
+     it sits after the arity on a `sym` line and after the name on any other.
+     `scripts/check-docs.sh` needed no edit: it asks the extractor for a single kind, and that road
+     prints the name column alone.
+  4. **Both teeth measured.** With #92's two-parameter `cmp_cond` the gate prints exactly
+     `changed: sym cmp_cond 1->2` and exits 1; with the restored one, `ok freeze: 423 entries
+     (211 sym, 50 flag, 36 toml, 10 dir, 101 bundle, 14 lock, 1 machine)`. And the consumer's shape
+     is a gate now, not a report: `lib/user_cmpcond.mc` is `teko_typeof.tk:318` transliterated, and
+     `scripts/check-surface.sh` builds a taught compiler from `lib/mc_cmpcond.mc` and RUNS its
+     `pass`, which asserts the signed condition, the -1 for a non-comparison and the unsigned twin
+     under the new name (`ok cmp_cond(op): one argument, the signed condition, and cmp_cond_of for
+     the unsigned half`). Against `origin/main`'s compiler the same file is
+     `lib/user_cmpcond.mc:16: wrong number of arguments`, exit 1. The two fixtures are NOT in
+     `tools/bundle.list` (the M41 precedent for check-script-only modules).
+  5. **The inventory moved 420 -> 423 entries**: 209 `sym` lines gaining a column, plus the two new
+     names. No name in `src/` is defined with two different parameter counts (a prototype and its
+     definition agree), so the re-record is exactly that. `seed-cmp.txt` did NOT move: the restored
+     wrapper contains no comparison and the allow-listed total is still **371**
+     (27 + 25 + 29 x 10 + 27 + 2 over the fourteen units that reach `src/lex.mc` or `src/toml.mc`).
+  -- `make bundle` re-run BEFORE bootstrapping (60 files, raw 1253957 -> LZ 568589, blob 569363 B).
+  `make check` green end to end (**RC 0, zero FAIL**): `budget` 2848/3000, `test` 32/32,
+  `check-lex`/`check-ast`/`check-asm` **108/108 files identical** (the #92 allow-list unmoved),
+  `check-obj` **32/32 identical to the frozen seed**, `check-bundle` (reproducible + fresh),
+  `bootstrap` at BOTH fixed points (`mc2.o == mc3.o` 1452880 B, `mc2o.o == mc3o.o` 1394496 B, the
+  cross-road identity `mc2o-plain.o == mc2.o`, and the `--dump-asm` diff between `mc1` and `mc2`
+  **empty on both roads**), `check-surface` 32/32 + the new `cmp_cond(op)` case, `test-exe` 32/32,
+  `check-mc` 23/23, `check-standalone`, `check-parts`, `check-toml`, `check-build`, `check-pkg`,
+  `check-tool`, `check-limits` **17/17 under 90%**, `test-linux` 57/57 and 53/53, the four `--exe`
+  cells 60/60 + 60/60 + 56/56 + 56/56, `test-windows` and `test-windows-x86_64` (24/24 PE),
+  `check-examples`, `check-lang`, `check-conc`, `check-desktop`, `check-float`, `check-wide`,
+  `check-kernel`, `check-avr`, `test-sandbox` 73 ok / 0 failed / 1 skipped, `check-docs`
+  (**211 symbols**, 50 flags, 36 toml keys, 10 directives, 52 samples, 579 links), **`check-freeze`
+  423 entries**, `site` + `check-site`. `make check-linux-host` RC 0 over all four cells
+  (aarch64 musl 57/57 + `test-exe` 31/31, aarch64 gnu 58/58 native, x86_64 musl 53/53 + 29/29,
+  x86_64 gnu 54/54 native), each after its own `mc2l.o == mc3l.o` and with the cross proof
+  (`mc2l --backend=macho src/mc.mc` byte for byte the macOS `build/mc2.o`) green.
+  `scripts/check-inert.sh <mc1 from origin/main 8a03803> build/mc1`: **33 objects identical on both
+  roads** (`tests/*.mc` and `src/mc.mc`) plus byte-identical artefacts for `examples/api`, `lang`,
+  `conc`, `desktop` and `kernel` -- a rename of an internal call site emits no different byte.
+  The **ten goldens** rewritten once, each only after its own criterion: `mc2.sha256`
+  `344dd4beb1f602d791c8b92bf94a1fb28d0eb32e96eead32564a187cd2e80df7` and `mc2-opt.sha256`
+  `e457a3520403a6951bb0267acc2ce0acf08c8a7a93c9f4111daabde40fa9aa13` (after the two empty
+  `--dump-asm` diffs and the two `cmp`s); the four Linux ones deleted and re-recorded by
+  `make check-linux-host` -- `mc2-linux-arm64` `2dd98ad8...7ff1c1e6`, `mc2-linux-arm64-opt`
+  `3a9ad8f9...0edc3a0c`, `mc2-linux-x86_64` `deebd535...43e7458b`, `mc2-linux-x86_64-opt`
+  `5e28b1cd...52a33459a7`; the four Windows ones cross-computed per `tests/golden/README.md` --
+  `mc2-windows-arm64` `c26637d7...b6f7295b` (1488087 B), `mc2-windows-x86_64` `a3a3bf81...f0bcbbf4`
+  (1544127 B), `mc2-windows-arm64-opt` `a39f3e7e...9bda64fd` (1429131 B),
+  `mc2-windows-x86_64-opt` `1cb22208...4a14266fd4` (1471715 B).
+  Docs: `docs/reference/hooks.md` (§ 4 "Asking about an operator token" -- `cmp_cond`/`cmp_cond_of`
+  with the six tokens and the unsigned twins; § 8 gained the arity paragraph and the refreshed
+  counts), `tests/golden/README.md` (the three-field `sym` line and the third verdict),
+  `docs/specs/M53.md` (§ Implementation notes -- the first freeze regression (#92) and the arity
+  column, six notes).
