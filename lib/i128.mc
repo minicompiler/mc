@@ -171,6 +171,11 @@ i64 iw_lit() {
 // Slots replaced; everything else delegates. New opcodes above every I_* the
 // bundled machine uses, with their own encoder, sizer and dump, so `--dump-asm`
 // shows `adds`/`adc` and not a raw word.
+// The arm64 band 200..299 (docs/reference/machine.md § 3 is the registry of
+// bands). It is bounded at BOTH ends: `op >= WI_BASE` alone would claim the
+// opcodes of a module that derived from this table or was derived from by it --
+// <float>'s 100..199 survives that test only because it is numerically lower,
+// and <f16>'s 300..399 does not.
 #define WI_BASE   200
 #define WI_ADDS   200
 #define WI_ADC    201
@@ -182,7 +187,7 @@ i64 iw_lit() {
 #define WI_CMPZ   207                 // subs xzr, rn, rm  -- the low half of a compare
 #define WI_SBCZ   208                 // sbcs xzr, rn, rm  -- and the high half
 #define WI_CSET   209                 // cset rd, <cond>   -- an unsigned condition (hs/lo)
-#define WI_MAXOP  210
+#define WI_MAXOP  210                 // one past the last: the band ends here
 
 // The arm64 codes for the UNSIGNED compare are C_HS (carry set: no borrow) and
 // C_LO (carry clear: borrow). They were this module's own #defines until
@@ -489,18 +494,21 @@ uptr wi_cond_name(i64 c) {
     return "??";
 }
 
+// The only test of the arm64 band, so the four slots cannot disagree about it.
+i64 wi_mine(i64 op) { return op >= WI_BASE && op < WI_MAXOP; }
+
 i64 wi_ins_size(uptr e) {
-    if (ins_op(e) >= WI_BASE) return 4;
+    if (wi_mine(ins_op(e))) return 4;
     return callp(iw_of(MTASK_INS_SIZE), e);
 }
 
 i64 wi_reloc_kind(uptr e) {
-    if (ins_op(e) >= WI_BASE) return 0 - 1;
+    if (wi_mine(ins_op(e))) return 0 - 1;
     return callp(iw_of(MTASK_RELOC_KIND), e);
 }
 
 void wi_encode(uptr e, i64 pc, uptr lab, uptr b) {
-    if (ins_op(e) < WI_BASE) { callp(iw_of(MTASK_ENCODE), e, pc, lab, b); return; }
+    if (!wi_mine(ins_op(e))) { callp(iw_of(MTASK_ENCODE), e, pc, lab, b); return; }
     if (ins_op(e) == WI_CSET) {
         buf_u32(b, 0x9A9F07E0 | (((ins_imm(e) ^ 1) & 0xf) << 12) | ins_rd(e));
         return;
@@ -513,7 +521,7 @@ void wi_encode(uptr e, i64 pc, uptr lab, uptr b) {
 }
 
 void wi_dump(uptr in) {
-    if (ins_op(in) < WI_BASE) { callp(iw_of(MTASK_DUMP), in); return; }
+    if (!wi_mine(ins_op(in))) { callp(iw_of(MTASK_DUMP), in); return; }
     if (ins_op(in) == WI_CSET) {
         out_str(1, "  cset x"); out_num(1, ins_rd(in));
         out_str(1, ", "); out_str(1, wi_cond_name(ins_imm(in)));
@@ -554,11 +562,16 @@ void wi_dump(uptr in) {
 //
 // The register partition is the bundled machine's: rax/rcx/rdx scratch,
 // r8..r11 the depths, [rbp - off] for locals.
-#define XW_BASE   100
-#define XW_ADC    100                 // adc rd, rn      REX.W 11 /r
-#define XW_SBB    101                 // sbb rd, rn      REX.W 19 /r
-#define XW_MUL    102                 // mul rd          REX.W f7 /4  (rdx:rax = rax*rd)
-#define XW_SETCC  103                 // setcc rd        0f 9x /0
+// The x86-64 band 200..299, the arm64 half's own number. It was 100, which is
+// <float>'s band on this architecture too: XW_ADC..XW_SETCC were byte for byte
+// FX_ADD_D..FX_DIV_D, so whichever of the two modules derived second encoded the
+// other's instructions with its own table -- a `mulsd` where a `mul` belongs.
+#define XW_BASE   200
+#define XW_ADC    200                 // adc rd, rn      REX.W 11 /r
+#define XW_SBB    201                 // sbb rd, rn      REX.W 19 /r
+#define XW_MUL    202                 // mul rd          REX.W f7 /4  (rdx:rax = rax*rd)
+#define XW_SETCC  203                 // setcc rd        0f 9x /0
+#define XW_MAXOP  204                 // one past the last: the band ends here
 
 // x86 condition nibbles (setcc cc). XC_E (4), XC_NE (5) and -- since contract
 // version 6, which gave the core machine unsigned comparisons -- XC_B (2) and
@@ -991,9 +1004,12 @@ void xw_ret(i64 d) {
 }
 
 // ---- x86 encoding, sizing and the dump ----
+// The only test of the x86 band, so the four slots cannot disagree about it.
+i64 xw_mine(i64 op) { return op >= XW_BASE && op < XW_MAXOP; }
+
 void xw_put(uptr e, i64 pc, uptr lab, uptr o) {
     i64 op = ins_op(e);
-    if (op < XW_BASE) { callp(xw_of(MTASK_ENCODE), e, pc, lab, o); return; }
+    if (!xw_mine(op)) { callp(xw_of(MTASK_ENCODE), e, pc, lab, o); return; }
     i64 rd = ins_rd(e);
     i64 rn = ins_rn(e);
     i64 im = ins_imm(e);
@@ -1023,14 +1039,14 @@ void xw_put(uptr e, i64 pc, uptr lab, uptr o) {
 }
 
 i64 xw_ins_size(uptr e) {
-    if (ins_op(e) < XW_BASE) return callp(xw_of(MTASK_INS_SIZE), e);
+    if (!xw_mine(ins_op(e))) return callp(xw_of(MTASK_INS_SIZE), e);
     set_buf_len(xw_tmp, 0);
     xw_put(e, 0, 0, xw_tmp);
     return buf_len(xw_tmp);
 }
 
 i64 xw_reloc_kind(uptr e) {
-    if (ins_op(e) >= XW_BASE) return 0 - 1;
+    if (xw_mine(ins_op(e))) return 0 - 1;
     return callp(xw_of(MTASK_RELOC_KIND), e);
 }
 
@@ -1046,7 +1062,7 @@ uptr xw_cond_name(i64 c) {
 
 void xw_dump(uptr in) {
     i64 op = ins_op(in);
-    if (op < XW_BASE) { callp(xw_of(MTASK_DUMP), in); return; }
+    if (!xw_mine(op)) { callp(xw_of(MTASK_DUMP), in); return; }
     i64 rd = ins_rd(in);
     i64 rn = ins_rn(in);
     i64 im = ins_imm(in);

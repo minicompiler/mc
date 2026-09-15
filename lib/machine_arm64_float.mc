@@ -28,7 +28,12 @@
 #define FREG_S2   25                  // spill scratch: right
 #define FREG_ARGS  8                  // v0..v7
 
-// ---- the float opcodes, above every I_* the bundled machine uses ----
+// ---- the float opcodes: the arm64 band 100..199 ----
+// The number is this module's claim on the opcode space every machine derived
+// from `arm64` shares, and it is bounded at both ends: a derived machine that
+// answered `op >= FI_BASE` would encode ANOTHER module's opcode with its own
+// table, and which module lost would depend on the registration order. The
+// registry of bands is in docs/reference/machine.md § 3.
 #define FI_BASE     100
 #define FI_ADD_D    100
 #define FI_SUB_D    101
@@ -72,7 +77,7 @@
 #define FI_STR_D    139
 #define FI_LDR_S    140
 #define FI_STR_S    141
-#define FI_MAXOP    142
+#define FI_MAXOP    142               // one past the last: the band ends here
 
 // operand shapes
 #define FF_2    0                     // rd, rn
@@ -583,13 +588,19 @@ void fa_jnz(i64 d, i64 l) {
 }
 
 // ---- encoding, sizing and the dump: the float opcodes, then delegate ----
+// fa_mine is the only test of the band, so the four slots cannot disagree about
+// where it ends. An opcode outside it belongs to somebody else -- the bundled
+// machine below, or a module that derived before or after this one -- and goes
+// to the pristine table untouched.
+i64 fa_mine(i64 op) { return op >= FI_BASE && op < FI_MAXOP; }
+
 i64 fa_ins_size(uptr e) {
-    if (ins_op(e) >= FI_BASE) return 4;
+    if (fa_mine(ins_op(e))) return 4;
     return callp(fa_of(MTASK_INS_SIZE), e);
 }
 
 i64 fa_reloc_kind(uptr e) {
-    if (ins_op(e) >= FI_BASE) return 0 - 1;
+    if (fa_mine(ins_op(e))) return 0 - 1;
     return callp(fa_of(MTASK_RELOC_KIND), e);
 }
 
@@ -608,7 +619,7 @@ i64 fa_enc(uptr in) {
 }
 
 void fa_encode(uptr e, i64 pc, uptr lab, uptr b) {
-    if (ins_op(e) >= FI_BASE) { buf_u32(b, fa_enc(e)); return; }
+    if (fa_mine(ins_op(e))) { buf_u32(b, fa_enc(e)); return; }
     callp(fa_of(MTASK_ENCODE), e, pc, lab, b);
 }
 
@@ -621,7 +632,7 @@ void fa_dreg(i64 k, i64 r) {
 }
 
 void fa_dump(uptr in) {
-    if (ins_op(in) < FI_BASE) { callp(fa_of(MTASK_DUMP), in); return; }
+    if (!fa_mine(ins_op(in))) { callp(fa_of(MTASK_DUMP), in); return; }
     i64 i = ins_op(in) - FI_BASE;
     i64 f = fa_form_at(i);
     out_str(1, "  ");
