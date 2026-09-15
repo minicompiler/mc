@@ -1681,7 +1681,11 @@ else
     mkdir -p "$tmp/u/rel4" "$tmp/u/reg4/index"
     cp "$tmp/u/rel/mc-9.9.9-src.tar.gz" "$tmp/u/rel4/"
     cp "$asset" "$asset.sha256" "$tmp/u/rel4/"
-    printf 'x' | dd of="$tmp/u/rel4/mc-9.9.9-$utarget.tar.gz" bs=1 seek=500 conv=notrunc 2> /dev/null
+    # flip byte 500, never write a constant: a constant equal to the byte already
+    # there is a no-op, and a tarball whose byte 500 happened to be that constant
+    # made this case pass a pristine archive (measured on PR #94)
+    b=$(dd if="$tmp/u/rel4/mc-9.9.9-$utarget.tar.gz" bs=1 skip=500 count=1 2> /dev/null | od -An -tu1 | tr -d ' ')
+    printf "\\$(printf '%03o' $(( (b + 1) % 256 )))" | dd of="$tmp/u/rel4/mc-9.9.9-$utarget.tar.gz" bs=1 seek=500 conv=notrunc 2> /dev/null
     sed "s|$tmp/u/rel/|$tmp/u/rel4/|" "$tmp/u/reg/index/mc.toml" > "$tmp/u/reg4/index/mc.toml"
     upgrade_run "$mc" 9.9.9 --yes --no-install --registry "$tmp/u/reg4" --libs-dir "$tmp/u/l4" --to "$tmp/u/bin/mc-bad"
     if [ "$rc" = 2 ] && grep -q "^mc: checksum mismatch for mc 9.9.9$" "$tmp/o" \
