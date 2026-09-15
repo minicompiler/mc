@@ -7339,6 +7339,16 @@ agents (`.claude/agents/`): `stage0-dev` (C23), `mc-dev` (`.mc` code), `reviewer
   table), `docs/guide/96-a-new-primitive.md` § 3 (the recipe -- pick a free base, bound the band,
   with the predicate spelled out), `docs/reference/bundle.md` (`<float>`, `<f16>` and
   `<i128>`/`<u128>` coexist in either order, with the two entry points and the test named).
+- **1.0.0 cut** (2026-09-15): `v1.0.0` tagged from `main` a7966f1 (PR #95 `cmp_cond(op)` restored + arity
+  in `check-freeze`, PR #96 the final docs pass), run 34964916762 -- five builds, publish, and the
+  **required** canary: teko's verdict `1.0.0.json` status `ok` at 11:54Z (run 34965435282), the release
+  promoted, `publish-to-registry` green, 20 assets (ten tarballs + checksums). `MC_CANARY_REQUIRED=true`
+  was set before the tag, so from here a `fail` verdict or a 90-minute timeout leaves a release a
+  pre-release and the registry row is never written. 0.17.5 (the first green canary since 0.17.2; 0.17.3
+  and 0.17.4 stay pre-releases) went out the same morning. The contract from now on is
+  `tests/golden/surface.txt` (423 entries: 211 sym with arity, 50 flag, 36 toml, 10 dir, 101 bundle,
+  14 lock, machine v6) under `docs/reference/hooks.md` § 8 -- an entry removed or changed is a MAJOR.
+  The registry pin follows (`minicompiler/mc-registry` PR #34, six spellings, autoDeploy on merge).
 - Next (rewritten 2026-09-15, the final docs pass before 1.0.0): **M49, M50, M52 and M53's own
   steps A-C are all closed and shipped** — the register allocator/peephole/hoisting on all five
   hosts (1.30x `clang -O2` on the workload, AArch64), the reproducible bench cell on three GitHub
