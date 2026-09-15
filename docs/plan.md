@@ -424,6 +424,10 @@ numbers as of that date.
 
 ## What 1.0.0 promises, and what it does not
 
+`v1.0.0` was tagged on 2026-09-15 from the tree that closed PR #95 and PR #96, promoted by
+teko's required canary verdict (`1.0.0.json` status `ok`), and announced to the registry. The
+promises below are in force from that tag.
+
 M53 is not a milestone that ships a feature; it is the one that turns "the API happens to be
 stable" into a promise a script enforces. Full text: `docs/reference/hooks.md` § 8 (the policy
 as stated for a reader who already accepts it), `docs/specs/M53.md` (the decision record and the
