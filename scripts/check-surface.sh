@@ -2085,6 +2085,24 @@ rm -f "$dollar"
 cat > "$tmp/dollar.mc" <<'DOLEOF'
 i64 main() { return $"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"; }
 DOLEOF
+# ...and `$name`, in the SAME module and the SAME file as a #rule whose template
+# uses `$` holes: outside a template the `$` is the module's token and `name` is
+# the ordinary identifier after it, so the handler resolves it in a table of its
+# own (a -> 40, b -> 2); inside the template a hole is still a hole. 40 + 2 - 42
+# (the $"..." length) + 2 * 20 (the rule ran its statement twice) = 40.
+cat > "$tmp/dollar-name.mc" <<'DNEOF'
+#rule stmt: twice expr $n ;   => { $n; $n; }
+i64 k = 0;
+i64 bump(i64 v) { k = k + v; return v; }
+i64 main() {
+    twice bump(1);
+    i64 s = $"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    return $a + $b - s + k * 20;
+}
+DNEOF
+cat > "$tmp/dollar-only.mc" <<'DOEOF'
+i64 main() { return $a; }
+DOEOF
 if ! msg=$("$mc1" --exe lib/mc_dollar.mc -o "$dollar" 2>&1); then
     echo "FAIL: compiling lib/mc_dollar.mc: $msg"
     fails=$((fails + 1))
@@ -2117,6 +2135,93 @@ else
                 echo "ok the default compiler refuses \$\"...\" (invalid hole)" ;;
             *)
                 echo "FAIL: default compiler said '$msg' (want ...dollar.mc:1: invalid hole)"
+                fails=$((fails + 1)) ;;
+        esac
+    fi
+    # `$name` reaches the handler, and a #rule in the same file still gets holes
+    if ! msg=$("$dollar" --exe "$tmp/dollar-name.mc" -o "$tmp/dollar-name-tgt" 2>&1); then
+        echo "FAIL: the $ demo compiler rejected \$name plus a #rule: $msg"
+        fails=$((fails + 1))
+    else
+        "$tmp/dollar-name-tgt"; tgt=$?
+        if [ "$tgt" != 40 ]; then
+            echo "FAIL syntax_expr(\"$\") on \$name: taught=$tgt (want 40)"
+            fails=$((fails + 1))
+        else
+            echo "ok syntax_expr(\"$\"): \$name reaches the handler, \$holes still bind in a #rule"
+        fi
+    fi
+    # and the default compiler still reads $name as a hole -- the unchanged half.
+    # On its own: in dollar-name.mc the $"..." on the line above is `invalid
+    # hole` first, which says nothing about $name.
+    if msg=$("$mc1" "$tmp/dollar-only.mc" -o "$tmp/dollar-only-no.o" 2>&1); then
+        echo "FAIL: the default compiler accepted \$name"
+        fails=$((fails + 1))
+    else
+        case "$msg" in
+            *"hole \$name has no rule binding it")
+                echo "ok the default compiler still lexes \$name as a hole" ;;
+            *)
+                echo "FAIL: default compiler said '$msg' (want ...hole \$name has no rule binding it)"
+                fails=$((fails + 1)) ;;
+        esac
+    fi
+fi
+
+# ---- mc-php: p_skip_to, a module owning a REGION the core has no grammar for ----
+# The lexer decides `'` before any handler runs and tok_add("'", 1) does not beat
+# it. lib/user_rawlex.mc does not try: it claims `q`, reads the bytes after it
+# with p_cp()/p_src_end() -- which M45 already allowed -- and then says where it
+# stopped, which is the part that did not exist. The region may span lines, and
+# p_skip_to counts them: without that, everything after a four-line region would
+# be reported on the line the region started on (measured: line 3, not line 6).
+rawlex="build/mc-rawlex"
+rm -f "$rawlex"
+cat > "$tmp/rawlex.mc" <<'RLEOF'
+#include <sys>
+#include <io>
+i64 main() {
+    uptr s = q'a php single-quoted string';
+    puts(s); puts("\n");
+    return strlen(s);
+}
+RLEOF
+printf 'i64 main() {\n    uptr s = q%s\nline two\nline three\nline four%s;\n    return nosuchfn(s);\n}\n' "'one" "'" > "$tmp/rawlines.mc"
+if ! msg=$("$mc1" --exe lib/mc_rawlex.mc -o "$rawlex" 2>&1); then
+    echo "FAIL: compiling lib/mc_rawlex.mc: $msg"
+    fails=$((fails + 1))
+else
+    if ! msg=$("$rawlex" --exe "$tmp/rawlex.mc" -o "$tmp/rawlex-tgt" 2>&1); then
+        echo "FAIL: the q demo compiler rejected q'...': $msg"
+        fails=$((fails + 1))
+    else
+        out=$("$tmp/rawlex-tgt"); tgt=$?
+        if [ "$tgt" != 26 ] || [ "$out" != "a php single-quoted string" ]; then
+            echo "FAIL p_skip_to: taught=$tgt out='$out' (want 26 / a php single-quoted string)"
+            fails=$((fails + 1))
+        else
+            echo "ok p_skip_to: a handler owns a region the core cannot lex (26 bytes, verbatim)"
+        fi
+    fi
+    # the line AFTER a four-line region is reported as its own line
+    msg=$("$rawlex" "$tmp/rawlines.mc" -o "$tmp/rawlines.o" 2>&1) && msg="(compiled)"
+    case "$msg" in
+        *"/rawlines.mc:6: call to unknown function")
+            echo "ok p_skip_to: newlines in the skipped region are counted (error at :6)" ;;
+        *)
+            echo "FAIL: after a 4-line region the compiler said '$msg' (want ...rawlines.mc:6: ...)"
+            fails=$((fails + 1)) ;;
+    esac
+    # the default compiler has no `q`, so the same source is the char literal
+    if msg=$("$mc1" "$tmp/rawlex.mc" -o "$tmp/rawlex-no.o" 2>&1); then
+        echo "FAIL: the default compiler accepted q'...'"
+        fails=$((fails + 1))
+    else
+        case "$msg" in
+            *"unterminated char literal")
+                echo "ok the default compiler refuses q'...' (unterminated char literal)" ;;
+            *)
+                echo "FAIL: default compiler said '$msg' (want ...unterminated char literal)"
                 fails=$((fails + 1)) ;;
         esac
     fi
