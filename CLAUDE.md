@@ -7353,7 +7353,7 @@ agents (`.claude/agents/`): `stage0-dev` (C23), `mc-dev` (`.mc` code), `reviewer
   steps A-C are all closed and shipped** — the register allocator/peephole/hoisting on all five
   hosts (1.30x `clang -O2` on the workload, AArch64), the reproducible bench cell on three GitHub
   Actions cells, the installable-library cut, and the surface freeze + canary
-  (`tests/golden/surface.txt`, 421 entries; `docs/reference/hooks.md` § 8;
+  (`tests/golden/surface.txt`, 423 entries; `docs/reference/hooks.md` § 8;
   `.github/workflows/release.yml`'s `promote` job). **M42 step 2** (PE `--exe` for
   windows/x86_64, no `lld-link`) landed long before all of the above, is CI-gated on the Windows
   runners as required, and this entry corrects an earlier version of this line that still listed
