@@ -90,15 +90,21 @@ they always have.
 
 ## `surface.txt` — the public surface (M53 step A)
 
-`surface.txt` is not a hash: it is the **inventory** — 420 lines, `<kind><TAB><name>`, bytewise
-sorted, seven kinds (`sym` 209, `flag` 50, `toml` 35, `dir` 10, `bundle` 101, `lock` 14,
-`machine` 1). Every line is extracted from the tree by `scripts/surface-extract.sh`, which is also
-what `scripts/check-docs.sh` asks its four coverage questions of, so the two gates cannot disagree
-about what is public. `make check-freeze` compares the two and fails on **any** difference: a
-REMOVED entry because a removal is a MAJOR, an ADDED one because every surface change should cost
-one committed line in the same pull request — the diff is the announcement. The `machine` line
-carries the contract's version and may only go up, and only in a commit that adds a
-`Version N → M` paragraph to `docs/reference/machine.md`.
+`surface.txt` is not a hash: it is the **inventory** — 423 lines, `<kind><TAB><name>`, bytewise
+sorted, seven kinds (`sym` 211, `flag` 50, `toml` 36, `dir` 10, `bundle` 101, `lock` 14,
+`machine` 1). A `sym` line carries a third field, its **arity**: `sym<TAB>cmp_cond<TAB>1`, the
+number of parameters the definition in `src/` declares. Every line is extracted from the tree by
+`scripts/surface-extract.sh`, which is also what `scripts/check-docs.sh` asks its four coverage
+questions of (it reads the name column alone), so the two gates cannot disagree about what is
+public. `make check-freeze` compares the two and fails on **any** difference: a REMOVED entry
+because a removal is a MAJOR, an ADDED one because every surface change should cost one committed
+line in the same pull request — the diff is the announcement — and a MOVED ARITY
+(`changed: sym <name> <old>-><new>`) because a public function's parameter list is frozen with its
+name, PR #92 having shipped exactly that break. That last one is the finding a re-record must not
+paper over: a new signature gets a NEW NAME and the old one stays as a one-line wrapper
+(`docs/reference/hooks.md` § 8). The `machine` line carries the contract's version and may only go
+up, and only in a commit that adds a `Version N → M` paragraph to
+`docs/reference/machine.md`.
 
 Unlike every file above, it is re-recorded by a **named command** and not by deleting it:
 
@@ -107,8 +113,9 @@ Unlike every file above, it is re-recorded by a **named command** and not by del
 Re-record it in the same pull request as the change that moved it, never to make the gate pass.
 The policy — what a PATCH, a MINOR and a MAJOR may move, and the deprecation lane — is
 [`../../docs/specs/M53.md`](../../docs/specs/M53.md) § 5 (it becomes `docs/reference/hooks.md`
-§ 8 in step B). An entry may carry a third column, `deprecated <version> -> <replacement>`, which
-is the only expressible removal; nothing is deprecated today.
+§ 8 in step B). An entry may carry a `deprecated <version> -> <replacement>` field — after the
+arity on a `sym` line, after the name on any other; it is found by its text and not by its column —
+which is the only expressible removal; nothing is deprecated today.
 
 ## `seed-cmp.txt` — the one known seed divergence (PR #92, 2026-09-15)
 

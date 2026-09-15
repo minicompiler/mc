@@ -1,9 +1,14 @@
 #!/bin/sh
 # surface-extract.sh [KIND] — M53 step A: THE definition of mc's public surface.
 #
-# Prints `<kind><TAB><name>`, bytewise-sorted, for all seven kinds; with a KIND
+# Prints `<kind><TAB><name>`, bytewise-sorted, for all seven kinds -- and for
+# the `sym` kind `<kind><TAB><name><TAB><arity>`, the number of parameters the
+# definition declares, because a public function's PARAMETER LIST is frozen too
+# (docs/reference/hooks.md § 8): PR #92 gave the existing `cmp_cond` a second
+# parameter and the inventory, which knew only names, said nothing. With a KIND
 # argument (sym flag toml dir bundle lock machine) it prints that kind's names
-# alone, one per line, which is what scripts/check-docs.sh consumes.
+# alone, one per line -- no arity column -- which is what
+# scripts/check-docs.sh consumes.
 #
 # There is exactly one regex per kind and it lives here: check-docs.sh asks
 # "is each one documented?" and check-freeze.sh asks "was each one here last
@@ -15,7 +20,12 @@
 #            exact names no prefix reaches. val_reg/dst_reg/dst_done are three
 #            of those: docs/reference/machine.md § 3 publishes them BY NAME as
 #            the only three names of a machine's internals that are frozen, and
-#            they matched nothing before M53 (§ 1.2a, D2).
+#            they matched nothing before M53 (§ 1.2a, D2). cmp_cond and
+#            cmp_cond_of are two more: gen_walk.mc's answer to "is this token a
+#            comparison", which a taught pass reads (the teko consumer does) and
+#            which no prefix reaches either.
+#            The arity is counted from the definition's own parameter list:
+#            0 for `()`, otherwise commas + 1.
 #   flag     the literals inside a str_eq(x, "--flag") / opt_val(x, "--flag="),
 #            plus -o.
 #   toml     the toml_*("literal") lookups, plus the two table prefixes the
@@ -35,8 +45,10 @@ LC_ALL=C
 export LC_ALL
 
 sym() {
-    grep -hoE '^(void|i64|uptr|u8|u16|u32|u64) +((p_|syntax|type_|pass|backend|machine|sec_|sym_|reloc_add|gen_|on_|decl_|host_|intrinsic|walk_|subcommand|c_)[A-Za-z_0-9]*|parse_unary|parse_top|do_directive|lex_include|source_claim|val_reg|dst_reg|dst_done)\(' src/*.mc \
-        | sed -E 's/^[a-z0-9]+ +//; s/\($//'
+    grep -hoE '^(void|i64|uptr|u8|u16|u32|u64) +((p_|syntax|type_|pass|backend|machine|sec_|sym_|reloc_add|gen_|on_|decl_|host_|intrinsic|walk_|subcommand|c_)[A-Za-z_0-9]*|parse_unary|parse_top|do_directive|lex_include|source_claim|val_reg|dst_reg|dst_done|cmp_cond_of|cmp_cond)\([^)]*\)' src/*.mc \
+        | sed -E 's/^[a-z0-9]+ +//' \
+        | awk -F'[()]' '{ n = $1; p = $2; gsub(/ /, "", p);
+                          print n "\t" (p == "" ? 0 : gsub(/,/, ",", p) + 1) }'
 }
 
 flag() {
@@ -71,7 +83,8 @@ machine() {
 }
 
 case "$1" in
-    sym|flag|toml|dir|bundle|lock|machine) "$1" | sort -u ;;
+    sym) sym | cut -f1 | sort -u ;;
+    flag|toml|dir|bundle|lock|machine) "$1" | sort -u ;;
     "")
         for k in sym flag toml dir bundle lock machine; do
             "$k" | sed "s/^/$k	/"

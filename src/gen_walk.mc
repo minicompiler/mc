@@ -660,7 +660,7 @@ i64 str_sym(uptr bytes, i64 len) {
 // it is spelled in instructions is the machine's.
 i64 cmp_toks[]  = { K_EQ, K_NE, K_LT, K_LE, K_GT, K_GE };
 // ONE table of twelve, not two of six: the signed half first, then the unsigned
-// one, so cmp_cond indexes it with `i + uns * 6` and the seed's MAXGLOBALS pays
+// one, so cmp_cond_of indexes it with `i + uns * 6` and the seed's MAXGLOBALS pays
 // for nothing (scripts/check-limits.sh).
 i64 cmp_conds[] = { MCOND_EQ, MCOND_NE, MCOND_LT,  MCOND_LE,  MCOND_GT,  MCOND_GE,
                     MCOND_EQ, MCOND_NE, MCOND_ULT, MCOND_ULE, MCOND_UGT, MCOND_UGE };
@@ -678,9 +678,15 @@ i64 bin_uops_at(i64 i)  { return ld64(bin_uops + i * 8); }
 i64 bin_sops_at(i64 i)  { return ld64(bin_sops + i * 8); }
 
 // uns picks the half: the signed six, or the same six with the four orderings
-// replaced by their unsigned twins. -1 means "this token is not a comparison",
-// which is the question src/gen_resolve.mc asks with uns = 0.
-i64 cmp_cond(i64 op, i64 uns) {
+// replaced by their unsigned twins. -1 means "this token is not a comparison".
+//
+// The two-argument form is cmp_cond_of and the one-argument cmp_cond is the
+// signed half of it -- and that order is not cosmetic. `cmp_cond(op)` is a
+// public name a module outside src/ calls (docs/reference/hooks.md § 8): PR #92
+// gave the existing name the second parameter and broke every caller with
+// `wrong number of arguments`. A parameter list is frozen; the new behaviour
+// gets a new name, and the old name stays as the one-liner below.
+i64 cmp_cond_of(i64 op, i64 uns) {
     i64 i = 0;
     loop {
         if (i >= 6) break;
@@ -689,6 +695,10 @@ i64 cmp_cond(i64 op, i64 uns) {
     }
     return -1;
 }
+
+// "is this token a comparison, and which signed condition is it?" -- the
+// question src/gen_resolve.mc asks, and the one a module asks.
+i64 cmp_cond(i64 op) { return cmp_cond_of(op, 0); }
 
 // Which of the two a comparison takes. The rule, and it is deliberately
 // NARROWER than C's:
@@ -1134,7 +1144,7 @@ void gen_binary(i64 n, i64 depth) {
     if (op == K_ANDAND || op == K_OROR) { gen_logic(n, depth); return; }
     gen_value(nd_a(n), depth);
     gen_value(nd_b(n), depth + 1);
-    i64 cond = cmp_cond(op, cmp_unsigned(res_type(nd_a(n)), res_type(nd_b(n))));
+    i64 cond = cmp_cond_of(op, cmp_unsigned(res_type(nd_a(n)), res_type(nd_b(n))));
     if (cond >= 0) { callp(mach(MTASK_CMP), cond, depth, depth + 1); return; }
     i64 mop = bin_op(op, type_signed(res_type(nd_a(n))));
     if (mop < 0) err_node(n, "binary operator with no codegen");

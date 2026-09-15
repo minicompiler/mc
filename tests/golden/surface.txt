@@ -1,5 +1,6 @@
 # mc public surface -- recorded by scripts/check-freeze.sh --record.
-# One line per entry: <kind> <TAB> <name> [<TAB> deprecated <version> -> <replacement>]
+# One line per entry: <kind> <TAB> <name> [<TAB> <arity>] [<TAB> deprecated <version> -> <replacement>]
+# The arity column is a sym's parameter count and is frozen with its name.
 # Read docs/specs/M53.md § 5 (the policy; docs/reference/hooks.md § 8 from step B) before editing this file by hand. Do not.
 bundle	backend_arm64
 bundle	embed_demo
@@ -177,215 +178,217 @@ lock	url
 lock	version
 lock	yanked
 machine	6
-sym	backend
-sym	backend_coff
-sym	backend_coff_x86
-sym	backend_default
-sym	backend_default_name
-sym	backend_die
-sym	backend_elf
-sym	backend_elf_exe
-sym	backend_elf_exe_x86
-sym	backend_elf_x86
-sym	backend_exe
-sym	backend_find
-sym	backend_fn_at
-sym	backend_is_exe
-sym	backend_macho
-sym	backend_name_at
-sym	backend_pe_exe
-sym	backend_pe_exe_x86
-sym	c_int
-sym	decl_find
-sym	decl_name
-sym	decl_nparams
-sym	decl_param_type
-sym	decl_ret
-sym	decl_valid
-sym	do_directive
-sym	dst_done
-sym	dst_reg
-sym	gen_addr
-sym	gen_assign
-sym	gen_binary
-sym	gen_call
-sym	gen_callp
-sym	gen_cast
-sym	gen_dump_asm
-sym	gen_emit
-sym	gen_encode_all
-sym	gen_encode_one
-sym	gen_expr
-sym	gen_func
-sym	gen_func_count
-sym	gen_func_labels
-sym	gen_func_name
-sym	gen_func_sec
-sym	gen_func_sym
-sym	gen_gaddr
-sym	gen_global_count
-sym	gen_global_sym
-sym	gen_globals
-sym	gen_ident
-sym	gen_if
-sym	gen_imm
-sym	gen_ins_at
-sym	gen_ins_count
-sym	gen_intrin
-sym	gen_logic
-sym	gen_loop
-sym	gen_lower
-sym	gen_opcode
-sym	gen_prel_count
-sym	gen_prel_ins
-sym	gen_prel_sym
-sym	gen_prel_type
-sym	gen_reloc
-sym	gen_resolve
-sym	gen_sections
-sym	gen_stmt
-sym	gen_str
-sym	gen_str_count
-sym	gen_str_sym
-sym	gen_unary
-sym	gen_value
-sym	gen_var
-sym	gen_word
-sym	host_arch
-sym	host_audit_arch
-sym	host_bundle_open
-sym	host_downloader
-sym	host_downloader_alt
-sym	host_environ
-sym	host_exe_suffix
-sym	host_getcwd
-sym	host_has_sdk
-sym	host_home
-sym	host_include
-sym	host_init
-sym	host_machine
-sym	host_os
-sym	host_sandbox_supported
-sym	host_self_path
-sym	host_sys
-sym	host_syscall6
-sym	host_sysno
-sym	host_which
-sym	intrinsic
-sym	intrinsic_disable
-sym	intrinsic_find
-sym	intrinsic_fn_at
-sym	intrinsic_name_at
-sym	intrinsic_nargs_at
-sym	intrinsic_type_at
-sym	lex_include
-sym	machine
-sym	machine_arm64_init
-sym	machine_find
-sym	machine_freeze
-sym	machine_slot
-sym	machine_tab
-sym	machine_task
-sym	machine_use
-sym	machine_use_if
-sym	machine_x86_64_init
-sym	on_jump
-sym	on_plan
-sym	on_source
-sym	on_stmt
-sym	p_accept
-sym	p_blockdepth
-sym	p_cat
-sym	p_cp
-sym	p_decl_name
-sym	p_depth
-sym	p_expect
-sym	p_file
-sym	p_id
-sym	p_ident
-sym	p_line
-sym	p_name
-sym	p_next
-sym	p_push_source
-sym	p_resplit_punct
-sym	p_set_decl_name
-sym	p_skip_balanced
-sym	p_src_end
-sym	p_start
-sym	p_subst_int
-sym	p_subst_name
-sym	p_subst_reset
-sym	p_take_lit
-sym	p_type
-sym	p_val
-sym	parse_top
-sym	parse_unary
-sym	pass
-sym	pass_fn_at
-sym	reloc_add
-sym	sec_align
-sym	sec_at
-sym	sec_data
-sym	sec_ent
-sym	sec_find
-sym	sec_flags
-sym	sec_make
-sym	sec_new
-sym	sec_nrel
-sym	sec_pending
-sym	sec_rel
-sym	sec_relcap
-sym	sec_sect
-sym	sec_seg
-sym	sec_zsize
-sym	source_claim
-sym	subcommand
-sym	subcommand_find
-sym	subcommand_usage
-sym	sym_at
-sym	sym_class
-sym	sym_find
-sym	sym_global
-sym	sym_name
-sym	sym_new
-sym	sym_order
-sym	sym_ref
-sym	sym_sect
-sym	sym_set_value
-sym	sym_value
-sym	syntax
-sym	syntax_expr
-sym	syntax_expr_find
-sym	syntax_expr_fn_at
-sym	syntax_find
-sym	syntax_fn_at
-sym	syntax_infix
-sym	syntax_lit
-sym	syntax_param
-sym	syntax_stmt
-sym	syntax_stmt_find
-sym	syntax_stmt_fn_at
-sym	syntax_type
-sym	type_alias
-sym	type_align
-sym	type_count
-sym	type_disable
-sym	type_disabled
-sym	type_kind
-sym	type_name
-sym	type_new
-sym	type_of_token
-sym	type_set_width
-sym	type_signed
-sym	type_width
-sym	val_reg
-sym	walk_align
-sym	walk_depth_type
-sym	walk_narrow
-sym	walk_opt
-sym	walk_reg_count
-sym	walk_ret_type
-sym	walk_word
+sym	backend	2
+sym	backend_coff	2
+sym	backend_coff_x86	2
+sym	backend_default	1
+sym	backend_default_name	0
+sym	backend_die	1
+sym	backend_elf	2
+sym	backend_elf_exe	2
+sym	backend_elf_exe_x86	2
+sym	backend_elf_x86	2
+sym	backend_exe	2
+sym	backend_find	1
+sym	backend_fn_at	1
+sym	backend_is_exe	1
+sym	backend_macho	2
+sym	backend_name_at	1
+sym	backend_pe_exe	2
+sym	backend_pe_exe_x86	2
+sym	c_int	1
+sym	cmp_cond	1
+sym	cmp_cond_of	2
+sym	decl_find	1
+sym	decl_name	1
+sym	decl_nparams	1
+sym	decl_param_type	2
+sym	decl_ret	1
+sym	decl_valid	1
+sym	do_directive	0
+sym	dst_done	2
+sym	dst_reg	1
+sym	gen_addr	2
+sym	gen_assign	1
+sym	gen_binary	2
+sym	gen_call	2
+sym	gen_callp	2
+sym	gen_cast	2
+sym	gen_dump_asm	0
+sym	gen_emit	1
+sym	gen_encode_all	0
+sym	gen_encode_one	1
+sym	gen_expr	2
+sym	gen_func	2
+sym	gen_func_count	0
+sym	gen_func_labels	1
+sym	gen_func_name	1
+sym	gen_func_sec	1
+sym	gen_func_sym	1
+sym	gen_gaddr	2
+sym	gen_global_count	0
+sym	gen_global_sym	1
+sym	gen_globals	1
+sym	gen_ident	2
+sym	gen_if	2
+sym	gen_imm	2
+sym	gen_ins_at	2
+sym	gen_ins_count	1
+sym	gen_intrin	3
+sym	gen_logic	2
+sym	gen_loop	2
+sym	gen_lower	1
+sym	gen_opcode	2
+sym	gen_prel_count	1
+sym	gen_prel_ins	2
+sym	gen_prel_sym	2
+sym	gen_prel_type	2
+sym	gen_reloc	1
+sym	gen_resolve	1
+sym	gen_sections	1
+sym	gen_stmt	2
+sym	gen_str	2
+sym	gen_str_count	0
+sym	gen_str_sym	1
+sym	gen_unary	2
+sym	gen_value	2
+sym	gen_var	1
+sym	gen_word	2
+sym	host_arch	0
+sym	host_audit_arch	0
+sym	host_bundle_open	4
+sym	host_downloader	0
+sym	host_downloader_alt	0
+sym	host_environ	0
+sym	host_exe_suffix	0
+sym	host_getcwd	0
+sym	host_has_sdk	0
+sym	host_home	0
+sym	host_include	0
+sym	host_init	1
+sym	host_machine	0
+sym	host_os	0
+sym	host_sandbox_supported	0
+sym	host_self_path	0
+sym	host_sys	0
+sym	host_syscall6	7
+sym	host_sysno	1
+sym	host_which	1
+sym	intrinsic	4
+sym	intrinsic_disable	1
+sym	intrinsic_find	1
+sym	intrinsic_fn_at	1
+sym	intrinsic_name_at	1
+sym	intrinsic_nargs_at	1
+sym	intrinsic_type_at	1
+sym	lex_include	2
+sym	machine	2
+sym	machine_arm64_init	0
+sym	machine_find	1
+sym	machine_freeze	0
+sym	machine_slot	3
+sym	machine_tab	1
+sym	machine_task	2
+sym	machine_use	1
+sym	machine_use_if	1
+sym	machine_x86_64_init	0
+sym	on_jump	1
+sym	on_plan	1
+sym	on_source	1
+sym	on_stmt	1
+sym	p_accept	1
+sym	p_blockdepth	0
+sym	p_cat	4
+sym	p_cp	0
+sym	p_decl_name	0
+sym	p_depth	0
+sym	p_expect	2
+sym	p_file	0
+sym	p_id	0
+sym	p_ident	0
+sym	p_line	0
+sym	p_name	0
+sym	p_next	0
+sym	p_push_source	3
+sym	p_resplit_punct	1
+sym	p_set_decl_name	1
+sym	p_skip_balanced	3
+sym	p_src_end	0
+sym	p_start	0
+sym	p_subst_int	2
+sym	p_subst_name	2
+sym	p_subst_reset	0
+sym	p_take_lit	1
+sym	p_type	0
+sym	p_val	0
+sym	parse_top	0
+sym	parse_unary	0
+sym	pass	1
+sym	pass_fn_at	1
+sym	reloc_add	6
+sym	sec_align	1
+sym	sec_at	1
+sym	sec_data	1
+sym	sec_ent	4
+sym	sec_find	2
+sym	sec_flags	1
+sym	sec_make	1
+sym	sec_new	4
+sym	sec_nrel	1
+sym	sec_pending	0
+sym	sec_rel	1
+sym	sec_relcap	1
+sym	sec_sect	1
+sym	sec_seg	1
+sym	sec_zsize	1
+sym	source_claim	1
+sym	subcommand	3
+sym	subcommand_find	1
+sym	subcommand_usage	0
+sym	sym_at	1
+sym	sym_class	1
+sym	sym_find	1
+sym	sym_global	1
+sym	sym_name	1
+sym	sym_new	4
+sym	sym_order	3
+sym	sym_ref	1
+sym	sym_sect	1
+sym	sym_set_value	2
+sym	sym_value	1
+sym	syntax	2
+sym	syntax_expr	2
+sym	syntax_expr_find	1
+sym	syntax_expr_fn_at	1
+sym	syntax_find	1
+sym	syntax_fn_at	1
+sym	syntax_infix	3
+sym	syntax_lit	1
+sym	syntax_param	1
+sym	syntax_stmt	2
+sym	syntax_stmt_find	1
+sym	syntax_stmt_fn_at	1
+sym	syntax_type	1
+sym	type_alias	2
+sym	type_align	1
+sym	type_count	0
+sym	type_disable	1
+sym	type_disabled	1
+sym	type_kind	1
+sym	type_name	1
+sym	type_new	4
+sym	type_of_token	1
+sym	type_set_width	2
+sym	type_signed	1
+sym	type_width	1
+sym	val_reg	2
+sym	walk_align	0
+sym	walk_depth_type	1
+sym	walk_narrow	1
+sym	walk_opt	0
+sym	walk_reg_count	0
+sym	walk_ret_type	0
+sym	walk_word	0
 toml	compiler.core
 toml	compiler.modules
 toml	compiler.out
