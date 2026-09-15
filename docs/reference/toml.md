@@ -379,6 +379,7 @@ rule — is in [packages.md](packages.md).
 | key | type | meaning |
 |---|---|---|
 | `package.name` | string | the package's registry name |
+| `package.version` | string | optional: which version this tree is. Read only out of a VENDORED tree, `deps/<name>/`, to refuse a checkout at another version by name instead of by hash |
 | `package.mc` | string | optional: a version constraint on the mc that builds it, normally a minimum |
 | `package.files` | array of strings | every file the package ships, in the order that fixes the hash |
 | `package.lib` | string | optional: the file a bare `#include <name>` means |
@@ -394,6 +395,14 @@ outside of; see [packages.md](packages.md) § 3.
 
 `bin` is the one name in this file that may carry a hyphen (`[a-z][a-z0-9_-]*`, at most 32 bytes):
 it is a FILE name, not an identifier. `mc build` ignores it.
+
+`version` resolves nothing: the registry index picks a version and `mc.lock` pins it, and a fetched
+tree carries its version in the manifest beside it. Its one use is the tree a developer maintains
+by hand, `deps/<name>/` — a checkout at another version is then
+`mc: deps/<name> is 1.0.0, [deps] wants 1.2.0: update the checkout or remove deps/<name>` instead
+of a checksum mismatch on bytes that are not corrupt. A value that is not a version
+(`[0-9A-Za-z.+_-]`, no `..`) is a `file:line:col` error, exit 2. See
+[packages.md](packages.md) § 2.
 
 `mc` is a MINIMUM mc version, checked when the compiler builds or resolves a package — the entry's
 own `mc.toml` and each dependency's, whether it comes from `[deps]`, `[replace]` or a vendored

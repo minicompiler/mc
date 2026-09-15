@@ -862,12 +862,20 @@ uptr pkg_replace_path(uptr name) {
     return toml_get(tm_cat("replace.", name));
 }
 
+// `deps/<pack>/` holds this package at THIS version -- or holds nothing, or is
+// refused (src/deps.mc, dep_vendored_at). The requirement this road resolved
+// came from the project's own [deps], which is what the refusal names.
+i64 pkg_vendored(uptr name, uptr ver) {
+    return dep_vendored_at(name, pkg_vendor_dir(name), ver, "[deps]");
+}
+
 // 1 when the tree is on this disk already: vendored, replaced, or installed
 // WITH ITS MANIFEST -- a half-extracted directory has no manifest and is not a
-// tree (§ 4).
+// tree (§ 4). A checked-in tree that says it is ANOTHER version is refused by
+// dep_vendored_at rather than counted as this one and hashed against its sha.
 i64 pkg_present(uptr name, uptr ver) {
     if (pkg_replace_path(name) != 0) return 1;
-    if (lex_readable(tm_cat(pkg_vendor_dir(name), "mc.toml"))) return 1;
+    if (pkg_vendored(name, ver)) return 1;
     return lex_readable(pkg_libs_manifest(name, ver));
 }
 
@@ -876,8 +884,7 @@ i64 pkg_present(uptr name, uptr ver) {
 uptr pkg_tree_dir(uptr name, uptr ver) {
     uptr rep = pkg_replace_path(name);
     if (rep != 0) return tm_cat(path_norm(drv_path(rep)), "/");
-    uptr v = pkg_vendor_dir(name);
-    if (lex_readable(tm_cat(v, "mc.toml"))) return v;
+    if (pkg_vendored(name, ver)) return pkg_vendor_dir(name);
     return pkg_libs_dir(name, ver);
 }
 

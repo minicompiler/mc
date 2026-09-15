@@ -152,6 +152,21 @@ it is the other.
 2. `<libs>/<pack>/v<version>/`, and only that version. A `v1.0.0/` sitting beside a locked
    `v1.2.0/` is never opened, so it cannot change a byte.
 
+**The version comes before the hash.** A vendored tree may declare which version it is
+(`[package].version`, § 3); when it does and that is not the version the resolution chose, the
+tree is not this package and it is refused as such — before it is hashed against the target
+version's `sha256`, which would report `checksum mismatch` on a checkout that is not corrupt at
+all, only a different version:
+
+```
+mc: deps/geo is 1.0.0, [deps] wants 1.2.0: update the checkout or remove deps/geo
+```
+
+`[deps]` is what the requirement was read from on the `mc pkg sync` road; on `mc build`,
+`mc pkg verify` and `mc pkg list` it is `mc.lock`. A tree that declares no version — every package
+published before the key existed — is used as it always was, and a mismatch there can still only be
+reported as a hash.
+
 `<libs>` is `--libs-dir DIR` when given, else `$HOME/.mc/libs`. CI passes the flag so that no job
 depends on `HOME`, exactly as `--sysroot-dir` does for [sysroots](sysroot.md).
 
@@ -161,14 +176,22 @@ A package is a source tree with an `mc.toml` at its root carrying a `[package]` 
 
 ```toml
 [package]
-name   = "geo"
-files  = ["geo.mc", "vec.mc"]
-lib    = "geo.mc"        # optional: what a bare `#include <geo>` means
-module = "mc_geo.mc"     # optional: the file a COMPILER includes
+name    = "geo"
+version = "1.2.0"         # optional: which version this tree is
+files   = ["geo.mc", "vec.mc"]
+lib     = "geo.mc"        # optional: what a bare `#include <geo>` means
+module  = "mc_geo.mc"     # optional: the file a COMPILER includes
 
 [deps]
 mathx = "1.0.0"
 ```
+
+`version` is **not** how a version is resolved — the registry index is (§ 10), and a fetched or
+installed tree carries its version in the manifest beside it. It is read in exactly one place: a
+**vendored** tree, `deps/<pack>/`, which has no manifest and which the developer maintains by hand.
+It is what lets a checkout at the wrong version be named as one instead of hashed (§ 2). A package
+that never expects to be checked out by hand can leave it out; a package whose tree is a git
+checkout in somebody's `deps/` should carry it and move it with the tag.
 
 `files` is not documentation. It is the hash's input, the vendor-copy list, and the boundary
 § 5 enforces. It is written by hand because `mc` has no directory listing — the same reason
@@ -504,6 +527,8 @@ the source, which are exit 1. See [diagnostics.md](diagnostics.md) § 13.
 | a file's bytes differ from the manifest's line | `mc: geo 1.2.0: vec.mc does not match mc.lock` | 2 |
 | the tree hash differs but no file line does (the `files` list changed) | `mc: geo 1.2.0: mc.toml does not match mc.lock` | 2 |
 | the same, with no manifest to attribute it to (a vendored tree) | `mc: geo 1.2.0: the tree does not match mc.lock` | 2 |
+| a vendored tree that declares another version (§ 2) | `mc: deps/geo is 1.0.0, mc.lock wants 1.2.0: update the checkout or remove deps/geo` | 2 |
+| a `[package].version` that is not a version | `deps/geo/mc.toml:3:11: not a usable version` | 2 |
 | `[deps]` names a package the lock lacks, or a constraint the lock does not satisfy | `mc: mc.lock is stale: geo` | 2 |
 | a `[deps]`/`[tools]` version constraint that no version can satisfy | `mc: mathx: no version satisfies: >= 1.1.0 < 1.1.0` | 2 |
 | two `=` pins on one package disagree | `mc: mathx: two exact pins: =1.0.0 and =1.1.0` | 2 |
@@ -846,6 +871,13 @@ which is the same list the hash is over, checked entry by entry against § 3 bef
 written — and then verifies. `deps/` plus `mc.lock` in git is the
 fully offline project: a build with an empty `<libs>` produces a byte-identical object, and
 `make check-pkg` asserts exactly that.
+
+A vendored tree is also what a developer gets by checking a dependency's repository out by hand,
+and then it is on that developer to move it when `[deps]` moves. `mc pkg sync` asks the tree which
+version it is **before** it hashes it (§ 2), so a checkout left behind is
+`deps/<pack> is <B>, [deps] wants <A>` and not a checksum; nothing is downloaded, and no lock is
+written. Updating the checkout is enough — a `deps/<pack>/` at the resolved version still wins over
+the installation and is still never fetched.
 
 ### `mc pkg check` — the registry gate
 
