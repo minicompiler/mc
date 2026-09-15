@@ -1,18 +1,20 @@
 # `mc` documentation
 
 A compiler small enough to read, written in itself. `mc` compiles a schoolbook-C language — seven
-types, one opaque pointer, `if` and `loop` — into AArch64 Mach-O and ELF, writes and signs the
-executable itself, and reaches a fixed point where one generation is byte-identical to the next.
-Everything the core leaves out — `while`, `for`, classes, a second backend, a whole object
-format — you teach it from ordinary `mc` source.
+types, one opaque pointer, `if` and `loop` — into Mach-O, ELF and PE, for macOS, Linux and
+Windows on arm64 and x86-64, writes and signs (or directly writes) the executable itself, and
+reaches a fixed point where one generation is byte-identical to the next. Everything the core
+leaves out — `while`, `for`, classes, a second backend, a whole object format — you teach it from
+ordinary `mc` source.
 
 **New here? Start at [guide/00-getting-started.md](guide/00-getting-started.md).** It goes from
 nothing to a running signed binary in about two minutes.
 
 **Curious how it compares?** [comparison.md](comparison.md) measures `mc` against C, Go, Zig,
-Rust and C# on the same workload: a 4.1 ms compile, a 33 KB executable and a 1.2 MB toolchain,
-against a run time still at `clang -O0` level — with the honest caveats and the sources in
-[`../bench/`](../bench/README.md).
+Rust and C# on the same workload: a 4.1 ms compile, a 33 KB executable and a 1.2 MB toolchain.
+The default road folds constants and nothing else, at `clang -O0` level; `-O` (M49) closes most
+of the gap — **1.30x `clang -O2`** on the same workload, measured and committed in a reproducible
+bench cell (M50), not estimated. The sources are in [`../bench/`](../bench/README.md).
 
 ---
 
@@ -69,13 +71,13 @@ not a decision behind it, and lives here because it is exhaustive rather than ta
 | [plan.md](plan.md) | the language, the teaching surface, the architecture, the budget, the milestones |
 | [core-language.md](core-language.md) | the core language as specified milestone by milestone |
 | [surface.md](surface.md) | the teaching surface, tier by tier, with the acceptance criteria |
-| [build.md](build.md) | `mc build`, the bundle, `#embed`, Linux targets, limits |
+| [build.md](build.md) | `mc build`, the bundle, `#embed`, Linux and Windows targets, limits |
 | [bootstrap.md](bootstrap.md) | cutting `clang`, then `ld`, then the checkout |
 | [determinism.md](determinism.md) | the rules that make the output reproducible |
 | [macho-notes.md](macho-notes.md) | every Mach-O field, with its verified value |
 | [comparison.md](comparison.md) | `mc` measured against C, Go, Zig, Rust and C#: compile time, binary size, run time, and the feature matrix |
 | [ci.md](ci.md) | the GitHub Actions workflows and the release process |
-| [specs/](specs/) | one spec per milestone, `M1.md` … `M30.md` |
+| [specs/](specs/) | one spec per milestone, `M1.md` … `M53.md` |
 
 There is deliberate overlap between the design documents and this tree — `surface.md` and
 `guide/30`+`guide/40`, `build.md` and `guide/20`+`guide/50`, `core-language.md` and
@@ -84,6 +86,18 @@ against the compiler as it stands today and are checked mechanically; the design
 the reasoning and the milestone history.
 
 ---
+
+## 1.0.0
+
+The road to 1.0.0 — [plan.md](plan.md) § "What 1.0.0 promises, and what it does not" — is what
+turns the API's current stability into a written promise: a recorded public surface (421 names
+and formats across seven kinds, [reference/hooks.md](reference/hooks.md) § 8) that does not lose
+an entry without a MAJOR, ten committed fixed points on five hosts, and a release canary — a real
+out-of-tree consumer's own build gating every publish before the registry hears about it
+([ci.md](ci.md) § The canary). It does **not** promise a `src/` internal, a message's wording, or
+an emitted byte, which is [determinism.md](determinism.md)'s promise and moves by design. The
+surface freeze itself landed in 0.17.0 ([specs/M53.md](specs/M53.md)); 1.0.0 is cut when the
+real-world consumer's own gap list reaches zero.
 
 ## How this documentation is checked
 

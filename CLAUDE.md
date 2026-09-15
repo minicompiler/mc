@@ -7339,25 +7339,32 @@ agents (`.claude/agents/`): `stage0-dev` (C23), `mc-dev` (`.mc` code), `reviewer
   table), `docs/guide/96-a-new-primitive.md` § 3 (the recipe -- pick a free base, bound the band,
   with the predicate spelled out), `docs/reference/bundle.md` (`<float>`, `<f16>` and
   `<i128>`/`<u128>` coexist in either order, with the two entry points and the test named).
-- Next: the **site + registry server, M47 S4-S6**, in
-  `minicompiler/mc-registry`; then **M42 step 2** (PE `--exe`, CI-gated on the Windows runners).
-  **M46** only on the owner's request; **M43 Layer 2** after 1.0.0. M13 and M18 stay in the backlog
-  (`docs/specs/M13.md`: sizing a program's memory at compile time -- the fixed 4 MiB arena in
-  `examples/api/lib/rt.mc` is one more motivating case; M18 is Linux x86 32-bit). From the
-  2026-09-06 benchmark (`docs/comparison.md`): **M49 is CLOSED** (steps A, D1, B, C and D2 --
-  the register allocator, the peephole and hoisting on all five machines `mc` ships; 1.30x of
-  `clang -O2` on the workload, measured on AArch64; step E, inlining and constant propagation,
-  stays deferred to its own spec) and **M50 is CLOSED** (steps A, B and C -- the reproducible cell
-  on three GitHub Actions cells, the gate, and the committed dated JSON that replaced
-  `docs/comparison.md`'s two caveats; it gave M49 D2's x86-64 allocator its first timing, 19-21%
-  on `mix`). **M52 is CLOSED** too (steps A, B and C -- the library root beside
-  the binary, the cut that took 41 of 101 blob rows out for −9.4% of the binary, and
-  `mc build --sync`), which makes the **0.16.0 cut** the immediate next thing: one coordinated tag
-  with teko, dispatched by hand after the consumer's dry run. After it: the **surface freeze**
-  (RC 0.17.0) and the deprecation policy, then **M51** -- the `<http>` library, now a registry
-  PACKAGE and not a bundle row (M52 § 9.3), carrying the `mc-forkka`
-  fork-per-connection-keep-alive shape; the registry server's own move off fork-per-request is
-  `minicompiler/mc-registry`'s work, not this repository's.
+- Next (rewritten 2026-09-15, the final docs pass before 1.0.0): **M49, M50, M52 and M53's own
+  steps A-C are all closed and shipped** — the register allocator/peephole/hoisting on all five
+  hosts (1.30x `clang -O2` on the workload, AArch64), the reproducible bench cell on three GitHub
+  Actions cells, the installable-library cut, and the surface freeze + canary
+  (`tests/golden/surface.txt`, 421 entries; `docs/reference/hooks.md` § 8;
+  `.github/workflows/release.yml`'s `promote` job). **M42 step 2** (PE `--exe` for
+  windows/x86_64, no `lld-link`) landed long before all of the above, is CI-gated on the Windows
+  runners as required, and this entry corrects an earlier version of this line that still listed
+  it as pending.
+  **Current: tag `v0.17.4`, one patch ahead of it on `main`** (the f16 fix, PR #94). M53's own gate
+  (§ 13) is not a step this repository ships: it closes when teko's gap list reaches zero, it
+  self-hosts on its five legs and publishes `teko_std` asking for no new hook — a fact of the
+  OTHER repository this side cannot certify, only watch for. Until then, **0.17.x takes bug fixes
+  only** (`docs/specs/M53.md` § 7, D19; several of the 0.17.1-0.17.4 patches above are exactly
+  that, reported by teko and reproduced here before being fixed) and the canary stays advisory.
+  The real next action on this side is operational, not a milestone: once that gap list is
+  verified empty, set `vars.MC_CANARY_REQUIRED=true` and cut **1.0.0** as a `release:major` tag
+  (`docs/plan.md` § "What 1.0.0 promises, and what it does not").
+  After 1.0.0 (or sooner, if 0.17.x's "bug fixes only" rule allows it — M51 touches no compiler
+  surface): **M51**, the `<http>` library as a registry PACKAGE and not a bundle row (M52 § 9.3),
+  carrying the `mc-forkka` fork-per-connection-keep-alive shape (the registry server's own move
+  off fork-per-request is `minicompiler/mc-registry`'s work, not this repository's); the
+  **site + registry server, M47 S4-S6**, ongoing in `minicompiler/mc-registry`; **M43 Layer 2**;
+  **M46** (static linking) only on the owner's request; and the backlog, **M13** (sizing a
+  program's memory at compile time — the fixed 4 MiB arena in `examples/api/lib/rt.mc` is one
+  more motivating case) and **M18** (Linux x86 32-bit).
   Update this section when each milestone closes.
 - i18n done (2026-09-03): the repository is fully in English — diagnostics, program/script
   output, identifiers, comments, and docs (`docs/*.md`, `docs/specs/*.md`, `CLAUDE.md`,
@@ -7590,3 +7597,52 @@ agents (`.claude/agents/`): `stage0-dev` (C23), `mc-dev` (`.mc` code), `reviewer
   counts), `tests/golden/README.md` (the three-field `sym` line and the third verdict),
   `docs/specs/M53.md` (§ Implementation notes -- the first freeze regression (#92) and the arity
   column, six notes).
+- Final docs pass before 1.0.0 (2026-09-15, docs-only, no `src/`/`lib/`/`tests/golden/` touched):
+  an audit of the whole `docs/` tree plus `README.md` for stale statements ahead of the surface
+  freeze and the eventual 1.0.0 tag. **Seven stale statements fixed**, each a concrete claim that
+  work described as pending or narrower than reality was already done: (1)
+  `docs/guide/00-getting-started.md` said "macOS on Apple Silicon (arm64). That is the only host
+  today" — wrong since M37/M38; corrected to name all three hosted platforms with links to
+  `90-linux-host.md`/`95-windows-host.md`. (2) The same page and root `README.md` both said
+  "2,846-line C23 seed" against the real, unchanged `2848` (`sh scripts/loc-budget.sh`). (3) Root
+  `README.md`'s lead sentence narrowed `mc` to "Mach-O for AArch64", years after Linux ELF and
+  Windows PE/COFF landed; broadened, and the "Build it" list gained a `comparison.md` link and a
+  one-line 1.0.0 status bullet (kept above the `<!-- release-excerpt-end -->` marker so it ships
+  in every release's own `README.md`). (4) `docs/README.md`'s intro repeated the AArch64/Mach-O
+  narrowing and said the run time is "still at `clang -O0` level" with no mention that `-O` (M49)
+  already closes most of that gap to a measured 1.30x — both corrected; its design-documents table
+  also still said `specs/M1.md … M30.md` where the tree has specs through `M53.md`, and
+  `build.md`'s one-line description named only Linux targets where it documents Windows too. (5)
+  `docs/guide/80-footprint.md` § "What is not measured yet" said there is no Windows backend and
+  that the machine-interface split "has to land first" — both landed at M17/M19/M20; corrected to
+  say the real gap, which is that `examples/minimal/measure.sh` itself has no Windows row (no
+  Windows runner/host available to this Mac), not that the backend is missing. (6)
+  `docs/reference/hooks.md` § 8's own frozen-surface table said **420 entries, `toml` 35** —
+  stale by one PR (`#91` added `[package].version`, an additive MINOR, re-recorded in
+  `tests/golden/surface.txt` at the time but never echoed into this prose table); corrected to the
+  measured **421, `toml` 36** (`sh scripts/check-freeze.sh`). (7) **`CLAUDE.md`'s own `- Next:`
+  line** named **M42 step 2 (Windows PE `--exe`)** as future work — it landed via PR #63, long
+  before M48 through M53, fully CI-gated on `windows-11-arm`/`windows-2025` as the project's own
+  rule for a new target requires (`docs/build.md` § "A direct PE, no lld-link (M42 step 2)"); the
+  line is rewritten to state that M49/M50/M52 and M53's steps A-C are closed and shipped, that
+  M42 step 2 is done (correcting the stale claim), that the current tag is `v0.17.4` with one
+  patch ahead of it on `main`, and that M53's own closure gate (§ 13: teko's gap list at zero,
+  self-hosting on five legs, `teko_std` published) is a fact of the OTHER repository this side
+  watches rather than ships — so 0.17.x stays "bug fixes only" until it, then
+  `vars.MC_CANARY_REQUIRED=true` and a `release:major` 1.0.0 tag.
+  **Added, not just fixed**: `docs/plan.md` gained a new § "What 1.0.0 promises, and what it does
+  not" (right after the M53 row) stating the promise in one place — the 421-entry recorded
+  surface, the ten committed fixed points on five hosts, the canary gate; what is deliberately
+  NOT promised (`src/` globals, diagnostic wording, emitted bytes/goldens — `docs/determinism.md`'s
+  domain, not this one); how a consumer pins (`[package].mc`, `mc upgrade`, the registry's own
+  pinned validator version); and when it is cut. `docs/README.md` gained a matching short § 1.0.0
+  pointing back at it.
+  Nothing in `src/`, `stage0/`, `lib/`, `tests/golden/` or any generated artefact was touched, so
+  none of the ten goldens moved and `check-inert`'s claim is untouched by construction — this is
+  prose only. Verified on this tree: `sh scripts/check-docs.sh` → `docs ok: 209 symbols, 50 flags,
+  36 toml keys, 10 directives, 52 samples, 588 links`; `sh scripts/check-freeze.sh` → `ok freeze:
+  421 entries (209 sym, 50 flag, 36 toml, 10 dir, 101 bundle, 14 lock, 1 machine)` — **unchanged by
+  this pass**, confirming no public entry was added, removed or renamed; `make site` → `100 pages,
+  5 sections, 52 fences highlighted (1 kept plain)`; `make check-site` → `mcsite --check: 100
+  pages, 0 link problems`, `100 files, 0 problems` (`checkhtml.py`), `50 pairs checked, 0 below the
+  minimum` (`contrast.py`).
