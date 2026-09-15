@@ -7236,12 +7236,28 @@ agents (`.claude/agents/`): `stage0-dev` (C23), `mc-dev` (`.mc` code), `reviewer
   `make check-linux-host` **RC 0 over all four cells** (aarch64 and x86_64 x musl and gnu), each
   after its own `mc2l.o == mc3l.o` and `mc2lo.o == mc3lo.o` and with the cross proof
   (`mc2l --backend=macho src/mc.mc` byte for byte the macOS `build/mc2.o`) green.
-  The **ten** goldens rewritten once, each only after its own criterion: `mc2.sha256`
-  `57d41d50eb9604e1...`, `mc2-opt.sha256` `b5bb35a2293c3be8...`; the four Linux ones deleted and
-  re-recorded by `make check-linux-host` (`81ecb696…2c906a`, `cc3497d6…4aebcf`, `57b99999…66feb7`,
-  `b2f7725a…c8887d`); the four Windows ones cross-computed per `tests/golden/README.md`
-  (`457bc6ae…e56186`, `6294bd13…d6e11d`, `4240428c…23c9ae7`, `e4e75e0a…4d5a64`), and `build/mc2`
-  writes the arm64 one byte for byte as `build/mc1` does.
+  **Rebased onto `origin/main` 881b3e7** (PR #91, "a vendored tree at another version is named,
+  never hashed") before the ten goldens were recorded, so the values below are the merged tree's:
+  `mc2.sha256` `f194f5eddfff138fa2067a2306f4ef308e8c5c4d97dcca3e6232f63fc727e09e`, `mc2-opt.sha256`
+  `e18aa97b2ec0801bce6f5da22df0c42e12eb76c366ea71781f0389639980ca45` (both by
+  `scripts/bootstrap.sh`, after the empty `--dump-asm` diff and the two `cmp`s); the four Linux
+  ones recorded by `make check-linux-host` -- `mc2-linux-arm64.sha256`
+  `8a386918cadd6ccd352e0bae8e1f50bf6e53a5c2e878f680beacbed37c646514`,
+  `mc2-linux-arm64-opt.sha256`
+  `e28cb3ad3c7c0c6b599a2215fb8b912fbc0f173459d55d5d1fe0a46ccfa2867a`, `mc2-linux-x86_64.sha256`
+  `4dbc7f485f4e3b04d3bce027569ae8ca7fe197b8b6ddc7b3ec2b30a421df5ef8`,
+  `mc2-linux-x86_64-opt.sha256`
+  `e053b30b1108941f9b6669ada7ec5c1f0947bf593b3ae9a87d5cdfc27c983584`, each recorded in its musl
+  cell and re-verified by the gnu cell of the same architecture; the four Windows ones
+  cross-computed on macOS per `tests/golden/README.md` -- `mc2-windows-arm64.sha256`
+  `7ef023d442a168b56fc450582c0df760f1f7c807c5638fb4f5f6145638b7c7e4` (1487709 B),
+  `mc2-windows-arm64-opt.sha256`
+  `5901bb645f2698807ca2e6954815b2651b160c5729b68e9041161861dab255cd` (1428753 B),
+  `mc2-windows-x86_64.sha256`
+  `6da18efeac6c5a3c372447455794a8e3bdb48ea1fd1797c0e52b89d12b17c78e` (1543749 B),
+  `mc2-windows-x86_64-opt.sha256`
+  `e6b76868a9dea753daaa56bdae26fd32dde3abc772187cc93ad7dbf525af6ed3` (1471341 B), the two plain
+  ones also written byte for byte by `build/mc2`.
   Docs: `docs/reference/machine.md` (version 6 -- the `Version 5 → 6` paragraph, the ten codes,
   the rule as a fenced block, the three consequences, the AVR paragraph rewritten),
   `docs/reference/language.md` (§ Comparisons, new, with the five-row table and the two
