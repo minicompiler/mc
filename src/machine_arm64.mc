@@ -101,6 +101,21 @@
 #define I_SXTB    50
 #define I_SXTH    51
 #define I_SXTW    52
+#define I_COUNT   53                  // one past the last: the bundled band ends here
+
+// A derived machine claims a BAND of the opcode space above I_COUNT and passes
+// everything else down to this table (docs/reference/machine.md § 3). Seen from
+// here, the rule has a second half: an opcode this machine does not own must be
+// REFUSED, not looked up. The three entry tasks below -- MTASK_INS_SIZE,
+// MTASK_ENCODE and MTASK_DUMP -- used to answer 4, `instruction with no
+// encoder` and a silent fall-through for a band nobody claimed, which is what
+// <f16>'s HI_* opcodes (300..303) did when an f16 program was compiled for a
+// machine <f16> does not drive.
+void a64_claim(i64 op) {
+    if (op >= 0 && op < I_COUNT) return;
+    die(tm_cat(tm_cat("opcode ", tm_num_str(op)),
+               " is not arm64's: no machine claims it"));
+}
 
 // AArch64 conditions used by M1, and (contract version 6) the four unsigned
 // orderings. Every pair here is `cc ^ 1` of the other -- hs/lo are 2/3 and
@@ -693,6 +708,7 @@ void a64_reg_store(i64 ty, i64 d, i64 r) {
 // AArch64 is fixed width: everything is one word, except what generates none
 i64 a64_ins_size(uptr e) {
     i64 op = ins_op(e);
+    a64_claim(op);
     if (op == I_LABEL || op == I_NOP) return 0;
     return 4;
 }
@@ -774,6 +790,7 @@ uptr cond_name(i64 c) {
 
 void dump_ins(uptr in) {
     i64 op = ins_op(in);
+    a64_claim(op);
     if (op == I_NOP) return;
     if (op == I_LABEL) { out_str(1, "L"); out_num(1, ins_label(in)); out_str(1, ":\n"); return; }
     if (op == I_MOVZ || op == I_MOVK) {
@@ -860,6 +877,7 @@ i64 enc_mem(uptr in, i64 i) {
 
 i64 encode(uptr in, i64 pc, uptr lab) {
     i64 op = ins_op(in);
+    a64_claim(op);
     i64 rd = ins_rd(in);
     i64 rn = ins_rn(in);
     i64 rm = ins_rm(in);

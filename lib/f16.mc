@@ -5,12 +5,12 @@
 // to `<float>`'s machine is what the hardware itself adds -- two `fcvt`s and a
 // 16-bit load and store.
 //
-//   type_new("f16", 2, 2, TK_FLOAT)
+//   type_new("f16", 2, 2, TK_FLOAT)     where the hardware converts
+//   type_new("f16", 2, 2, TK_INT)       where it does not
 //
-// The WIDTH is what does the work. It drives glob_place (a global array of eight
-// occupies sixteen bytes), the array-bounds arithmetic, and -- through M5 --
-// a two-byte frame slot; `MTASK_LOCAL_LOAD` and `MTASK_GLOBAL_LOAD` already
-// carry `ty`, so `ldr h` / `str h` needed no task of their own.
+// The WIDTH is what does the work, and it is the same either way: it drives
+// glob_place (a global array of eight occupies sixteen bytes), the array-bounds
+// arithmetic, and -- through M5 -- a two-byte frame slot.
 //
 // f16 is a STORAGE type here, deliberately: AArch64 can add two halves directly
 // (FEAT_FP16), most targets cannot, and a module that promised `h1 + h2`
@@ -19,14 +19,47 @@
 //
 //   f32 s = f16_to_f32(h);   ...;   h = f32_to_f16(s);
 //
-// Those two are `intrinsic` registrations, one instruction each on AArch64. On
-// any other machine they are NOT registered, and the identically-named ordinary
-// functions in <f16_rt> are called instead -- which works because an intrinsic
-// shadows a function of the same name and nothing else does
-// (docs/reference/hooks.md § intrinsic). The same source compiles either way.
+// ---- the two roads, and why the KIND is one of the differences ----
+//
+// This module drives ONE machine: the `arm64` table `<float>` registered. There,
+// a half lives in a v register beside every other float, `MTASK_LOCAL_LOAD` and
+// `MTASK_GLOBAL_LOAD` already carry `ty` so `ldr h` / `str h` need no task of
+// their own, and the four names are `intrinsic` registrations of one instruction
+// each. TK_FLOAT is what tells `<float>`'s machine to treat the depth as a float
+// -- it is a claim about the MACHINE, and it is only true where this module has
+// one.
+//
+// Anywhere else -- x86-64 in either ABI, and every target a module has not
+// taught -- there is no half-precision instruction to name, so:
+//
+//   * the type is registered TK_INT, which is what a half with no arithmetic
+//     unit IS: two bytes of storage the CORE moves, with no float machine
+//     involved and no 8-byte `movsd` over a 2-byte global;
+//   * nothing is registered on the machine and NO intrinsic is registered;
+//   * the module pushes the four identically-named ordinary functions as a
+//     second source (`p_push_source`, the `sd_rt` pattern of
+//     lib/user_syntax_demo.mc) -- which is what docs/specs/M24.md § Generality
+//     asks for: "where it does not, the same registration lowers to a call into
+//     a softfloat routine the module pushes as a second source". It is pushed
+//     rather than left to the program as a `<f16_rt>` include (the shape
+//     lib/float_rt.mc has) because a program cannot include a file on one target
+//     and not on another, and the fallback only compiles where f16 is TK_INT.
+//
+// The same source compiles either way, which is the promise. What the program
+// pays on the fallback road is four small functions in every object, and one
+// name it may not define itself.
+//
+// The target, not the host, decides -- a taught compiler cross-compiles, and
+// `machine_use` runs AFTER user_init (src/cli.mc), so the machine in effect here
+// is always the host's. `[target].arch` is what `mc build` has already read by
+// the time user_init runs (M39.5); with no [target] the host answers for itself.
+// The one road that is neither -- `--machine=x86_64` or `--backend=coff-obj-x86_64`
+// on an aarch64 host, where the flag is read after this decision -- is refused
+// by the bundled machine itself: `opcode 303 is not x86-64's: no machine claims
+// it` (docs/reference/machine.md § 3).
 //
 // Depends on <float> being loaded first: f32 is where a half goes to be
-// arithmetic.
+// arithmetic, and ldf32/stf32 are the fallback's own bit bridge.
 
 i64 ty_f16 = 0;
 
@@ -162,12 +195,122 @@ void hi_dump(uptr in) {
     out_str(1, "\n");
 }
 
+// ---------------------------------------------------------------------------
+// The softfloat fallback, for a target this module has no machine for. Pushed
+// as a second source at user_init; f16 is TK_INT there, so every line below is
+// ordinary integer arithmetic over the core plus <float>'s ldf32/stf32, which
+// are the only bit bridge between an f32 depth and its four bytes.
+//
+// f32 -> f16 rounds to NEAREST, TIES TO EVEN, which is what `fcvt h, s` does and
+// what tests/wide/031-f16.mc pins down: 1 + 2^-11 is exactly halfway between the
+// halves 0x3c00 and 0x3c01 and must come out 0x3c00, the EVEN one. Subnormals,
+// overflow to infinity and NaN are in too, because a conversion that is right on
+// three numbers and wrong on the fourth is worse than none.
+#define HI_RTLINES 66
+
+uptr hi_rt[] = {
+    "f16 f32_to_f16(f32 s) {\n",
+    "    u64 r[1];\n",
+    "    st64(r, 0);\n",
+    "    stf32(r, s);\n",
+    "    u64 b = ld32(r);\n",
+    "    u64 sign = (b >> 16) & 0x8000;\n",
+    "    u64 m = b & 0x7fffff;\n",
+    "    i64 x = (b >> 23) & 0xff;\n",
+    "    if (x == 255) {\n",
+    "        if (m != 0) return sign | 0x7e00 | ((m >> 13) & 0x1ff);\n",
+    "        return sign | 0x7c00;\n",
+    "    }\n",
+    "    i64 e = x - 112;\n",
+    "    if (e >= 31) return sign | 0x7c00;\n",
+    "    u64 q = 0;\n",
+    "    u64 rem = 0;\n",
+    "    u64 hb = 0;\n",
+    "    if (e <= 0) {\n",
+    "        if (e < -10) return sign;\n",
+    "        m = m | 0x800000;\n",
+    "        i64 sh = 14 - e;\n",
+    "        q = m >> sh;\n",
+    "        hb = 1 << (sh - 1);\n",
+    "        rem = m & ((hb << 1) - 1);\n",
+    "    } else {\n",
+    "        q = (e << 10) | (m >> 13);\n",
+    "        hb = 0x1000;\n",
+    "        rem = m & 0x1fff;\n",
+    "    }\n",
+    "    if (rem > hb) q = q + 1;\n",
+    "    if (rem == hb) { if ((q & 1) != 0) q = q + 1; }\n",
+    "    return sign | q;\n",
+    "}\n",
+    "f32 f16_to_f32(f16 h) {\n",
+    "    u64 v = h;\n",
+    "    u64 sign = (v & 0x8000) << 16;\n",
+    "    i64 e = (v >> 10) & 0x1f;\n",
+    "    u64 m = v & 0x3ff;\n",
+    "    u64 b = 0;\n",
+    "    if (e == 31) {\n",
+    "        b = sign | 0x7f800000 | (m << 13);\n",
+    "        if (m != 0) b = b | 0x400000;\n",
+    "    } else {\n",
+    "        if (e != 0) {\n",
+    "            b = sign | ((e + 112) << 23) | (m << 13);\n",
+    "        } else {\n",
+    "            if (m != 0) {\n",
+    "                i64 sh = 0;\n",
+    "                loop {\n",
+    "                    if ((m & 0x400) != 0) break;\n",
+    "                    m = m << 1;\n",
+    "                    sh = sh + 1;\n",
+    "                }\n",
+    "                b = sign | ((113 - sh) << 23) | ((m & 0x3ff) << 13);\n",
+    "            } else {\n",
+    "                b = sign;\n",
+    "            }\n",
+    "        }\n",
+    "    }\n",
+    "    u64 r[1];\n",
+    "    st64(r, 0);\n",
+    "    st32(r, b);\n",
+    "    return ldf32(r);\n",
+    "}\n",
+    "f16 ldf16(uptr p) { return ld16(p); }\n",
+    "void stf16(uptr p, f16 h) { st16(p, h); }\n"
+};
+
+uptr hi_rt_at(i64 i) { return ld64(hi_rt + i * 8); }
+
+uptr hi_rt_text() {
+    uptr s = "";
+    i64 i = 0;
+    loop {
+        if (i >= HI_RTLINES) break;
+        s = tm_cat(s, hi_rt_at(i));
+        i = i + 1;
+    }
+    return s;
+}
+
+// Does this build target the one machine <f16> drives? `mc build` has already
+// read [target] by the time user_init runs (M39.5); with no [target] the host
+// answers for itself.
+i64 hi_hardware() {
+    uptr a = drv_arch();
+    if (a == 0) a = host_arch();
+    return str_eq(a, "aarch64");
+}
+
 // Registered on top of whatever machine is named `arm64` at this point -- which,
 // with <float> loaded first, is <float>'s. Composition is by DERIVATION and it
 // is ordered: risk 4 of docs/specs/M24.md says machine registration is
 // last-wins, so a module that stacks on another one copies it rather than the
 // bundled table, and says which one it needs.
 void f16_init() {
+    if (!hi_hardware()) {                         // no half-precision instruction here
+        ty_f16 = type_new("f16", 2, 2, TK_INT);   // a half is two bytes of storage
+        uptr rt = hi_rt_text();                   // ...and the four names are functions
+        p_push_source("f16 runtime", rt, cstrlen(rt));
+        return;
+    }
     ty_f16 = type_new("f16", 2, 2, TK_FLOAT);
     hi_tab  = xalloc(MTASK_COUNT * 8);
     hi_orig = xalloc(MTASK_COUNT * 8);
