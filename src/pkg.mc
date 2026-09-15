@@ -66,7 +66,8 @@ uptr pkg_default_registry() { return "https://pkg.minicompiler.dev"; }
 #define PKS_NACC     112               // the OLD lock's accepted permissions
 #define PKS_ACC      120               // AC_SIZE records
 #define PKS_LONG     128               // --long: print the reasons too
-#define PKS_SIZE     136
+#define PKS_NOREPL   136               // this road ignores [replace] (mc tool)
+#define PKS_SIZE     144
 
 #define IX_NAME 0                     // the package this index file is about
 #define IX_REPO 8
@@ -846,7 +847,20 @@ uptr pkg_libs_manifest(uptr name, uptr ver) {
     return tm_cat(tm_cat(tm_cat(root, "/"), name), tm_cat(tm_cat("/v", ver), ".toml"));
 }
 
-uptr pkg_replace_path(uptr name) { return toml_get(tm_cat("replace.", name)); }
+// `[replace] name = "path"` points a name at a local tree for the BUILD to
+// compile (M44 D11, docs/reference/packages.md § 7). A tool is not compiled
+// into anything: it is a program installed under ~/.mc/tools at the version the
+// lock pins, from the registry -- and `mc build` already skips every tool row
+// before dep_replace is consulted (deps_apply step 4). So the whole `mc tool`
+// road ignores the table, uniformly for the tool AND for the libraries staged
+// beside it, and says so once per name (tool_note_replaced). It used to resolve
+// the relative path against whatever cfg_file() last named -- the STAGED tree,
+// which tool_stage repoints -- and die `cannot open: <tools>/<name>/<path>`
+// AFTER the archive had been downloaded.
+uptr pkg_replace_path(uptr name) {
+    if (ld64(pk_state() + PKS_NOREPL)) return 0;
+    return toml_get(tm_cat("replace.", name));
+}
 
 // 1 when the tree is on this disk already: vendored, replaced, or installed
 // WITH ITS MANIFEST -- a half-extracted directory has no manifest and is not a
@@ -1291,6 +1305,11 @@ uptr pkg_col(uptr s, i64 w) {
     return s;
 }
 
+// One column, `w` wide. A value at or past `w` gets no padding at all, so a
+// caller separates its columns itself -- `mc pkg list` and `mc tool list` write
+// a space after every one of them, and the permission table below pads to w - 1
+// and writes that space, which is the same width for every value that fits and
+// a guaranteed gap for one that does not.
 void pkg_pad(uptr s, i64 w) {
     out_str(1, s);
     i64 n = w - cstrlen(s);
@@ -1302,8 +1321,10 @@ void pkg_pad(uptr s, i64 w) {
 
 void pkg_perm_row(uptr what, uptr line) {
     out_str(1, "  ");
-    pkg_pad(what, 17);
-    pkg_pad(line, 22);
+    pkg_pad(what, 16);
+    out_str(1, " ");
+    pkg_pad(line, 21);
+    out_str(1, " ");
     out_str(1, pkg_perm_sentence(line));
     out_str(1, "\n");
 }
@@ -1318,7 +1339,8 @@ void pkg_print_perms() {
             i64 np = ld64(row + VR_PERMN);
             if (np == 0) {
                 out_str(1, "  ");
-                pkg_pad(what, 17);
+                pkg_pad(what, 16);
+                out_str(1, " ");
                 out_str(1, "(none: stdio only)\n");
             }
             i64 j = 0;
@@ -1331,7 +1353,8 @@ void pkg_print_perms() {
             // declares is a statement and the table says which it is.
             if (np > 0 && !str_eq(ld64(row + VR_KIND), "tool")) {
                 out_str(1, "  ");
-                pkg_pad("", 17);
+                pkg_pad("", 16);
+                out_str(1, " ");
                 out_str(1, "(declared by the author; a library runs inside your program)\n");
             }
         }

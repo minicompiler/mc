@@ -6937,6 +6937,110 @@ agents (`.claude/agents/`): `stage0-dev` (C23), `mc-dev` (`.mc` code), `reviewer
   literally to illustrate a pointer's shape is itself a link to `check-docs`'s naive scan, and
   broke it), `docs/plan.md`'s M53 row (steps A/B/C landed; the milestone still closes only on
   teko's own gap list reaching zero, § 13).
+- `mc tool` -- the consumer's four (0.16.1; `docs/specs/M48.md` § Implementation notes -- C3
+  review, the consumer's four): four defects reported by teko from a real run against 0.16.0, each
+  with a pure reproducer, each fixed at its root and each reproduced HERE before a line was
+  written. `stage0/` untouched (2848/3000). The whole compiled change is **78 added lines in
+  `src/`, 39 of them neither comment nor blank** (`deps.mc` +23/-9, `pkg.mc` +29/-6, `tool.mc`
+  +26/-0) and **zero new globals**.
+  1. **`mc tool install DIR` ignored `[tools]` when the project had no `[deps]`.** `deps_apply`
+     counted `deps.` keys alone and returned on `nd == 0` BEFORE `dep_read_lock`, so `dp_npkg()`
+     was 0 and the answer was `no tools required by this project`, exit 0 -- with a valid lock
+     naming the tool beside the manifest; adding one `[deps]` row made the same tree install.
+     A `tools.` key now counts towards `nd`: the lock is the answer to BOTH tables and is read
+     when EITHER has rows. One root, every consumer -- `mc build`, `mc pkg list|verify|vendor`
+     and `mc tool install DIR` all reach the lock through that one function, and the `mc pkg sync`
+     road (`pkg_read_deps`) already counted tools. Consequence, documented: a `[tools]`-only
+     project needs an `mc.lock` for `mc build` too and says `mc.lock is stale` with its `run:`
+     line without one. Inert for the tree: `tests/pkg/perm` is the only fixture with a `[tools]`
+     table and it has `[deps]` beside it.
+  2. **A `[replace]`d tool was half-applied.** The archive was fetched and then `tool_stage`'s
+     `pkg_write_lock` resolved the project's `[replace]` path against the STAGED tree -- that
+     function repoints `cfg_file()` so the vendored `deps/` is found -- and died
+     `mc: cannot open: <tools>/hello_tool/toy/mc.toml` AFTER the download. Reproduced verbatim.
+     **The rule chosen is IGNORE, and the spec supports it**: `[replace]` is Go's `replace`
+     (M44 D11), an override for a tree the BUILD compiles, and `deps_apply` step 4 already skips
+     every tool row before `dep_replace` is consulted -- a tool is a program installed under
+     `~/.mc/tools` at the version the lock pins, not something compiled into your program.
+     Honouring it would have meant a second, fetch-free install road for an unpinned tree with no
+     hash to record, contradicting the row the build already skips. So the whole `mc tool` road
+     ignores the table -- for the tool AND for the libraries `tool_stage` copies from `<libs>`
+     beside it -- and announces it once per replaced name, above the plan: `note: [replace]
+     hello_tool = "../toy" is ignored by mc tool: a tool is installed from the registry`.
+     Nothing dies after a download.
+  3. **A constraint `mc pkg sync` refuses reached the install road.** `deps_apply` validated a
+     `deps.` value with `ver_parse` (step 3) and a `tools.` value not at all, so `[tools] x =
+     "^0.1"` was accepted, fetched, staged and BUILT, with `x >= ^0.1` printed in the install
+     table. Now the same `ver_parse` + `ver_bad_msg()` at the key's own `file:line:col`, exit 2,
+     in step 1 -- before the lock is read and before anything is fetched. Step 1 and not step 3
+     because step 3 compares a constraint against a lock row and a tool's version comes from the
+     lock: the only thing to say about `^0.12` is that it is not a constraint.
+  4. **The permission table lost its column gap.** `pkg_pad(line, 22)` pads to the width and no
+     further, so a 24-byte `fs.write workspace/build` ran into the sentence --
+     `fs.write workspace/buildmay create, change and delete files under build ...`, verbatim --
+     and the `what` column (`<name> <version>`) has the same shape past 17 bytes. Fixed where
+     every OTHER caller already puts it: `mc pkg list` and `mc tool list` write their own space
+     after each column, so the permission table pads to `w - 1` and writes that space -- the same
+     total width for every value that fits, a guaranteed gap for one that does not. **The first
+     draft forced the space inside `pkg_pad` and it moved an unrelated golden**: `mc pkg list`'s
+     hash column is `xstrdup(h, 12)` in a 12-wide column, exactly at its width, so every row of
+     `tests/golden/pkg-list.txt` gained a space (measured: `check-pkg` 192/194). The helper is
+     back to what it was.
+  **The frozen seed's `MAXFUNCS` is what shaped the code.** `lib/mc_i128.mc` is
+  `#include "../src/core.mc"` plus a module and sat at **2046 of 2048**; the first draft added
+  three functions and `build/mc0 --dump-asm lib/mc_i128.mc` became `mc: too many functions`,
+  which `check-asm` compares byte for byte and `stage0/` may not be edited to fix. Collapsed to
+  **one**: `tool_ignore_replace()` prints the notes and then sets the flag itself (idempotent, so
+  a two-tool project says it once), and `pkg_replace_path` reads `ld64(pk_state() + PKS_NOREPL)`
+  where the record is declared -- the shape `pkg_list` already uses for `PKS_LONG`.
+  **2047/2048: one function of headroom for the whole repository.** (The seed exhausting its
+  64 MiB arena on `build/mc0 lib/mc_i128.mc -o x.o` PREDATES this change -- measured on a
+  pristine checkout of 769d8e5 -- and no gate takes that road: check-lex/ast/asm only dump.)
+  -- gates: `scripts/check-tool.sh` § 7 is one case per defect, **27 -> 31/31**, and all four FAIL
+  against a `build/mc1` built from `origin/main` 769d8e5 (**27/31**): the `[tools]`-only project
+  installs and its launcher exists, the `[replace]`d tool prints the exact note and stages the
+  REGISTRY's tree (the local one carries a marker the staged copy must not have), the two-part
+  constraint is refused at its own position with a fresh `<libs>`/`tools` pair left empty, and the
+  padded line contains `build may`.
+  `make bundle` re-run BEFORE bootstrapping (60 files, raw 1247436 -> LZ 565551, blob 566325 B).
+  `make check` green end to end (**RC 0, zero FAIL**): `check-asm` 178/178 (4 skipped),
+  `check-obj` **32/32 identical to the frozen seed**, `bootstrap` at BOTH fixed points
+  (`mc2.o == mc3.o` 1446904 B, `mc2o.o == mc3o.o`) with the cross-road identity
+  (`mc2o-plain.o == mc2.o`) and **both `--dump-asm` diffs between `mc1` and `mc2` empty** (plain
+  and `--opt=1`), **`check-tool` 31/31**, **`check-pkg` 194/194**, `check-limits` **17/17 seed
+  limits under 90%** (tightest `globals` 268/512 = 52% on `src/mc_seed.mc`), `check-freeze`
+  `420 entries` unchanged (no public name added: `tool_ignore_replace` matches no surface prefix),
+  `check-docs` (209 symbols, 50 flags, 35 TOML keys, 10 directives, 52 samples, 570 links),
+  `test-sandbox` 73 ok / 0 failed / 1 skipped.
+  `scripts/check-inert.sh <mc1 from origin/main 769d8e5> build/mc1`: **33 objects identical on the
+  plain road and 33 with `--opt=1`** (`tests/*.mc` and `src/mc.mc`) plus byte-identical artefacts
+  for `examples/api`, `lang`, `conc`, `desktop` and `kernel`.
+  `make check-linux-host` **RC 0 over all four cells** (aarch64 and x86_64 x musl and gnu), each
+  after its own plain AND optimized fixed point, its own cross-road identity and the cross proof
+  (`mc2l --backend=macho src/mc.mc` byte for byte the macOS `build/mc2.o`).
+  **The ten goldens rewritten once**, each only after its own criterion: `mc2.sha256`
+  `045a89e4...991ba8` -> `e1dbf53167b55b4c80e2d5009b63846a3f092bae4b760ddfa48c640fa6cab4c1`,
+  `mc2-opt.sha256` `cce7215a93c225f9190b33e11a2e44fc9445a48ded8261df9e46bebf17d4f925` (both by
+  `scripts/bootstrap.sh`, after the two empty `--dump-asm` diffs and the two `cmp`s); the four
+  Linux ones deleted and re-recorded by `make check-linux-host` -- `mc2-linux-arm64`
+  `e3ecfbc98370f6ac9863a24dd59e60288982ef09bb6f86b8db1c668458e64f82`, `mc2-linux-arm64-opt`
+  `72fb44d9f2ba6d9df6e616d72b47879266f13148ebf2270d20ad560af43c7bf3`, `mc2-linux-x86_64`
+  `1d54a0ff517276e8bc20c4457544feaa404a1493cc92b3914aa61a134e63e7b3`, `mc2-linux-x86_64-opt`
+  `8418400db1249ddb7eb903cd6d5814b6eeb5eb893b1990342ec3cf1cbcf39864`; the four Windows ones
+  cross-computed on macOS per `tests/golden/README.md` -- `mc2-windows-arm64`
+  `2ca5132750a78c82faa04dafb7b3c7c5af4467c53fb1f62d2d4a1315ac316f9f` (1482169 B),
+  `mc2-windows-arm64-opt`
+  `3ad31640afe7a6574233b238d190edb3620869841c225bf773809bcf534de1e3` (1423389 B),
+  `mc2-windows-x86_64`
+  `f3a5a1e352233f83054cbcbf93e4b40d4736591c0444f301c39e16977a6c7643` (1537989 B),
+  `mc2-windows-x86_64-opt`
+  `d09875218ada0fce615619f1a0e4cf5ae4c414fc6ee17f05f266faf15c8e0d17` (1465861 B), the two plain
+  ones also written byte for byte by `build/mc2`.
+  Docs: `docs/reference/tools.md` (what `install [DIR]` reads, and a new § "`[replace]` is not
+  consulted"), `docs/reference/packages.md` § 7 (a tool is never replaced),
+  `docs/reference/toml.md` (`[deps]`/`[tools]` and the lock; the stale "`mc tool`, which does not
+  exist yet" corrected), `docs/reference/diagnostics.md` (the `mc.lock is stale` row names both
+  tables), `docs/specs/M48.md`.
 - Next: the **site + registry server, M47 S4-S6**, in
   `minicompiler/mc-registry`; then **M42 step 2** (PE `--exe`, CI-gated on the Windows runners).
   **M46** only on the owner's request; **M43 Layer 2** after 1.0.0. M13 and M18 stay in the backlog

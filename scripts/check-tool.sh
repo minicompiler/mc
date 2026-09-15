@@ -387,5 +387,108 @@ else
     skip "finding 5 boxed" "no working sandbox here; the tool runs directly (see docs/reference/tools.md)"
 fi
 
+# ============ 7. the four defects the consumer reported (0.16.1) =============
+# One case per defect, each the reproducer that was measured against 0.16.0.
+mkdir -p "$tmp/p" "$tmp/toy" "$tmp/c/l" "$tmp/c/b"
+cp -R tests/tool/hello/. "$tmp/toy"
+echo '// TOY -- this tree is [replace]d and must NOT be what is installed' >> "$tmp/toy/main.mc"
+echo 'i64 main() { return 0; }' > "$tmp/p/main.mc"
+cat > "$tmp/p/mc.lock" <<'EOF'
+# written by `mc pkg sync` -- do not edit
+
+[[package]]
+name        = "hello_tool"
+version     = "0.1.0"
+kind        = "tool"
+bin         = "hello"
+permissions = ["fs.read workspace"]
+EOF
+# $1 is whatever goes under the [project] table: the [tools] row, and for the
+# second case a [replace] beside it.
+proj() {
+    cat > "$tmp/p/mc.toml" <<EOF
+[project]
+name  = "toolsonly"
+entry = "main.mc"
+out   = "build/toolsonly"
+kind  = "exe"
+
+$1
+EOF
+}
+
+# --- defect 1: a project whose ONLY package table is [tools] ---
+# deps_apply counted `deps.` keys alone and returned before reading the lock, so
+# dp_npkg() was 0 and this printed `no tools required by this project`, exit 0.
+proj '[tools]
+hello_tool = "0.1.0"'
+rm -f "$tmp/b/hello"
+run tool install "$tmp/p" --yes --registry "$reg" --libs-dir "$tmp/l" --bin-dir "$tmp/b"
+if [ "$rc" = 0 ] && ! grep -q "no tools required by this project" "$tmp/o" \
+   && [ -x "$tmp/b/hello" ] && [ -f "$tmp/tools/hello_tool/v0.1.0.toml" ]; then
+    ok "defect 1: a [tools]-only project installs its tools (no [deps] needed)"
+else
+    fail "defect 1 [tools]-only" "exit $rc: $(cat "$tmp/o")"
+fi
+
+# --- defect 2: a [replace]d tool ---
+# [replace] is a BUILD-side override for a tree the build compiles; a tool is a
+# program installed from the registry, and `mc build` already skips every tool
+# row before dep_replace is consulted. So `mc tool` ignores the table and says
+# so, instead of resolving `../toy` against the STAGED tree and dying
+# `cannot open: <tools>/hello_tool/toy/mc.toml` AFTER the archive was fetched.
+proj '[tools]
+hello_tool = "0.1.0"
+
+[replace]
+hello_tool = "../toy"'
+rm -f "$tmp/b/hello"
+run tool install "$tmp/p" --yes --registry "$reg" --libs-dir "$tmp/l" --bin-dir "$tmp/b"
+note='note: [replace] hello_tool = "../toy" is ignored by mc tool: a tool is installed from the registry'
+if [ "$rc" = 0 ] && grep -qxF "$note" "$tmp/o" && [ -x "$tmp/b/hello" ] \
+   && ! grep -q TOY "$tmp/tools/hello_tool/v0.1.0/main.mc"; then
+    ok "defect 2: a [replace]d tool is installed from the registry, with the note"
+else
+    fail "defect 2 [replace]d tool" "exit $rc: $(cat "$tmp/o")"
+fi
+
+# --- defect 3: a constraint `mc pkg sync` refuses, on the install road ---
+# `^0.1` is two parts and no constraint; it used to reach the resolver, be
+# fetched and BUILT, and print `hello_tool >= ^0.1` in the install table. It is
+# now the same ver_parse refusal at the key's own file:line:col -- and a fresh
+# <libs>/tools pair proves nothing was fetched or staged before it.
+proj '[tools]
+hello_tool = "^0.1"'
+run tool install "$tmp/p" --yes --registry "$reg" --libs-dir "$tmp/c/l" --bin-dir "$tmp/c/b"
+if [ "$rc" = 2 ] \
+   && grep -qE "mc\.toml:[0-9]+:[0-9]+: a version constraint must be X\.Y\.Z, =X\.Y\.Z, ~X\.Y\.Z, \^X\.Y\.Z, >=X\.Y\.Z, or \*$" "$tmp/o" \
+   && [ -z "$(ls -A "$tmp/c/l")" ] && [ ! -d "$tmp/c/tools" ]; then
+    ok "defect 3: [tools] '^0.1' refused at its own position, before any fetch ($(sed -n 1p "$tmp/o" | sed 's|.*/||'))"
+else
+    fail "defect 3 constraint" "exit $rc: $(cat "$tmp/o"); libs=[$(ls -A "$tmp/c/l")]"
+fi
+
+# --- defect 4: the permission table keeps its column gap ---
+# `fs.write workspace/build` is 24 bytes in a 22-wide column, so the padding
+# emitted nothing: `fs.write workspace/buildmay create, change and delete ...`.
+cat > "$tmp/reg/index/padtool.toml" <<EOF
+[package]
+name = "padtool"
+[[versions]]
+version     = "0.1.0"
+url         = "$tmp/reg/hello_tool-0.1.0.tar.gz"
+strip       = 1
+sha256      = "$H"
+kind        = "tool"
+bin         = "padtool"
+permissions = ["fs.write workspace/build"]
+EOF
+run tool install padtool --registry "$reg" --libs-dir "$tmp/c/l" --bin-dir "$tmp/c/b"
+if [ "$rc" = 0 ] && grep -q "fs.write workspace/build may create" "$tmp/o"; then
+    ok "defect 4: a permission at the column width still ends in a space"
+else
+    fail "defect 4 padding" "exit $rc: $(grep -n 'fs.write' "$tmp/o")"
+fi
+
 echo "check-tool: $((total - fails))/$total"
 [ "$fails" -eq 0 ]
