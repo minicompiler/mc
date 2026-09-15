@@ -60,7 +60,9 @@ have() { command -v "$1" > /dev/null 2>&1 || [ -x "$llvm/$1" ]; }
 # whole wide corpus; mc-u128 is the second door and is built for parity with the
 # run-time checks below. Each is `#include <mc/core>` plus the module.
 build_wide_compilers() {
-    for pair in "lib/mc_i128.mc build/mc-i128" "lib/mc_u128.mc build/mc-u128"; do
+    for pair in "lib/mc_i128.mc build/mc-i128" "lib/mc_u128.mc build/mc-u128" \
+                "lib/mc_float_wide.mc build/mc-float-wide" \
+                "lib/mc_wide_float.mc build/mc-wide-float"; do
         set -- $pair
         rm -f "$2"
         if ! msg=$("$mc" --exe "$1" -o "$2" 2>&1); then
@@ -72,7 +74,13 @@ build_wide_compilers() {
 
 # which taught compiler owns a wide test (mc-i128 compiles all four, but the
 # u128 program is built by its own door, matching the full-run convention)
-wide_compiler() { case "$1" in *u128*) echo build/mc-u128 ;; *) echo build/mc-i128 ;; esac; }
+wide_compiler() {
+    case "$1" in
+        *u128*)   echo build/mc-u128 ;;
+        *coexist*) echo build/mc-float-wide ;;
+        *)        echo build/mc-i128 ;;
+    esac
+}
 
 if [ "$mode" = "build" ]; then
     [ -n "$split" ] && [ -n "$bos" ] && [ -n "$barch" ] || {
@@ -85,7 +93,8 @@ if [ "$mode" = "build" ]; then
     tmpb="$tmp/build"; mkdir -p "$tmpb"
     n=0
     for f in tests/wide/030-i128.mc tests/wide/032-u128.mc \
-             tests/wide/033-wide-abi.mc tests/wide/034-cast-narrow.mc; do
+             tests/wide/033-wide-abi.mc tests/wide/034-cast-narrow.mc \
+             tests/wide/035-coexist.mc; do
         [ -f "$f" ] || continue
         name=$(basename "$f" .mc)
         why=$(sed -n "s|^// skip-$bos: *||p" "$f" | head -1)
@@ -151,6 +160,78 @@ run_case() {                            # compiler-source, test-source, name
 run_case lib/mc_i128.mc tests/wide/030-i128.mc i128
 run_case lib/mc_u128.mc tests/wide/032-u128.mc u128
 run_case lib/mc_f16.mc  tests/wide/031-f16.mc  f16
+
+# ---- <float>, <f16> and <i128>/<u128> in ONE compiler, in BOTH orders ----
+# Every derived machine claims a band of the opcode space the `arm64` and
+# `x86_64` tables share (docs/reference/machine.md § 3). Before each band was
+# bounded at BOTH ends and given a base of its own, these modules could not
+# coexist: the arm64 program died with SIGILL when <i128> registered first (the
+# float table encoded WI_UMULH), and on x86-64 the two bands were the same
+# number, so one module always encoded the other'"'"'s instructions. The two
+# entry points differ only in the registration ORDER, and the assertion is that
+# the order does not matter -- same stdout, same exit, same object.
+run_case lib/mc_float_wide.mc tests/wide/035-coexist.mc float-wide
+run_case lib/mc_wide_float.mc tests/wide/035-coexist.mc wide-float
+
+want="15 1 0 7 4616189618054758400 1073741824"
+rm -f "$tmp/co-a.o" "$tmp/co-b.o"
+if ! msg=$(build/mc-float-wide tests/wide/035-coexist.mc -o "$tmp/co-a.o" 2>&1) \
+   || ! msg=$(build/mc-wide-float tests/wide/035-coexist.mc -o "$tmp/co-b.o" 2>&1); then
+    echo "FAIL coexist (object: $msg)"; fails=$((fails + 1))
+elif cmp -s "$tmp/co-a.o" "$tmp/co-b.o"; then
+    echo "ok   coexist: the two registration orders produce the same object"
+else
+    echo "FAIL coexist: the two registration orders produce different objects"
+    fails=$((fails + 1))
+fi
+
+# the arm64 bands, in BOTH orders: the wide multiply is `umulh` (200..299) and
+# the float ones are `fadd`/`fmul` (100..199) in the same dump -- before the
+# bands were bounded, the float table encoded WI_UMULH and the program SIGILLed
+for c in build/mc-float-wide build/mc-wide-float; do
+    a=$("$c" --dump-asm tests/wide/035-coexist.mc 2>&1)
+    nu=$(printf '%s\n' "$a" | grep -cE '^  umulh x')
+    nf=$(printf '%s\n' "$a" | grep -cE '^  (fadd|fmul) ')
+    if [ "$nu" -ge 1 ] && [ "$nf" -ge 2 ]; then
+        echo "ok   coexist arm64: $c emits $nu umulh and $nf float ops, neither band stolen"
+    else
+        echo "FAIL coexist arm64: $c -- umulh $nu, float $nf"
+        fails=$((fails + 1))
+    fi
+done
+
+# the THIRD band (<f16>, 300..399) is arm64-only, so it is proved on the arm64
+# dump of the f16 corpus through the SAME compiler that carries <i128>
+for c in build/mc-float-wide build/mc-wide-float; do
+    if "$c" --dump-asm tests/wide/031-f16.mc 2>/dev/null | grep -q '^  fcvt h16, s16$'; then
+        echo "ok   coexist f16: $c still emits fcvt h, s with the wide module loaded"
+    else
+        echo "FAIL coexist f16: $c lost the f16 band"
+        fails=$((fails + 1))
+    fi
+done
+
+# the x86-64 band: `mul` (the wide one) and `addsd`/`mulsd` (the float ones) in
+# the same dump, with neither module claiming the other'"'"'s opcode -- before,
+# one order died with `no dump for a wide opcode` and the other silently printed
+# `mulsd` where `mul` belongs
+for c in build/mc-float-wide build/mc-wide-float; do
+    for m in x86_64 x86_64-win; do
+        a=$("$c" --dump-asm --machine=$m tests/wide/035-coexist.mc 2>&1)
+        nmul=$(printf '%s\n' "$a" | grep -cE '^  mul r')
+        nadd=$(printf '%s\n' "$a" | grep -cE '^  addsd ')
+        if printf '%s\n' "$a" | grep -q 'no dump for a wide opcode'; then
+            echo "FAIL coexist $m: $c -- the float table claimed a wide opcode"
+            fails=$((fails + 1))
+        elif [ "$nmul" -ge 1 ] && [ "$nadd" -ge 1 ]; then
+            echo "ok   coexist $m: $c emits $nmul mul and $nadd addsd, neither band stolen"
+        else
+            echo "FAIL coexist $m: $c -- mul $nmul, addsd $nadd"
+            fails=$((fails + 1))
+        fi
+    done
+done
+
 
 # i128: the 16-byte global initializer is an N_BLOB, one per literal, and the
 # symbols are 16 bytes apart -- which is type_new's width, in the object
@@ -276,6 +357,7 @@ x86_sweep tests/wide/030-i128.mc i128
 x86_sweep tests/wide/032-u128.mc u128
 x86_sweep tests/wide/033-wide-abi.mc i128
 x86_sweep tests/wide/034-cast-narrow.mc i128
+x86_sweep tests/wide/035-coexist.mc float-wide
 
 # ---- x86-64 and aarch64 EXECUTION in Docker (SysV) ----
 # The strongest check the sweep cannot make: does the code RUN? mc build with a
@@ -321,6 +403,8 @@ if docker info > /dev/null 2>&1 && have ld.lld; then
     wide_linux x86_64  linux/amd64 i128 tests/wide/033-wide-abi.mc abi 0 "10 1 3000000000000000000"
     wide_linux aarch64 linux/arm64 i128 tests/wide/034-cast-narrow.mc cast 0 "1 1 1 1 1 1 1 1 1"
     wide_linux x86_64  linux/amd64 i128 tests/wide/034-cast-narrow.mc cast 0 "1 1 1 1 1 1 1 1 1"
+    wide_linux aarch64 linux/arm64 float-wide tests/wide/035-coexist.mc coexist 0 "15 1 0 7 4616189618054758400 1073741824"
+    wide_linux x86_64  linux/amd64 float-wide tests/wide/035-coexist.mc coexist 0 "15 1 0 7 4616189618054758400 1073741824"
 else
     echo "skip linux exec: need docker and ld.lld"
 fi
@@ -353,7 +437,8 @@ wide_windows() {                        # arch, lld machine, coff backend
     done
     wp=0; wt=0
     for wsrc in tests/wide/030-i128.mc tests/wide/032-u128.mc \
-                tests/wide/033-wide-abi.mc tests/wide/034-cast-narrow.mc; do
+                tests/wide/033-wide-abi.mc tests/wide/034-cast-narrow.mc \
+                tests/wide/035-coexist.mc; do
         wnm=$(basename "$wsrc" .mc); wt=$((wt + 1))
         if ! msg=$("$(wide_compiler "$wsrc")" --backend=$be "$wsrc" -o "$out/$wnm.obj" 2>&1); then
             echo "FAIL windows/$warch $wnm (compile: $msg)"; fails=$((fails + 1)); continue

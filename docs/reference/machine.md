@@ -821,6 +821,40 @@ through the table you patched — is in [hooks.md](hooks.md) § 3. `lib/machine_
 smallest complete example, `src/machine_x86_64.mc`'s Win64 half the oldest one, and
 `lib/machine_arm64_float.mc` the one that adds a register file.
 
+### The opcode bands
+
+A derived machine that adds instructions the bundled one does not have gives them opcode numbers
+of their own, above every `I_*` / `X_*` the core uses (52 today). Those numbers are **shared by
+every machine derived from the same table**, so two modules that pick the same base cannot be
+loaded into one compiler — and because derivation is ordered and last-wins, which of the two loses
+depends on the registration order.
+
+Two rules, and a registry. Both are obligations of a derived machine:
+
+1. **Bound the band at both ends.** Every slot that dispatches on `ins_op` — the encoder, the dump,
+   `MTASK_INS_SIZE`, `MTASK_RELOC_KIND`, `MTASK_RELOC_OFF`, a store-rewrite whitelist — asks
+   `op >= BASE && op < MAXOP` and delegates to the pristine table otherwise. `op >= BASE` alone
+   claims every opcode ANOTHER module put above it. Write the test once, as one predicate the
+   slots share, so they cannot disagree about where the band ends.
+2. **Take a free base from the registry below**, one band per module per architecture, and record
+   it there in the pull request that adds it.
+
+| band | arm64 | x86-64 |
+|---|---|---|
+| 0..99 | the bundled machine (`I_*`, 0..52) | the bundled machine (`X_*`, 0..52) |
+| 100..199 | `<float>` — `lib/machine_arm64_float.mc`, 100..141 | `<float>` — `lib/machine_x86_64_float.mc`, 100..133 |
+| 200..299 | `<i128>`/`<u128>` — `lib/i128.mc`, 200..209 | `<i128>`/`<u128>` — `lib/i128.mc`, 200..203 |
+| 300..399 | `<f16>` — `lib/f16.mc`, 300..303 | — |
+| 400..499 | — | `examples/avx` — `examples/avx/avx.mc`, 400..403 |
+| 500.. | free | free |
+
+A module-private RELOCATION kind is a separate space and has its own convention
+(`examples/kernel/machine_riscv64.mc` uses 32 and 33).
+
+`tests/wide/035-coexist.mc` is the gate: `<float>`, `<f16>` and `<i128>`/`<u128>` in one compiler,
+built in both registration orders (`lib/mc_float_wide.mc`, `lib/mc_wide_float.mc`), producing the
+same object and the same output.
+
 ## 4. Why there is no `#machine`
 
 The directive that would have made the table teachable from a source file —

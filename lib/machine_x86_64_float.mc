@@ -29,7 +29,10 @@
 #define XF_ARGS_WIN  4
 #define XF_DEPTH_MAX 5
 
-// ---- the SSE2 opcodes, above every X_* the bundled machine uses ----
+// ---- the SSE2 opcodes: the x86-64 band 100..199 ----
+// Bounded at both ends, like every derived machine's band: `op >= FX_BASE`
+// alone would claim the opcodes of whatever module derived from this table or
+// was derived from by it (docs/reference/machine.md § 3, the registry).
 #define FX_BASE     100
 #define FX_ADD_D    100
 #define FX_SUB_D    101
@@ -65,7 +68,7 @@
 #define FX_ST_D     131               // movsd [m], xmm
 #define FX_LD_S     132               // movss xmm, [m]
 #define FX_ST_S     133
-#define FX_MAXOP    134
+#define FX_MAXOP    134               // one past the last: the band ends here
 
 // one row per opcode: form, REX.W, opcode (0x1NN = a 0x0F escape), prefix, and
 // the letters the dump uses for rd and rn. x86_put's own five-column descriptor
@@ -672,9 +675,12 @@ void fx_jnz(i64 d, i64 l) {
 }
 
 // ---- encoding, sizing and the dump ----
+// The only test of the band, so the four slots cannot disagree about it.
+i64 fx_mine(i64 op) { return op >= FX_BASE && op < FX_MAXOP; }
+
 void fx_put(uptr e, i64 pc, uptr lab, uptr o) {
     i64 op = ins_op(e);
-    if (op < FX_BASE) { callp(fx_of(MTASK_ENCODE), e, pc, lab, o); return; }
+    if (!fx_mine(op)) { callp(fx_of(MTASK_ENCODE), e, pc, lab, o); return; }
     i64 i = op - FX_BASE;
     i64 f = fx_form_at(i);
     i64 pre = fx_pre_at(i);
@@ -689,14 +695,14 @@ void fx_put(uptr e, i64 pc, uptr lab, uptr o) {
 }
 
 i64 fx_ins_size(uptr e) {
-    if (ins_op(e) < FX_BASE) return callp(fx_of(MTASK_INS_SIZE), e);
+    if (!fx_mine(ins_op(e))) return callp(fx_of(MTASK_INS_SIZE), e);
     set_buf_len(fx_tmp, 0);
     fx_put(e, 0, 0, fx_tmp);
     return buf_len(fx_tmp);
 }
 
 i64 fx_reloc_kind(uptr e) {
-    if (ins_op(e) >= FX_BASE) return 0 - 1;
+    if (fx_mine(ins_op(e))) return 0 - 1;
     return callp(fx_of(MTASK_RELOC_KIND), e);
 }
 
@@ -708,7 +714,7 @@ void fx_dreg(i64 k, i64 r) {
 
 void fx_dump(uptr in) {
     i64 op = ins_op(in);
-    if (op < FX_BASE) { callp(fx_of(MTASK_DUMP), in); return; }
+    if (!fx_mine(op)) { callp(fx_of(MTASK_DUMP), in); return; }
     i64 i = op - FX_BASE;
     i64 f = fx_form_at(i);
     out_str(1, "  ");

@@ -30,11 +30,16 @@
 
 i64 ty_f16 = 0;
 
-#define HI_BASE    160
-#define HI_CVT_SH  160                // fcvt s, h
-#define HI_CVT_HS  161                // fcvt h, s
-#define HI_LDR_H   162
-#define HI_STR_H   163
+// The arm64 band 300..399 (docs/reference/machine.md § 3 is the registry). It
+// was 160, which is INSIDE <float>'s 100..199 -- harmless only because the four
+// slots below were already bounded at both ends, which is now the rule for every
+// derived machine and not this module's private caution.
+#define HI_BASE    300
+#define HI_CVT_SH  300                // fcvt s, h
+#define HI_CVT_HS  301                // fcvt h, s
+#define HI_LDR_H   302
+#define HI_STR_H   303
+#define HI_MAXOP   304                // one past the last: the band ends here
 
 u32 hi_base[] = { 0x1EE24000, 0x1E23C000, 0x7D400000, 0x7D000000 };
 uptr hi_name[] = { "fcvt", "fcvt", "ldr", "str" };
@@ -109,19 +114,22 @@ void hi_stf(i64 d, i64 na) {
     em(HI_STR_H, rv, rn, 0);
 }
 
+// The only test of the band, so the four slots cannot disagree about it.
+i64 hi_mine(i64 op) { return op >= HI_BASE && op < HI_MAXOP; }
+
 i64 hi_ins_size(uptr e) {
-    if (ins_op(e) >= HI_BASE && ins_op(e) < HI_BASE + 4) return 4;
+    if (hi_mine(ins_op(e))) return 4;
     return callp(hi_of(MTASK_INS_SIZE), e);
 }
 
 i64 hi_reloc_kind(uptr e) {
-    if (ins_op(e) >= HI_BASE && ins_op(e) < HI_BASE + 4) return 0 - 1;
+    if (hi_mine(ins_op(e))) return 0 - 1;
     return callp(hi_of(MTASK_RELOC_KIND), e);
 }
 
 void hi_encode(uptr e, i64 pc, uptr lab, uptr b) {
     i64 op = ins_op(e);
-    if (op < HI_BASE || op >= HI_BASE + 4) { callp(hi_of(MTASK_ENCODE), e, pc, lab, b); return; }
+    if (!hi_mine(op)) { callp(hi_of(MTASK_ENCODE), e, pc, lab, b); return; }
     i64 i = op - HI_BASE;
     i64 w = hi_base_at(i);
     if (hi_mem_at(i)) {
@@ -135,7 +143,7 @@ void hi_encode(uptr e, i64 pc, uptr lab, uptr b) {
 
 void hi_dump(uptr in) {
     i64 op = ins_op(in);
-    if (op < HI_BASE || op >= HI_BASE + 4) { callp(hi_of(MTASK_DUMP), in); return; }
+    if (!hi_mine(op)) { callp(hi_of(MTASK_DUMP), in); return; }
     i64 i = op - HI_BASE;
     out_str(1, "  ");
     out_str(1, hi_name_at(i));

@@ -7265,6 +7265,80 @@ agents (`.claude/agents/`): `stage0-dev` (C23), `mc-dev` (`.mc` code), `reviewer
   `docs/reference/diagnostics.md` (`unknown condition`),
   `docs/guide/97-a-new-architecture.md` ("Five rules earn their keep": ten codes, map them all,
   refuse the rest).
+- Derived machines bound their opcode ranges and take distinct bases (0.16.x; reported by the teko
+  consumer with two six-line reproducers): **`<float>` and `<i128>` could not coexist in one taught
+  compiler.** The diff against `main` for `src/`, `stage0/` and `tests/golden/` is **empty** -- the
+  fix is entirely in `lib/` and `examples/`, and since M52 step B cut every non-`src/` row out of
+  the blob, **`src/bundle_data.mc` does not move either and not one of the ten goldens is
+  rewritten**.
+  A derived machine gives its new instructions opcode numbers above every `I_*`/`X_*` the core
+  uses, and those numbers are shared by every machine derived from the same table. Each of the five
+  claimants asked `op >= BASE` with **no upper bound**, and two of them had the same base.
+  **Reproduced before anything was written**, with `build/mc1` and `origin/main`'s `lib/`:
+  * **arm64** -- `lib/machine_arm64_float.mc` claimed `>= 100` and `lib/i128.mc`'s wide band starts
+    at 200, so with `i128_init` registered BEFORE `machine_arm64_float_init` the float table
+    encoded `WI_UMULH` (205) and `i128 y = x * 3i` died with **SIGILL, exit 132**; the other order
+    answered 15. The two orders as compiler entry points differed by nothing else.
+  * **x86-64** -- `lib/machine_x86_64_float.mc` and `lib/i128.mc`'s x86 half were **both based at
+    100**: `XW_ADC..XW_SETCC` (100..103) are byte for byte `FX_ADD_D..FX_DIV_D`. Float first ->
+    `mc: i128/u128 x86: no dump for a wide opcode` on a plain `f64 b = a + a`; wide first -> the
+    wide multiply came out as **`mulsd xmm1, xmm0`**, 2 of them and 0 `mul r`, silently wrong with
+    no diagnostic at all.
+  * **The fix is two rules, written into `docs/reference/machine.md` § 3 as obligations of a
+    derived machine.** (1) Bound the band at BOTH ends -- one predicate the encoder, the dump,
+    `MTASK_INS_SIZE` and `MTASK_RELOC_*` share (`fa_mine`, `fx_mine`, `wi_mine`, `xw_mine`,
+    `hi_mine`, `av_mine`), so the slots cannot disagree about where it ends and a foreign opcode
+    always reaches the pristine table. (2) Take a free base from a **registry**, one band per
+    module per architecture: 0..99 the bundled machine (`I_*`/`X_*`, 0..52), **100..199 `<float>`**
+    (arm64 100..141, x86 100..133), **200..299 `<i128>`/`<u128>`** (arm64 200..209, x86 **100 ->
+    200**..203), **300..399 `<f16>`** (arm64 **160 -> 300**..303, out of `<float>`'s band, where it
+    was harmless only because those four slots were already bounded) and **400..499
+    `examples/avx`** (**240 -> 400**..403, out of `<i128>`'s).
+  * **The gate** is `tests/wide/035-coexist.mc` plus two entry points that differ only in the
+    registration ORDER, `lib/mc_float_wide.mc` and `lib/mc_wide_float.mc` (both carrying `<float>`
+    + its two machines, `<f16>` and `<i128>`/`<u128>`). `scripts/check-wide.sh` **+89/-4**: both
+    compilers run it (exit 0, `15 1 0 7 4616189618054758400 1073741824`), the two orders produce
+    the **same object** (`cmp`), the arm64 dump carries 2 `umulh` AND 2 float ops in each order,
+    the x86_64 and x86_64-win dumps carry `mul` AND `addsd` in each order with no
+    `no dump for a wide opcode` anywhere, and `tests/wide/031-f16.mc` still gives `fcvt h16, s16`
+    through the same compilers (the third band, arm64-only). It runs on **macos/aarch64,
+    linux/aarch64 and linux/x86_64** (Docker, `wide_linux`) and is cross-compiled and LINKED for
+    **windows/aarch64 and windows/x86_64**, 5/5 wide objects each. **Teeth measured**: with
+    `origin/main`'s `lib/` restored and the same `build/mc1`, the wide-first compiler SIGILLs
+    (exit 132) and the float-first one dies on the x86 dump.
+  * **Two things the fixture cannot carry, both pre-existing and reported rather than fixed.**
+    (a) `<float>` and `<i128>` each keep their own AAPCS64/SysV argument counters and each handles
+    a type it does NOT own itself instead of delegating it, so with both loaded a float or a
+    16-byte value crossing a FUNCTION BOUNDARY is read out of the wrong register file -- measured
+    both ways (`str x0` where `str d0` belongs with i128 on top; a 16-byte parameter in one
+    register instead of an even pair with float on top). It is a gap in the machine CONTRACT
+    (`MTASK_PARAM` has no way for one machine to tell the next how many registers it consumed),
+    not in a band, and the test says so and stays inside it. (b) `<f16>` registers its machine on
+    `arm64` alone but registers its four intrinsics unconditionally, so an f16 program compiled
+    for x86-64 emits `HI_*` opcodes no x86 machine knows -- `mc: x86 instruction with no dump`,
+    and on the encode path the bundled `x86_put` reads its descriptor table out of bounds instead
+    of refusing an opcode it does not own. `lib/f16.mc`'s own header already describes the
+    fallback (`<f16_rt>`) that does not exist.
+  -- cost, the numstat against `main` for `lib/` and `examples/`: `lib/i128.mc` +30/-14,
+  `lib/machine_arm64_float.mc` +17/-6, `lib/f16.mc` +17/-9, `lib/machine_x86_64_float.mc` +12/-6,
+  `examples/avx/avx.mc` +17/-10 = **93 added lines, 45 removed**, of which **about 35 are code**;
+  plus the three new files (`lib/mc_float_wide.mc` 26, `lib/mc_wide_float.mc` 22,
+  `tests/wide/035-coexist.mc` 77). Nothing in `src/`, `stage0/` or `tests/golden/`.
+  **The llvm-mc sweeps, per machine touched** (`llvm-mc -triple=...`, 0 mismatches everywhere):
+  `<float>` arm64 (mach-o) **61**, aarch64 (elf) **70**, x86_64 (elf) **311**, x86_64 (coff)
+  **293** (`check-float`); `<i128>` SysV/Win64 **139/147**, `<u128>` **144/151**, the wide ABI
+  **122/141**, the narrow cast **102/103**, the coexistence program **130/131** (`check-wide`);
+  the coexistence program on arm64 **43**; `<f16>` on arm64 through the coexistence compiler
+  **63** (`fcvt h16, s16`, `ldr h16`, `str h17` among them); `examples/avx` **11 distinct VEX
+  instructions** (`check-wide`) and **79** over its whole object after the base move.
+  `make bundle` re-run before bootstrapping: 60 files, raw 1253365 -> LZ 568311, blob 569085 B --
+  **byte for byte the checked-in `src/bundle_data.mc`**, which is what makes the goldens stand.
+  `make check` green end to end (**RC 0, zero FAIL**), `make check-linux-host` RC 0 over all four
+  cells, and `check-wide` / `check-float` green on every leg with the new cases.
+  Docs: `docs/reference/machine.md` § 3 (a new "The opcode bands": the two rules and the registry
+  table), `docs/guide/96-a-new-primitive.md` § 3 (the recipe -- pick a free base, bound the band,
+  with the predicate spelled out), `docs/reference/bundle.md` (`<float>`, `<f16>` and
+  `<i128>`/`<u128>` coexist in either order, with the two entry points and the test named).
 - Next: the **site + registry server, M47 S4-S6**, in
   `minicompiler/mc-registry`; then **M42 step 2** (PE `--exe`, CI-gated on the Windows runners).
   **M46** only on the owner's request; **M43 Layer 2** after 1.0.0. M13 and M18 stay in the backlog

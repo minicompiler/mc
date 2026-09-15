@@ -245,6 +245,13 @@ Three modules the core has never heard of, each with an empty `git diff src/`.
 | `<f16>` | `lib/f16.mc` | half precision as a STORAGE type, on top of `<float>`'s machine: four slots and two `fcvt`s, because `<float>` dispatches on the KIND and not on the id. AArch64 only |
 | `<mc_f16>` | `lib/mc_f16.mc` | `<float>` plus `<f16>`, in one compiler |
 
+`<float>`, `<f16>` and `<i128>`/`<u128>` **coexist in one compiler, in either registration order**.
+Each derived machine claims a band of the opcode space they share -- `<float>` 100..199, `<i128>`
+200..299, `<f16>` 300..399 -- and bounds it at both ends, so no module encodes another's
+instructions ([machine.md](machine.md) § 3 is the registry). `lib/mc_float_wide.mc` and
+`lib/mc_wide_float.mc` are the two orders as compiler entry points, and
+`tests/wide/035-coexist.mc` is the program: same stdout, same exit code, same object from both.
+
 Casting a narrow integer to `i128`/`u128` **sign-extends a signed source and
 zero-extends anything else**, keyed on `type_signed(src)` and not on the id — so
 `(i128)(i32) -5` and `(u128)(i32) -5` both fill the high half with ones (C

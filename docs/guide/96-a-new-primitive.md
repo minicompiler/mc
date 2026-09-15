@@ -120,6 +120,28 @@ separately.
 The trap, and it is the only one: delegate through the **pristine** copy. A wrapper that reads the
 table it patched calls itself.
 
+If your instructions need opcodes the bundled machine does not have, take a **free band** from the
+registry in [../reference/machine.md](../reference/machine.md) § 3 -- one per module per
+architecture -- and **bound it at both ends**, in one predicate the encoder, the dump,
+`MTASK_INS_SIZE` and `MTASK_RELOC_*` all share:
+
+```
+#define MY_BASE   500                    // a band nobody else claims
+#define MY_MAXOP  504                    // one past the last
+
+i64 my_mine(i64 op) { return op >= MY_BASE && op < MY_MAXOP; }
+
+void my_encode(uptr e, i64 pc, uptr lab, uptr b) {
+    if (!my_mine(ins_op(e))) { callp(ld64(my_orig + MTASK_ENCODE * 8), e, pc, lab, b); return; }
+    // ... your bytes ...
+}
+```
+
+`op >= MY_BASE` alone is the bug: the opcode space is shared by every machine derived from the
+same table, so an unbounded claim encodes the opcodes of whatever module registered above you --
+and which module loses depends on the registration order. `tests/wide/035-coexist.mc` is what that
+costs when it is got wrong, and what it looks like when it is right.
+
 For an operation the hardware has but the core's operator set does not — `sqrt`, a bit reversal,
 one AVX instruction — `intrinsic(name, nargs, ty, &f)` gives you a *named call* whose arguments
 arrive already lowered to depths, with `walk_depth_type` filled in, and whose handler emits

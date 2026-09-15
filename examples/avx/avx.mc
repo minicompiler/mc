@@ -35,12 +35,16 @@
 
 i64 ty_v8f32 = 0;
 
-#define AV_BASE   240
-#define AV_ADDPS  240                 // vaddps ymm, ymm, ymm     VEX.256.0F.WIG 58 /r
-#define AV_MULPS  241                 // vmulps                   ...             59 /r
-#define AV_LOADU  242                 // vmovups ymm, [r]         VEX.256.0F.WIG 10 /r
-#define AV_STOREU 243                 // vmovups [r], ymm         ...             11 /r
-#define AV_MAXOP  244
+// The x86-64 band 400..499 (docs/reference/machine.md § 3 is the registry of
+// bands). It was 240, inside <i128>'s 200..299. The band is bounded at BOTH
+// ends below, which is the rule for every derived machine: `op >= AV_BASE` alone
+// claims whatever a module registered after this one put above it.
+#define AV_BASE   400
+#define AV_ADDPS  400                 // vaddps ymm, ymm, ymm     VEX.256.0F.WIG 58 /r
+#define AV_MULPS  401                 // vmulps                   ...             59 /r
+#define AV_LOADU  402                 // vmovups ymm, [r]         VEX.256.0F.WIG 10 /r
+#define AV_STOREU 403                 // vmovups [r], ymm         ...             11 /r
+#define AV_MAXOP  404                 // one past the last: the band ends here
 
 i64  av_opc[]  = { 0x58, 0x59, 0x10, 0x11 };
 uptr av_name[] = { "vaddps", "vmulps", "vmovups", "vmovups" };
@@ -112,9 +116,12 @@ void av_vex(uptr o, i64 reg, i64 rm, i64 vvvv) {
     buf_u8(o, (((~vvvv) & 0xf) << 3) | 4);
 }
 
+// The only test of the band, so the four slots cannot disagree about it.
+i64 av_mine(i64 op) { return op >= AV_BASE && op < AV_MAXOP; }
+
 void av_put(uptr e, i64 pc, uptr lab, uptr o) {
     i64 op = ins_op(e);
-    if (op < AV_BASE) { callp(av_of(MTASK_ENCODE), e, pc, lab, o); return; }
+    if (!av_mine(op)) { callp(av_of(MTASK_ENCODE), e, pc, lab, o); return; }
     i64 i = op - AV_BASE;
     i64 kind = av_mem_at(i);
     if (kind == 0) {                              // vaddps rd, rn, rm
@@ -129,20 +136,20 @@ void av_put(uptr e, i64 pc, uptr lab, uptr o) {
 }
 
 i64 av_ins_size(uptr e) {
-    if (ins_op(e) < AV_BASE) return callp(av_of(MTASK_INS_SIZE), e);
+    if (!av_mine(ins_op(e))) return callp(av_of(MTASK_INS_SIZE), e);
     set_buf_len(x86_tmp, 0);
     av_put(e, 0, 0, x86_tmp);
     return buf_len(x86_tmp);
 }
 
 i64 av_reloc_kind(uptr e) {
-    if (ins_op(e) >= AV_BASE) return 0 - 1;
+    if (av_mine(ins_op(e))) return 0 - 1;
     return callp(av_of(MTASK_RELOC_KIND), e);
 }
 
 void av_dump(uptr in) {
     i64 op = ins_op(in);
-    if (op < AV_BASE) { callp(av_of(MTASK_DUMP), in); return; }
+    if (!av_mine(op)) { callp(av_of(MTASK_DUMP), in); return; }
     i64 i = op - AV_BASE;
     i64 kind = av_mem_at(i);
     out_str(1, "  ");
