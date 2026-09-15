@@ -644,7 +644,7 @@ jobs:
               echo "for teko's verdict and clears the flag when it says \`ok\`. To promote by hand:"
               echo
               echo '```sh'
-              echo "gh release edit $tag --prerelease=false"
+              echo "gh release edit $tag --prerelease=false --latest"
               echo '```'
             fi
           } > "$RUNNER_TEMP/body.md"

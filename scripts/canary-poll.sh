@@ -37,7 +37,7 @@
 #
 # Exit 0: the release was promoted (verdict `ok`, or an advisory timeout).
 # Exit 1: it was not (verdict `fail`, or a timeout while required). Every asset
-#         stays attached and `gh release edit "$TAG" --prerelease=false`
+#         stays attached and `gh release edit "$TAG" --prerelease=false --latest`
 #         promotes it by hand; a rerun of the job alone is the retry.
 set -eu
 
@@ -102,16 +102,16 @@ echo "canary: up to ${timeout}s, every ${interval}s, required=${CANARY_REQUIRED:
 
 promote() {
     if [ -n "${DRY_RUN:-}" ]; then
-        echo "canary: would promote -- gh release edit $tag --prerelease=false"
+        echo "canary: would promote -- gh release edit $tag --prerelease=false --latest"
     else
-        gh release edit "$tag" --prerelease=false
+        gh release edit "$tag" --prerelease=false --latest
         echo "canary: $tag is no longer a pre-release"
     fi
 }
 
 byhand() {
     echo "canary: $tag stays a pre-release with every asset attached."
-    echo "canary: promote by hand with: gh release edit $tag --prerelease=false"
+    echo "canary: promote by hand with: gh release edit $tag --prerelease=false --latest"
 }
 
 waited=0
