@@ -342,17 +342,20 @@ What is actually compiled is the row `mc.lock` carries — beside `mc.toml`, mac
 concrete. A `[deps]` constraint the lock cannot satisfy is `mc.lock is stale`, exit 2 (re-run
 `mc pkg sync --yes`).
 
-`[deps]` is what turns on `#include <pack/file.mc>`; with no `[deps]` section `mc build` reads no
-lock at all and every `<name>` resolves exactly as it did before packages existed.
+`[deps]` is what turns on `#include <pack/file.mc>`; with **neither** `[deps]` nor `[tools]`
+`mc build` reads no lock at all and every `<name>` resolves exactly as it did before packages
+existed.
 
 `[tools]` has exactly `[deps]`' shape and is resolved in exactly the same MVS graph — a tool's own
 `[deps]` are libraries — but what it names is a PROGRAM, not a tree the compiler reads:
 `mc pkg sync` writes it into the lock with `kind = "tool"`, and `mc build` registers no include
 root for it, opens nothing under it and emits the same bytes it would emit with the table deleted.
-A name may be in one table or the other and never in both, and the registry says which it is: a
-library named under `[tools]` is `net: is a library: name it under [deps]`, a tool named under
-`[deps]` the mirror of that, both exit 1. Installing and running one is `mc tool`, which does not
-exist yet.
+What it does read is the **lock**, which is the answer to both tables: a project whose only
+package table is `[tools]` needs one, and its constraint is checked at its own position like a
+`[deps]` one. A name may be in one table or the other and never in both, and the registry says
+which it is: a library named under `[tools]` is `net: is a library: name it under [deps]`, a tool
+named under `[deps]` the mirror of that, both exit 1. Installing and running one is `mc tool`
+([tools.md](tools.md)), and `[replace]` does not apply to it.
 
 `[registry].url` is where `mc pkg` looks a name up, and it takes a URL **or a directory**: a
 private registry is a `git clone` of a tap plus one line here, at no cost in code. `--registry` on

@@ -533,6 +533,31 @@ void tool_check_capacity(i64 n, uptr perms) {
         dep_die("too many env permissions for the box", tm_cat(tm_num_str(nenv), " (at most 8)"), 0);
 }
 
+// `[replace]` is a build-side override and `mc tool` ignores it (see
+// pkg_replace_path). Said once per replaced name in the build list, above the
+// plan, so a developer who pointed a name at a local tree is told what the
+// install is really doing rather than being handed a registry tool in silence
+// -- and THEN the road is switched off, before the plan, the lock writer or the
+// staging can consult the table. Idempotent: a project with two tools calls it
+// twice and the second call has nothing to say.
+void tool_ignore_replace() {
+    if (ld64(pk_state() + PKS_NOREPL)) return;
+    i64 i = 0;
+    while (i < pk_nsel()) {
+        uptr name = ld64(pk_sel(i) + SL_NAME);
+        uptr p = toml_get(tm_cat("replace.", name));
+        if (p != 0) {
+            out_str(1, "note: [replace] ");
+            out_str(1, name);
+            out_str(1, " = \"");
+            out_str(1, p);
+            out_str(1, "\" is ignored by mc tool: a tool is installed from the registry\n");
+        }
+        i = i + 1;
+    }
+    st64(pk_state() + PKS_NOREPL, 1);
+}
+
 // ---- install one tool by name (§ 3.1) ----
 i64 tool_install(uptr name, uptr ver) {
     pkg_require(name, ver);
@@ -543,6 +568,7 @@ i64 tool_install(uptr name, uptr ver) {
     if (!str_eq(ld64(pk_vr(r) + VR_KIND), "tool"))
         pkg_die1(name, "is a library, not a tool: add it to a project's [deps]");
     pkg_check_kinds();
+    tool_ignore_replace();
     // capacity pre-flight: refuse a set the box can never run BEFORE the user
     // is asked to accept it (finding 4)
     tool_check_capacity(ld64(pk_vr(r) + VR_PERMN), ld64(pk_vr(r) + VR_PERMP));

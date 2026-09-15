@@ -1593,9 +1593,9 @@ void dep_check_dep_mc(i64 pk) {
 // Runs for BOTH halves of `mc build` (the taught compiler and the entry), which
 // is why it is in drv_parse and not in drv_apply_config: a compiler-module
 // package has to reach the first compilation and a library package the second.
-// With no [deps] it returns before reading anything, and the lexer's root table
-// stays empty -- so a project without dependencies is byte for byte what it was
-// (D24).
+// With neither [deps] nor [tools] it returns before reading anything, and the
+// lexer's root table stays empty -- so a project with no dependencies at all is
+// byte for byte what it was (D24).
 void deps_apply(uptr cfg) {
     uptr s = dp_state();
     if (ld64(s + DP_APPLIED)) return;
@@ -1616,13 +1616,27 @@ void deps_apply(uptr cfg) {
         k = opt_val(toml_path_at(i), "replace.");
         if (k != 0) dep_check_name("replace.", k);
         // M48 § 1.3: `[tools]` is `[deps]`' shape and a tool is resolved in the
-        // same MVS graph -- by `mc pkg sync`. A BUILD asks nothing of it: no
-        // root, no tree, no lock row consulted, so a project that declares one
-        // and never runs `mc pkg` still builds, and one that has both emits the
-        // same bytes it emitted before the `[tools]` line was written (D24).
-        // The name is still checked at its own position, as `[replace]`'s is.
+        // same MVS graph. A BUILD still asks nothing of a tool's TREE -- no
+        // root, no hash, no compilation: step 4 skips a tool row whole, and a
+        // project that has both emits the same bytes it emitted before the
+        // `[tools]` line was written. But the lock is the answer to BOTH
+        // tables, so a row here counts towards `nd`: a project whose only
+        // package table is `[tools]` HAS dependencies, and `mc tool install
+        // DIR` reads its tools through exactly this road (it used to return
+        // above and report `no tools required by this project`).
+        // The constraint is checked HERE and not in step 3, which compares
+        // against a lock row: a tool's version comes from the lock, so the only
+        // thing to say about `^0.12` is that it is not a constraint -- and it
+        // has to be said at the key's own position, before anything is fetched,
+        // which is the same ver_parse `mc pkg sync` runs (pkg_read_deps).
         k = opt_val(toml_path_at(i), "tools.");
-        if (k != 0) dep_check_name("tools.", k);
+        if (k != 0) {
+            dep_check_name("tools.", k);
+            u8 tvc[VC_SIZE];
+            if (!ver_parse(toml_val_at(i), tvc))
+                toml_err_key_code(tm_cat("tools.", k), ver_bad_msg(), 2);
+            nd = nd + 1;
+        }
         i = i + 1;
     }
     if (nd == 0) return;

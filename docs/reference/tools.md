@@ -24,6 +24,14 @@ mc tool box-args <mc.toml>         (hidden) the derived sandbox flags, one per l
 The flags — `--yes`, `--registry`, `--libs-dir`, `--bin-dir`, `--workspace` — are in
 [cli.md](cli.md) § 3g.
 
+`mc tool install [DIR]` reads the project's **lock**, not its `[tools]` table: the version
+installed is the one `mc pkg sync` pinned. A project whose only package table is `[tools]` is a
+project WITH dependencies — the lock is read for it exactly as it is for a `[deps]` one, and
+without one the answer is `mc.lock is stale` and its `run:` line, not silence. The constraint in
+`[tools]` is still checked at its own `file:line:col` before anything is read or fetched, with
+the same message `[deps]` gets (`a version constraint must be X.Y.Z, =X.Y.Z, ~X.Y.Z, ^X.Y.Z,
+>=X.Y.Z, or *`, exit 2).
+
 ## `install`, step by step
 
 1. **Resolve.** The tool is the root of the same MVS graph `mc pkg` uses; its own `[deps]` are
@@ -38,6 +46,21 @@ The flags — `--yes`, `--registry`, `--libs-dir`, `--bin-dir`, `--workspace` �
    has; the tool it produces is what runs boxed later.
 6. **Record and launch.** The install manifest `~/.mc/tools/<name>/v<ver>.toml` is written last
    ([toml.md](toml.md) § `[tool]`), and a one-line launcher goes in `~/.mc/bin/<bin>` (`--bin-dir`).
+
+### `[replace]` is not consulted
+
+`[replace] name = "../tree"` ([packages.md](packages.md) § 7) points a name at a local tree for
+the **build** to compile. `mc tool` ignores it, for the tool and for the libraries staged beside
+it alike: a tool is not compiled into your program, it is a program installed from the registry at
+the version the lock pins, and `mc build` already skips every tool row before `[replace]` is
+consulted. A replaced name in the build list is announced once, above the plan:
+
+```text
+note: [replace] hello_tool = "../toy" is ignored by mc tool: a tool is installed from the registry
+```
+
+To develop a tool against a local tree, build it where it lives (`mc build <tree>`) and run the
+binary directly; the installed copy is always the registry's.
 
 There is no `--unconfined` (the M48 amendment): the plan, the table and the acceptance are the same
 on every host. On a host without a sandbox the plan adds one line —

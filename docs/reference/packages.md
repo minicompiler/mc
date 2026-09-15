@@ -483,6 +483,11 @@ replaced geo: ../geo -- not pinned by mc.lock
 
 Go's `go.sum` omits path-replaced modules for the same reason.
 
+**A tool is never replaced.** `[replace]` is about a tree the build compiles, and `mc build` skips
+every `[tools]` row before the table is consulted; `mc tool` ignores it too and says so once per
+name (`note: [replace] <name> = "<path>" is ignored by mc tool: a tool is installed from the
+registry`). See [tools.md](tools.md) § `[replace]` is not consulted.
+
 A replaced name also does **not** have to be fetched at its resolved location: the local tree is
 what the build compiles, so the "is not fetched" requirement is skipped for it (a name in `[deps]`
 with **no** `[replace]` is still fetched and hashed as before). The local tree must still be a real
