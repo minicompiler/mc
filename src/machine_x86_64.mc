@@ -46,6 +46,13 @@
 
 #define XC_E   4                      // condition codes: the low nibble of setcc/jcc
 #define XC_NE  5
+// Contract version 6, the unsigned orderings: b(2) ae(3) be(6) a(7). x86
+// condition codes come in negation pairs on the low bit of tttn, so `cc ^ 1`
+// inverts these exactly as it inverts e/ne, l/ge and le/g.
+#define XC_B   2
+#define XC_AE  3
+#define XC_BE  6
+#define XC_A   7
 
 // M49 (contract version 5): the five registers the System V AND the Win64 ABI
 // both leave to the callee -- rbx, r12, r13, r14, r15. rdi and rsi are
@@ -219,7 +226,8 @@ uptr x86_args    = 0;                 // the table in force: set by MTASK_PROLOG
 i64  x86_nargreg = 0;                 // how many arguments travel in registers
 i64  x86_shadow  = 0;                 // bytes the caller reserves below the args
 
-i64 x86_cond[] = { 4, 5, 12, 14, 15, 13 };       // MCOND_EQ NE LT LE GT GE, signed
+i64 x86_cond[] = { 4, 5, 12, 14, 15, 13,        // MCOND_EQ NE LT LE GT GE, signed
+                   2, 6, 7, 3 };               // MCOND_ULT ULE UGT UGE
 i64 x86_binop[] = { X_ADD, X_SUB, X_IMUL, 0, 0, 0, 0,   // MOP_*; the four divisions
                     X_AND, X_OR, X_XOR, X_SHL, X_SHR, X_SAR };   // go to x86_divmod
 i64 x86_memop[] = { X_LD64, X_ST64, X_LD32, X_ST32, X_LD16, X_ST16, X_LD8, X_ST8,
@@ -442,6 +450,7 @@ void x86_bin(i64 op, i64 d, i64 d2) {
 }
 
 void x86_cmp(i64 cond, i64 d, i64 d2) {
+    if (cond < 0 || cond >= 10) die("unknown condition");   // a code past this contract
     i64 rl = x86_val_reg(d, XREG_S1);
     i64 rr = x86_val_reg(d2, XREG_S2);
     i64 rd = x86_dst_reg(d);
@@ -955,8 +964,12 @@ void xd_mem(i64 base, i64 off) {
 }
 
 uptr xd_cond(i64 c) {
+    if (c == 2)  return "b";
+    if (c == 3)  return "ae";
     if (c == 4)  return "e";
     if (c == 5)  return "ne";
+    if (c == 6)  return "be";
+    if (c == 7)  return "a";
     if (c == 12) return "l";
     if (c == 13) return "ge";
     if (c == 14) return "le";

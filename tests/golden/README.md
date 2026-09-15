@@ -109,3 +109,28 @@ The policy — what a PATCH, a MINOR and a MAJOR may move, and the deprecation l
 [`../../docs/specs/M53.md`](../../docs/specs/M53.md) § 5 (it becomes `docs/reference/hooks.md`
 § 8 in step B). An entry may carry a third column, `deprecated <version> -> <replacement>`, which
 is the only expressible removal; nothing is deprecated today.
+
+## `seed-cmp.txt` — the one known seed divergence (PR #92, 2026-09-15)
+
+`seed-cmp.txt` is one line, a count: `371`. `scripts/check-asm.sh` compares `build/mc0 --dump-asm`
+against `build/mc1 --dump-asm` over `tests/*.mc tests/lib/*.mc src/*.mc`, and since machine
+contract v6 ("unsigned comparisons") that comparison has exactly one allow-listed divergence — the
+frozen C seed compares every integer, `uptr` included, SIGNED, and `mc1` now compares `u64`/`uptr`
+UNSIGNED. The seed cannot be fixed (it is frozen) and will never emit the unsigned condition codes,
+so the 14 translation units that reach `src/lex.mc` or `src/toml.mc` (whose `cp < cend` /
+`tm_p < tm_end` loops are `uptr` compares) differ from `mc1` by one of exactly four single-token
+substitutions on a `cset`/`b.<cond>` line — `ge -> hs`, `lt -> lo`, `gt -> hi`, `le -> ls` — with
+nothing else on the line changed. `scripts/check-asm.sh` validates that EVERY hunk of every such
+diff is one of the four (any other difference still fails the file, as does a substitution outside
+this exact set — which would mean `mc1` emitting an unsigned code where a signed compare belongs,
+or the reverse) and sums the allowed pairs; this file is the recorded total.
+
+The allow-list applies **only** when `MC0` is the frozen seed by name (`mc0`): on the Linux and
+Windows hosts `check-asm.sh` compares two post-fix `.mc` compilers (`mc1l`/`mc2l`, `mc1w`/`mc2w`),
+which must still come out byte for byte identical — any divergence there is a real bug.
+
+To rewrite: run `sh scripts/check-asm.sh`, read the printed `NN seed-signed compares` total (or
+the `FAIL ... got NN` line), and replace the number in this file with `NN`, in the same pull
+request as whatever codegen change moved it — a genuinely new substitution shape, or a change to
+one of the 14 files above the count, is not silently accepted: the total must still match exactly,
+or the file (and therefore the whole run) fails.

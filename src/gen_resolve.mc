@@ -502,7 +502,7 @@ void res_binary(i64 n) {
     res_expr(nd_a(n));
     res_expr(nd_b(n));
     if (op == K_ANDAND || op == K_OROR) { set_res_type(n, TY_I64); return; }
-    if (cmp_cond(op) >= 0) { set_res_type(n, TY_I64); return; }
+    if (cmp_cond(op, 0) >= 0) { set_res_type(n, TY_I64); return; }
     set_res_type(n, res_type(nd_a(n)));
 }
 

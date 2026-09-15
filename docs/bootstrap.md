@@ -482,6 +482,13 @@ file and then by function:
    compiler's own source, not a ceiling for what a library may be (its fixed `MAXFUNCS 2048` once
    pressed `lib/mc_i128.mc` to 2047 and forced `seed-skip` headers; since 2026-09-15 the three
    scripts `check-lex`/`check-ast`/`check-asm` compare 108 files, all under `src/` and `tests/`).
+   One divergence in that oracle is known and allow-listed, dated 2026-09-15 (PR #92): the frozen
+   seed compares every integer, `uptr` included, SIGNED, and since machine contract v6 `mc1`
+   compares `u64`/`uptr` UNSIGNED, so the 14 units reaching `src/lex.mc` or `src/toml.mc` differ
+   from the seed by one of exactly four `cset`/`b.<cond>` substitutions (`ge/lt/gt/le` ->
+   `hs/lo/hi/ls`) and nothing else — `scripts/check-asm.sh` verifies the shape of every such diff
+   rather than skipping the files, and `tests/golden/seed-cmp.txt` records the total (see
+   `tests/golden/README.md`).
 2. Inside the file, comment out/isolate functions (or run `--dump-asm` on a reduced file with
    just the suspect function and its direct dependencies) until the exact function is isolated.
 3. Usual causes of divergence in a self-hosted fixed point (not seen here, but the suspect list

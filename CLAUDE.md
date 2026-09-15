@@ -7134,6 +7134,137 @@ agents (`.claude/agents/`): `stage0-dev` (C23), `mc-dev` (`.mc` code), `reviewer
   `from` names) and § 3 (`[package].version`, what it is not), § 8 (two rows) and § 10 (the
   vendored road), `docs/reference/toml.md` (the `package.version` row and its paragraph),
   `docs/reference/diagnostics.md` (two rows), `docs/specs/M44.md`.
+- Unsigned comparisons (machine contract **version 6**): **a comparison of `u64` or `uptr` is
+  unsigned.** Every integer comparison was signed, so any value with bit 63 set read as negative --
+  reported by the teko consumer with a four-line reproducer, and reproduced on `origin/main`
+  before anything was written: `u64 one = 1; u64 lim = one << 63; u64 m = 2; if (m >= lim)
+  return 3;` exits **3**, and exits **0** after. `stage0/` untouched (2848/3000).
+  * **The rule is `cmp_unsigned` in `src/gen_walk.mc` and it is deliberately NARROWER than C's**:
+    unsigned iff **neither** operand is a signed type, both are `TK_INT`, and one of them is eight
+    bytes wide. Two narrow unsigned operands keep the signed code -- they are zero-filled into
+    their slots by the slot invariant, so a signed 64-bit compare of them is already the unsigned
+    one -- which is what let **all 32 `tests/*.mc` objects come out byte for byte what they were**
+    (`check-obj` 32/32 against the frozen seed). A comparison with an `i64` on either side stays
+    **signed**: C would make the whole expression unsigned and turn a negative `i64` into a huge
+    number, so the signed side wins and no program that works today changes meaning. `TK_FLOAT`,
+    `TK_WIDE` and `TK_OPAQUE` are excluded by the kind test, which is what keeps `<float>`'s `f64`
+    (width 8, not signed) and `<i128>`'s `u128` receiving the six codes their own `MTASK_CMP`
+    knows. On record: a plain integer literal is `i64`, so `u64 x; x >= K` is a *signed* comparison
+    -- correct for every literal below 2^63 -- and a constant with bit 63 set belongs in a `u64`
+    variable, because a cast of a literal folds to a literal and `res_lit_type` types it `i64`
+    again.
+  * **Four codes, no slot and no signature.** `MCOND_ULT ULE UGT UGE` (6..9) after the six;
+    `cmp_conds[]` became ONE table of twelve indexed `i + uns * 6` rather than two of six, so the
+    seed's `MAXGLOBALS` pays for nothing (**268/512, exactly what it was**). `cmp_cond(op, uns)`;
+    `src/gen_resolve.mc`'s "is this token a comparison" asks with `uns = 0`. Every machine maps
+    the four in whatever it already dispatches on -- `cond_arm[]` gains `C_LO C_LS C_HI C_HS`
+    (2/9/8/3, and `hs^1 == lo`, `hi^1 == ls`, so **both M49 peepholes negate them with the same
+    `cc ^ 1`** they always used), `x86_cond[]` gains `2 6 7 3` (`b be a ae`, same low-bit rule),
+    `rv_cmp` swaps `slt` for `sltu`, `avr_cmp` swaps `brlt`/`brge` for `brlo`/`brsh` (the C flag
+    the `cp`/`cpc` chain leaves). **A code above the table is refused** (`unknown condition`) in
+    all four, rather than encoded as the signed twin: the code arrives in an ARGUMENT, so there is
+    no null-slot escape. `lib/backend_arm64.mc` needed nothing -- it re-encodes `I_CSET` from
+    `ins_imm` generically.
+  * **A name collision the change exposed**, and the reason a new core `#define` is surface:
+    `lib/i128.mc` defined its own `XC_B`/`XC_AE` ("the core has no name for them") and
+    `src/machine_x86_64.mc` now does too -- `lib/i128.mc:567: duplicate #define`, `check-wide`
+    35 failures. Fixed by DELETING the module's copies (and `WC_HS`/`WC_LO`, the same duplication
+    on the arm64 side, now `C_HS`/`C_LO`): one definition of each condition code, in the core.
+    A taught module that spells one of the ten new names gets the same error.
+  * **What moved, measured against a `build/mc1` from `origin/main` 4a92c9f.** Every difference in
+    the whole tree is one of exactly three substitutions -- `cset ge -> cset hs`, `cset lt -> cset
+    lo`, `cset gt -> cset hi` -- with no instruction added, none removed and no register moved.
+    `src/mc.mc`: **29 comparisons** (19 + 9 + 1), all of them `uptr` against `uptr`, in
+    `skip_space` (6), `lex_next` (5), `lex_hole` (5), `lex_number` (4), `read_char` (2),
+    `p_take_lit` (2), `lex_string` (2), `lex_directive` (1) and `tm_cur`/`tm_adv` (1 each) -- the
+    lexer's `cp < cend` and TOML's `tm_p < tm_end`. `examples/conc`: **3**, in `chan_check` (2) and
+    `chan_send` (1) -- `v < rt_heap` and `v >= rt_heap + RT_ARENA`, the pointer bounds check that
+    keeps `chan_send(c, 1)` from reaching `rc_inc(1)`. `examples/kernel`: **2**, both in `_start`
+    (`slt -> sltu`), the bss-zeroing and data-copy `uptr p < e` loops; the image stays 3304 bytes
+    and QEMU still prints the exact transcript, exit 0. `examples/api`, `examples/lang`,
+    `examples/desktop` and `examples/avr`: **identical**.
+  * **`check-asm` allow-lists this one divergence and is 108/108** (owner's decision,
+    2026-09-15). It compares `mc0 --dump-asm` against `mc1 --dump-asm` over
+    `tests/*.mc tests/lib/*.mc src/*.mc`, and the frozen seed IS a compiler with this bug -- it
+    cannot be fixed and it will never emit `cset hs`. The 14 files are exactly the translation
+    units that reach `src/lex.mc` or `src/toml.mc` (`astdump`, `lexdump`, `tomldump`, `mc_seed`,
+    `mc.mc` and the eight `mc_<host>[_slim].mc` entries). Rather than reintroduce the retired M38
+    seed-skip mechanism across all 14 (which would retire the seed as the oracle for the whole
+    compiler), `scripts/check-asm.sh` now validates, hunk by hunk, that EVERY line these 14 files
+    differ on is one of the four single-token substitutions (`ge/lt/gt/le -> hs/lo/hi/ls`) with
+    nothing else on the line changed -- any other divergence, on these files or any other, still
+    fails the file. The allow-list applies only when `MC0` is the frozen seed by name; on the
+    Linux/Windows hosts, where `check-asm` compares two post-fix `.mc` compilers, no substitution
+    is ever allowed. The total of allowed pairs -- **371** -- is recorded in
+    `tests/golden/seed-cmp.txt` and asserted against on every run, so a fifteenth affected file or
+    a fifth substitution shape still fails loudly. `check-obj` (32/32), `check-ast` (108/108) and
+    `check-lex` (108/108) are untouched.
+  -- cost: **80 added lines in `src/`, 38 of them neither comment nor blank** (`gen_walk.mc`
+  +48/-4, `machine_arm64.mc` +18/-3, `machine_x86_64.mc` +14/-1, `gen_resolve.mc` +1/-1), plus
+  `lib/i128.mc` +12/-14 and the two example machines +39/-20. **Zero new globals.**
+  New: `tests/mc/102-unsigned-cmp.mc` (the reproducer in its branch form, all six operators at bit
+  63, `uptr`, a `u8` against a `u64`, a both-narrow control, an `i64` control and the mixed
+  `i64`/`u64` rule as a number -- exit 0, stdout `011000111111`; the pre-change compiler AND the
+  frozen seed both exit **3**). It is in `tests/mc/` because the seed COMPILES it and miscompiles
+  it; `scripts/check-mc.sh` needed no change, since its seed block asserts refusal only for a
+  named list. `examples/kernel/tests/sweep.mc` gained `sw_compare_u` (the sweep 285 -> 288 distinct
+  instructions, 0 mismatches, `sltu` in all four) and `examples/avr/tests/sweep_a.mc` checks 29-32
+  over a `u64` with bit 63 set (simavr 1.6 and 1.7 and QEMU: every check agreed; 680 distinct
+  instructions, 0 mismatches).
+  **The llvm-mc sweep of every condition-carrying instruction**, over `tests/mc/102` and
+  `src/mc.mc` on both roads and all five object formats: arm64 (mach-o) **25 distinct, 0
+  mismatches** (`cset hs lo hi ls` and `b.hs`/`b.lo` among them), aarch64 (elf) 8/0, aarch64
+  (coff) 8/0, x86_64 (elf) **21/0** (`setb setbe seta setae`, `jb`, `jae`), x86_64 (coff) 10/0.
+  `make check` green end to end: `test` 32/32, `check-lex` 108/108,
+  `check-ast` 108/108, **`check-asm` 108/108** (the allow-list above), **`check-obj` 32/32
+  identical to the frozen seed**, `check-bundle`,
+  `bootstrap` at a fixed point on BOTH roads (`mc2.o == mc3.o`, `mc2o.o == mc3o.o`, the
+  `--dump-asm` diff between `mc1` and `mc2` **empty** on each, and the cross-road identity
+  `mc2o-plain.o == mc2.o`), `check-surface` 154 ok, `check-opt` 76/76 (the null-slot proof holds:
+  `kernel.bin` and `avr.elf` identical on both roads), `test-exe` 32/32, `check-mc` 23/23,
+  `check-standalone`, `check-parts`, `check-libroot` 11/11, `check-toml` 10/10, `check-build`
+  59/59, `check-pkg` 194/194, `check-tool` 31/31, `check-sysroots`, `check-stubs` 9/9,
+  `check-limits` **17/17 under 90% (globals 268/512, unchanged)**, `check-minimal`, `test-linux`
+  57/57 and `test-linux-x86_64` 53/53, the four `--exe` cells 60/60 + 60/60 + 56/56 + 56/56,
+  `test-windows` 59/59 objects + 59 linked and `test-windows-x86_64` 55/55 + 55 linked,
+  `test-windows-x86_64-exe` 24/24, `check-examples`, `check-lang` 18, `check-conc` 21,
+  `check-desktop`, `check-float` (four sweeps, 0 mismatches), `check-wide`, `check-kernel`
+  (QEMU 11.0.1, exit 0), `check-avr`, `test-sandbox` 73 ok / 0 failed, `check-docs` (209 symbols,
+  50 flags, 35 TOML keys, 10 directives, 52 samples, 576 links), `check-freeze` (420 entries; the
+  ONE line that moved is `machine 5` -> `machine 6`, re-recorded with `--record` in this commit),
+  `site` 100 pages + `check-site` + `check-site-linux` 21/21.
+  `make check-linux-host` **RC 0 over all four cells** (aarch64 and x86_64 x musl and gnu), each
+  after its own `mc2l.o == mc3l.o` and `mc2lo.o == mc3lo.o` and with the cross proof
+  (`mc2l --backend=macho src/mc.mc` byte for byte the macOS `build/mc2.o`) green.
+  **Rebased onto `origin/main` 881b3e7** (PR #91, "a vendored tree at another version is named,
+  never hashed") before the ten goldens were recorded, so the values below are the merged tree's:
+  `mc2.sha256` `f194f5eddfff138fa2067a2306f4ef308e8c5c4d97dcca3e6232f63fc727e09e`, `mc2-opt.sha256`
+  `e18aa97b2ec0801bce6f5da22df0c42e12eb76c366ea71781f0389639980ca45` (both by
+  `scripts/bootstrap.sh`, after the empty `--dump-asm` diff and the two `cmp`s); the four Linux
+  ones recorded by `make check-linux-host` -- `mc2-linux-arm64.sha256`
+  `8a386918cadd6ccd352e0bae8e1f50bf6e53a5c2e878f680beacbed37c646514`,
+  `mc2-linux-arm64-opt.sha256`
+  `e28cb3ad3c7c0c6b599a2215fb8b912fbc0f173459d55d5d1fe0a46ccfa2867a`, `mc2-linux-x86_64.sha256`
+  `4dbc7f485f4e3b04d3bce027569ae8ca7fe197b8b6ddc7b3ec2b30a421df5ef8`,
+  `mc2-linux-x86_64-opt.sha256`
+  `e053b30b1108941f9b6669ada7ec5c1f0947bf593b3ae9a87d5cdfc27c983584`, each recorded in its musl
+  cell and re-verified by the gnu cell of the same architecture; the four Windows ones
+  cross-computed on macOS per `tests/golden/README.md` -- `mc2-windows-arm64.sha256`
+  `7ef023d442a168b56fc450582c0df760f1f7c807c5638fb4f5f6145638b7c7e4` (1487709 B),
+  `mc2-windows-arm64-opt.sha256`
+  `5901bb645f2698807ca2e6954815b2651b160c5729b68e9041161861dab255cd` (1428753 B),
+  `mc2-windows-x86_64.sha256`
+  `6da18efeac6c5a3c372447455794a8e3bdb48ea1fd1797c0e52b89d12b17c78e` (1543749 B),
+  `mc2-windows-x86_64-opt.sha256`
+  `e6b76868a9dea753daaa56bdae26fd32dde3abc772187cc93ad7dbf525af6ed3` (1471341 B), the two plain
+  ones also written byte for byte by `build/mc2`.
+  Docs: `docs/reference/machine.md` (version 6 -- the `Version 5 → 6` paragraph, the ten codes,
+  the rule as a fenced block, the three consequences, the AVR paragraph rewritten),
+  `docs/reference/language.md` (§ Comparisons, new, with the five-row table and the two
+  consequences for a program; the precedence table and the `i32` table row),
+  `docs/reference/diagnostics.md` (`unknown condition`),
+  `docs/guide/97-a-new-architecture.md` ("Five rules earn their keep": ten codes, map them all,
+  refuse the rest).
 - Next: the **site + registry server, M47 S4-S6**, in
   `minicompiler/mc-registry`; then **M42 step 2** (PE `--exe`, CI-gated on the Windows runners).
   **M46** only on the owner's request; **M43 Layer 2** after 1.0.0. M13 and M18 stay in the backlog

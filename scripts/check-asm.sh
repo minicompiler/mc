@@ -28,6 +28,73 @@ done
 # parameters and stage0 keeps MAXPARAMS at 8), was a library. If a future src/-
 # or tests/-only file needs it, reintroduce the mechanism then -- git history
 # has it verbatim.
+#
+# One known divergence is allow-listed, dated 2026-09-15 (PR #92, "unsigned
+# comparisons"): the frozen seed compares every integer, including uptr,
+# SIGNED, and mc1 now compares u64/uptr UNSIGNED (machine contract v6). The
+# seed cannot be fixed -- it is frozen -- and it will never emit the unsigned
+# condition codes, so any source reaching src/lex.mc or src/toml.mc (whose
+# cp < cend / tm_p < tm_end loops are uptr compares) differs from mc1 by
+# exactly one of four single-token substitutions on a `cset`/`b.<cond>` line:
+#   ge -> hs   lt -> lo   gt -> hi   le -> ls
+# (mc0's signed code on the `-` side, mc1's unsigned twin on the `+` side,
+# nothing else on the line changed). This is NOT a blanket normalisation: any
+# other difference on such a file, or a substitution outside this exact set
+# (which would mean mc1 emitting an unsigned code for what should stay a
+# signed compare, or vice versa), still FAILS the file. The total count of
+# allowed substitution pairs is recorded in tests/golden/seed-cmp.txt and
+# compared below -- a change in that number is a change in codegen and must
+# be re-recorded in the same pull request that moves it, the goldens'
+# discipline (see tests/golden/README.md).
+
+# validate_seed_diff DIFFILE -- reads a `diff -u A B` output. Prints the
+# number of allowed substitution pairs on stdout and exits 0 if EVERY hunk is
+# one of the four ge/lt/gt/le -> hs/lo/hi/ls substitutions (context and @@
+# headers ignored); exits 1 and prints nothing else otherwise.
+validate_seed_diff() {
+    awk '
+        BEGIN { pairs = 0; nminus = 0; nplus = 0; bad = 0 }
+        /^--- / || /^\+\+\+ / { next }
+        /^@@/ {
+            if (nminus != nplus) { bad = 1 }
+            nminus = 0; nplus = 0
+            next
+        }
+        /^-/ {
+            if (nplus > 0) { bad = 1 }  # a "-" after a "+" without a new hunk
+            minus[nminus++] = substr($0, 2)
+            next
+        }
+        /^\+/ {
+            if (nminus == 0) { bad = 1; next }
+            plus[nplus++] = substr($0, 2)
+            if (nplus == nminus) {
+                for (i = 0; i < nminus; i++) {
+                    m = minus[i]; p = plus[i]
+                    ok = 0
+                    n = split("ge hs lt lo gt hi le ls", subs, " ")
+                    for (j = 1; j < n; j += 2) {
+                        from = subs[j]; to = subs[j + 1]
+                        pos = index(m, from)
+                        if (pos > 0) {
+                            cand = substr(m, 1, pos - 1) to substr(m, pos + length(from))
+                            if (cand == p) { ok = 1; break }
+                        }
+                    }
+                    if (!ok) { bad = 1 } else { pairs++ }
+                }
+                nminus = 0; nplus = 0; delete minus; delete plus
+            }
+            next
+        }
+        { if (nminus != nplus) { bad = 1 }; nminus = 0; nplus = 0 }
+        END {
+            if (nminus != nplus) { bad = 1 }
+            if (bad) { exit 1 }
+            print pairs
+        }
+    ' "$1"
+}
 
 tmp="${TMPDIR:-/tmp}/check-asm.$$"
 # Under Git Bash on Windows, MSYS hands TMPDIR to this shell in /d/... form, a
@@ -36,6 +103,16 @@ case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) tmp=$(cygpath -m "$tmp") ;; esac
 mkdir -p "$tmp"
 fails=0
 total=0
+seed_pairs=0
+
+# The allow-list applies ONLY when MC0 is the frozen C seed by name: on the
+# Linux and Windows hosts this script compares two post-fix .mc compilers
+# (mc1l/mc2l, mc1w/mc2w), which must come out byte for byte identical -- any
+# divergence there is a real bug, never this one.
+case "$(basename "$mc0")" in
+    mc0) is_seed=1 ;;
+    *) is_seed=0 ;;
+esac
 
 for f in tests/*.mc tests/lib/*.mc src/*.mc; do
     [ -f "$f" ] || continue
@@ -50,9 +127,15 @@ for f in tests/*.mc tests/lib/*.mc src/*.mc; do
         fails=$((fails + 1)); continue
     fi
     if ! diff -u "$tmp/a" "$tmp/b" > "$tmp/d" 2>&1; then
-        echo "FAIL $f"
-        sed -n '1,20p' "$tmp/d"
-        fails=$((fails + 1)); continue
+        if [ "$is_seed" -eq 1 ] && n=$(validate_seed_diff "$tmp/d"); then
+            seed_pairs=$((seed_pairs + n))
+            echo "ok $f ($n seed-signed compares)"
+        else
+            echo "FAIL $f"
+            sed -n '1,20p' "$tmp/d"
+            fails=$((fails + 1))
+        fi
+        continue
     fi
     if ! diff -u "$tmp/ae" "$tmp/be" > "$tmp/de" 2>&1; then
         echo "FAIL $f (stderr differs)"
@@ -61,6 +144,21 @@ for f in tests/*.mc tests/lib/*.mc src/*.mc; do
     fi
     echo "ok $f"
 done
+
+if [ "$is_seed" -eq 1 ]; then
+    golden="tests/golden/seed-cmp.txt"
+    if [ -f "$golden" ]; then
+        want=$(cat "$golden")
+        if [ "$seed_pairs" != "$want" ]; then
+            echo "FAIL seed-signed compare count moved: got $seed_pairs, $golden says $want"
+            echo "     (a codegen change -- re-record $golden in the same pull request)"
+            fails=$((fails + 1))
+        fi
+    elif [ "$seed_pairs" -gt 0 ]; then
+        echo "FAIL $golden is missing (got $seed_pairs seed-signed compares) -- record it"
+        fails=$((fails + 1))
+    fi
+fi
 
 rm -rf "$tmp"
 echo "$((total - fails))/$total files identical"

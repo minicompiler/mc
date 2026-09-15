@@ -343,26 +343,36 @@ void rv_bin(i64 op, i64 d, i64 d2) {
     rv_dst_done(d, rd);
 }
 
-// slt/sltu give < directly; the other four are that plus one instruction
+// slt/sltu give < directly; the other four are that plus one instruction.
+// Contract version 6: the same four shapes with sltu in place of slt, which is
+// the whole unsigned half -- RV spells the two comparisons as two instructions
+// rather than one condition code, so there is nothing else to say.
 void rv_cmp(i64 cond, i64 d, i64 d2) {
     i64 rl = rv_val_reg(d, RVREG_S1);
     i64 rr = rv_val_reg(d2, RVREG_S2);
     i64 rd = rv_dst_reg(d);
-    if (cond == MCOND_EQ) {
+    i64 lt = V_SLT;
+    i64 c = cond;
+    // MCOND_ULT..UGE (6..9) are MCOND_LT..GE (2..5) plus four, which is the
+    // layout docs/reference/machine.md § 3 fixes, so one subtraction folds the
+    // unsigned half onto the signed one and only the instruction differs.
+    if (cond >= MCOND_ULT) { lt = V_SLTU; c = cond - 4; }
+    if (c < 0 || c > MCOND_GE) die("unknown condition");
+    if (c == MCOND_EQ) {
         e3(V_SUB, rd, rl, rr);
         ei(V_SLTIU, rd, rd, 1);                  // seqz
-    } else if (cond == MCOND_NE) {
+    } else if (c == MCOND_NE) {
         e3(V_SUB, rd, rl, rr);
         e3(V_SLTU, rd, RV_ZERO, rd);             // snez
-    } else if (cond == MCOND_LT) {
-        e3(V_SLT, rd, rl, rr);
-    } else if (cond == MCOND_GT) {
-        e3(V_SLT, rd, rr, rl);
-    } else if (cond == MCOND_LE) {
-        e3(V_SLT, rd, rr, rl);
+    } else if (c == MCOND_LT) {
+        e3(lt, rd, rl, rr);
+    } else if (c == MCOND_GT) {
+        e3(lt, rd, rr, rl);
+    } else if (c == MCOND_LE) {
+        e3(lt, rd, rr, rl);
         ei(V_XORI, rd, rd, 1);
     } else {
-        e3(V_SLT, rd, rl, rr);                   // MCOND_GE
+        e3(lt, rd, rl, rr);                      // MCOND_GE
         ei(V_XORI, rd, rd, 1);
     }
     rv_dst_done(d, rd);

@@ -316,11 +316,14 @@ void avr_bin(i64 op, i64 d, i64 d2) {
     avr_bin_call(op, d, d2, w);
 }
 
-// Comparison in this language is SIGNED (src/gen_walk.mc has no unsigned
-// condition), and every value in a slot is zero-extended -- so comparing at the
+// A comparison of two NARROW operands reaches this machine with a signed
+// condition (src/gen_walk.mc only picks an unsigned one when a side is eight
+// bytes wide), and every value in a slot is zero-extended -- so comparing at the
 // declared width would answer -1 < 1 for a u16 of 0xFFFF. The rule: i64 on
 // either side takes all eight bytes; otherwise one byte more than the widest
-// operand, which is zero and makes the signed comparison the unsigned one.
+// operand, which is zero and makes the signed comparison the unsigned one. It
+// is harmless for a version 6 unsigned condition, which is already the answer
+// the extra byte buys.
 i64 avr_cmp_width(i64 d, i64 d2) {
     i64 t1 = walk_depth_type(d);
     i64 t2 = walk_depth_type(d2);
@@ -335,11 +338,15 @@ i64 avr_cmp_width(i64 d, i64 d2) {
 // and `<=` are `<` and `>=` with the operands the other way round, which costs
 // nothing because this machine chooses which file each side lands in.
 void avr_cmp(i64 cond, i64 d, i64 d2) {
+    if (cond < 0 || cond > MCOND_UGE) die("unknown condition");
     i64 w = avr_cmp_width(d, d2);
     i64 c = cond;
-    if (cond == MCOND_GT) { c = MCOND_LT; }
-    if (cond == MCOND_LE) { c = MCOND_GE; }
-    if (cond == MCOND_GT || cond == MCOND_LE) {
+    if (cond == MCOND_GT)  { c = MCOND_LT; }
+    if (cond == MCOND_LE)  { c = MCOND_GE; }
+    if (cond == MCOND_UGT) { c = MCOND_ULT; }
+    if (cond == MCOND_ULE) { c = MCOND_UGE; }
+    if (cond == MCOND_GT || cond == MCOND_LE
+            || cond == MCOND_UGT || cond == MCOND_ULE) {
         avr_fld(AR_ACC, d2, w);
         avr_fld(AR_TMP, d, w);
     } else {
@@ -665,10 +672,12 @@ void avr_put_shift(uptr o, i64 rd, i64 w, i64 dir) {
 // r24 = 0 or 1 from the flags a `cp` chain left. `ldi` touches no flag, so the
 // value is loaded first and the branch decides whether to clear it.
 i64 avr_cc_word(i64 cond) {
-    if (cond == MCOND_EQ) return 0xf001;         // breq
-    if (cond == MCOND_NE) return 0xf401;         // brne
-    if (cond == MCOND_LT) return 0xf00c;         // brlt
-    return 0xf40c;                               // brge
+    if (cond == MCOND_EQ)  return 0xf001;        // breq  (brbs 1)
+    if (cond == MCOND_NE)  return 0xf401;        // brne  (brbc 1)
+    if (cond == MCOND_LT)  return 0xf00c;        // brlt  (brbs 4, the S flag)
+    if (cond == MCOND_ULT) return 0xf000;        // brlo  (brbs 0, the C flag)
+    if (cond == MCOND_UGE) return 0xf400;        // brsh  (brbc 0)
+    return 0xf40c;                               // brge  (brbc 4)
 }
 
 void avr_put_setcc(uptr o, i64 cond) {
