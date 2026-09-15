@@ -26,27 +26,15 @@ if ! msg=$(scripts/link-host.sh "$lexdump" "$obj" 2>&1); then
     exit 1
 fi
 
-# M24 (risk 6 / decision D6): a source the FROZEN SEED cannot LEX has nothing to
-# compare, the same escape scripts/check-asm.sh and scripts/check-ast.sh have
-# carried since M38. It exists here as insurance for the modules Tier 4 puts
-# under lib/: the seed's lex_number stops a literal at the `.`, so a file that
-# spells one out is not comparable. No file uses it today -- lib/float.mc and
-# every other bundled module write bit patterns for exactly this reason -- and
-# a skip is REPORTED here rather than silently dropped.
-seed_skip() { sed -n 's|^// seed-skip: *||p' "$1" | head -1; }
-
-# M44 (risk 17): a source whose TOKENS the two lexers cannot agree on, while
-# both still COMPILE it identically -- which is a strictly narrower escape than
-# seed-skip and therefore a header of its own, so that check-asm.sh and
-# check-ast.sh keep the file. There is exactly one class: `.` became a lexeme in
-# src/lex.mc (it is what lets `#include <geo/geo.mc>` be spelled) and is not one
-# in the frozen stage0/lex.c. --dump-tokens does not process directives, so a
-# file that registers an operator BEGINNING with a dot -- `#infix ".+"` -- is
-# lexed as `.` `+` by the new lexer and refused with `unexpected character` by
-# the seed. Under a real compile the #infix has registered `.+` and the longest
-# match takes it on both sides, which is why check-asm still compares this file
-# byte for byte.
-lex_skip() { sed -n 's|^// lex-skip: *||p' "$1" | head -1; }
+# The frozen C seed (build/mc0) is a differential oracle for src/ and tests/
+# ONLY, never for lib/: a library is taught from the surface and comparing it
+# against the seed has no purpose beyond pressing the seed's fixed MAX* tables
+# (docs/plan.md, CLAUDE.md § State). lib/*.mc left this corpus for that reason,
+# which is also why the seed-skip/lex-skip escapes (M24 risk 6/D6, M44 risk 17)
+# have no user left here: every file that ever carried one of those headers
+# (lib/mc_float.mc, lib/float_rt.mc, lib/mc_f16.mc, lib/syntax_demo_test.mc)
+# was a library. If a future src/- or tests/-only file needs one, reintroduce
+# the mechanism then -- git history has both escapes verbatim.
 
 tmp="${TMPDIR:-/tmp}/check-lex.$$"
 # Under Git Bash on Windows, MSYS hands TMPDIR to this shell in /d/... form, a
@@ -55,17 +43,9 @@ case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) tmp=$(cygpath -m "$tmp") ;; esac
 mkdir -p "$tmp"
 fails=0
 total=0
-skipped=0
 
-for f in tests/*.mc tests/lib/*.mc lib/*.mc src/*.mc; do
+for f in tests/*.mc tests/lib/*.mc src/*.mc; do
     [ -f "$f" ] || continue
-    why=$(seed_skip "$f")
-    [ -n "$why" ] || why=$(lex_skip "$f")
-    if [ -n "$why" ]; then
-        echo "skip $f ($why)"
-        skipped=$((skipped + 1))
-        continue
-    fi
     total=$((total + 1))
 
     "$mc" --dump-tokens "$f" > "$tmp/a" 2> "$tmp/ae"; ra=$?
@@ -90,9 +70,5 @@ for f in tests/*.mc tests/lib/*.mc lib/*.mc src/*.mc; do
 done
 
 rm -rf "$tmp"
-if [ "$skipped" -gt 0 ]; then
-    echo "$((total - fails))/$total files identical ($skipped skipped)"
-else
-    echo "$((total - fails))/$total files identical"
-fi
+echo "$((total - fails))/$total files identical"
 [ "$fails" -eq 0 ]
