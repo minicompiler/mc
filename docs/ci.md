@@ -760,7 +760,7 @@ public URL each side can read anonymously.
         raw.githubusercontent.com/teko-org/teko-lang/canary/<version>.json
                           │
   mc: promote ◄───────────┘ polls that URL every 60 s, up to 90 minutes
-        ok      → gh release edit "$TAG" --prerelease=false
+        ok      → gh release edit "$TAG" --prerelease=false --latest
         fail    → job RED, the release stays a pre-release, nothing is unmade
         timeout → advisory before 1.0.0, RED at 1.0.0
                           │
@@ -814,7 +814,12 @@ recipe — on its 2026-09-14 dry run a build, 64 fixtures, a bootstrap fixed poi
 that does not promote:
 
 ```sh
-gh release edit v0.17.0 --prerelease=false
+gh release edit v0.17.0 --prerelease=false --latest
+
+`--latest` is not optional: a release born a pre-release is created with `make_latest` off, and
+clearing the pre-release flag does not turn it back on -- so without it the "Latest" badge stays
+on the last release that was published directly (measured on 1.0.0: GitHub kept 0.16.0 as latest
+until `gh release edit v1.0.0 --latest` was run by hand).
 ```
 
 ### The two variables
