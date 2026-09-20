@@ -399,6 +399,19 @@ void syntax_expr(uptr word, uptr fn) {
     st64(syne_tok + nsyne * 8, word_add(word));
     st64(syne_fn + nsyne * 8, fn);
     nsyne = nsyne + 1;
+    // `$` is the one lexeme the LEXER decides before any handler can be
+    // reached, so claiming it in this position has to be told to the lexer.
+    // Registered on the first syntax_expr of any word: the pointer is what
+    // turns the question on, and the answer below is still per token id.
+    lex_set_dollar_hook(&dollar_is_word);
+}
+
+// The lexer's question, answered where both halves are visible: `tok` is a
+// taught expression word AND we are not inside a #rule template's pattern or
+// template (parse.mc's rule_def), where a hole must stay a hole.
+i64 dollar_is_word(i64 tok) {
+    if (rule_def) return 0;
+    return syntax_expr_find(tok) >= 0;
 }
 
 i64 syntax_expr_find(i64 tok) {

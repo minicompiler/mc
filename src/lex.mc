@@ -605,6 +605,19 @@ i64  shook_busy = 0;                  // 1 while a handler is running
 
 void lex_set_source_hook(uptr fn) { shook_fn = fn; }
 
+// ---- `$` outside a #rule template, reached the same way ----
+// `$name` has always been a template hole, and a module that claims `$` as an
+// expression word (syntax_expr("$") -> word_add -> tok_add) got the hole
+// anyway: outside a template that is the error `hole $name has no rule binding
+// it`, so the byte was unreachable. The answer is one question -- "is this
+// token id a taught expression word, and are we outside a #rule template?" --
+// and both halves live above this file (hooks.mc has the registry, parse.mc has
+// rule_def), so it arrives as a pointer like every other. 0 means nobody asked,
+// and then not even the call happens: `$name` is a hole, as it always was.
+uptr dhook_fn = 0;
+
+void lex_set_dollar_hook(uptr fn) { dhook_fn = fn; }
+
 // A handler runs with the frame it is being told about already on the stack,
 // and the one thing it must not do there is push another source: the
 // announcement of one source would interleave with the opening of the next, and
@@ -1360,11 +1373,19 @@ void lex_next(uptr t) {
         // the core: `$` is not a token unless a module makes it one.
         i64 nb = 0;
         if (cp + 1 < cend) nb = ld8(cp + 1);
-        if (is_alpha(nb) || is_digit(nb) || nb == '$') {
-            lex_hole(t); set_tok_len(t, cp - tok_start(t)); return;
-        }
         i64 dlen = 0;
         i64 did = punct_id(cp, cend - cp, &dlen);
+        // ...UNLESS a module claimed the one-character `$` as an expression
+        // word and we are outside a #rule template, where a hole is still a
+        // hole. Then the `$` is that token and the name after it lexes as the
+        // ordinary identifier it looks like: the handler reads both. dlen == 1
+        // because the rule is about the one byte -- a longer lexeme starting
+        // with `$` is somebody else's token and says nothing about this one.
+        i64 owned = 0;
+        if (dhook_fn != 0 && did >= 0 && dlen == 1) owned = callp(dhook_fn, did);
+        if (!owned && (is_alpha(nb) || is_digit(nb) || nb == '$')) {
+            lex_hole(t); set_tok_len(t, cp - tok_start(t)); return;
+        }
         if (did < 0) err_at(tok_file(t), tok_line(t), "invalid hole");
         cp = cp + dlen;
         set_tok_id(t, did);
