@@ -1,6 +1,6 @@
 # ci.md — the GitHub Actions workflows
 
-Seven workflows live in `.github/workflows/`. Two constraints shape them.
+Eight workflows live in `.github/workflows/`. Two constraints shape them.
 
 **The C seed is macOS-first, and only the seed.** `stage0/*.c` emits Mach-O and only Mach-O, so
 everything that compares the `.mc` compiler against that frozen oracle has to run on `macos-15`.
@@ -20,14 +20,17 @@ the release. The contributor-facing half of that is
 | `ci.yml` | pull requests to `main`, push to `main` | `macos-15` + `ubuntu-24.04-arm` + `ubuntu-latest` | `make check`, the Linux suite — once per architecture — in two halves, `mc` bootstrapped on each Linux host, and (M39) the bare-metal RISC-V kernel booted under QEMU |
 | `autotag.yml` | push to `main` | `ubuntu-24.04` | if the push is a merged pull request: computes the next version from its labels, pushes the annotated tag `vX.Y.Z` and starts `release.yml` |
 | `tag.yml` | manual | `ubuntu-24.04` | the escape hatch: validates `X.Y.Z` against the newest tag, pushes the tag and starts `release.yml` |
-| `release.yml` | dispatched by `autotag.yml`/`tag.yml`, tag `v*`, or manual | `macos-15` + `ubuntu-24.04-arm` + `ubuntu-latest` | builds `mc` for macOS, cross-compiles the two Linux objects, links and bootstraps each on its own architecture, packages all three, publishes the GitHub Release, then announces the tag to the mc package registry |
+| `release.yml` | dispatched by `autotag.yml`/`tag.yml`, tag `v*`, or manual | `macos-15` + `ubuntu-24.04-arm` + `ubuntu-latest` | builds `mc` for macOS, cross-compiles the two Linux objects, links and bootstraps each on its own architecture, packages all three, publishes the GitHub Release (as a pre-release while the canary is armed), waits up to 15 minutes for teko's verdict, then announces the tag to the mc package registry |
+| `promote-pending.yml` | manual, every 30 minutes | `ubuntu-latest` | the canary's scheduled backstop ([§ The canary](#the-canary)): asks once per pending pre-release, forever, and promotes and announces the ones that answered `ok` since `release.yml`'s own 15-minute window closed |
 | `site.yml` | push to `main` touching `site/**` or `docs/**`, or manual | `macos-15` + `ubuntu-24.04` | renders `docs/` with `mcsite` and deploys it to GitHub Pages (<https://minicompiler.dev>) |
 | `bench-soak.yml` | manual, weekly (Sunday 03:00 UTC) | `ubuntu-latest`, one runner per server | the 60-minute HTTP soak: every minimal server of `bench/http`/`bench/http2` at a fixed request rate for the same hour |
 | `bench-cell.yml` | manual, weekly (Sunday 06:00 UTC) | `macos-15` + `ubuntu-24.04-arm` + `ubuntu-latest`, one runner per (cell, toolchain) | the reproducible bench cell: the integer workload of `bench/` timed against a `clang -O2` reference built and timed in the same job |
 
-All seven set `concurrency` groups and per-job `timeout-minutes`, and each declares the narrowest
+All eight set `concurrency` groups and per-job `timeout-minutes`, and each declares the narrowest
 `permissions` it needs. The two `bench-*` workflows measure and never gate: neither is a required
-check and neither runs on a push, a pull request or a tag.
+check and neither runs on a push, a pull request or a tag. `promote-pending.yml` is the same shape
+in that last respect — it runs on a schedule and by hand only, never on a push, a pull request or a
+tag, and it is not one of the required checks below.
 
 ## Who touches what
 
@@ -682,7 +685,8 @@ two with `contents: write`.
 
 ### Job `publish-to-registry` — `ubuntu-latest`
 
-`needs: publish`, `permissions: contents: read`, `timeout-minutes: 20`, one step.
+`needs: [publish, promote]` (see [§ The canary](#the-canary) for why the second one is there and
+what its gate reads), `permissions: contents: read`, `timeout-minutes: 20`, one step.
 **Gated by the repository variable `MC_REGISTRY_PUBLISH`**: the job runs only when
 the variable is `true` (Settings → Secrets and variables → Actions → Variables).
 The owner scheduled both the registry's GitHub token and the apex flip for the
@@ -732,8 +736,12 @@ no account. Until that has happened the registry answers **404 `not registered`*
 and this job is red while every job above it is green.
 
 Since M53 step C it is `needs: [publish, promote]`, so that a release still
-marked pre-release is never announced as the registry's newest row — see
-[§ The canary](#the-canary) for how a skipped `promote` is handled.
+marked pre-release is never announced as the registry's newest row — its gate
+reads `promote`'s `promoted` OUTPUT rather than its job result, precisely
+because a mere timeout is a `result: success` that promoted nothing (see
+[§ The canary](#the-canary)). A release the in-run job could not resolve in
+its 15-minute window is announced later, by `promote-pending.yml`'s own
+`announce` job, once that workflow actually promotes it.
 
 ---
 
@@ -747,26 +755,44 @@ before clearing the pre-release flag. At 1.0.0 that wait is blocking; until then
 **No credential crosses the boundary, in either direction.** mc cannot dispatch a workflow in
 teko's repository (that needs a PAT) and teko cannot receive mc's `release` webhook (a foreign
 repository does not get one). Both halves are therefore pull, and the only thing that crosses is a
-public URL each side can read anonymously.
+public URL each side can read — with, on mc's side, mc's *own* `GITHUB_TOKEN` used only to raise
+mc's *own* rate limit against GitHub's public API. That token is never sent to teko's repository
+and nothing of teko's ever reaches mc; it is not the credential the boundary is about.
+
+**Two roads promote a release, because one poll cannot wait forever.** `release.yml`'s in-run
+`promote` job polls for a bounded 15 minutes and then defers — GitHub throttles a `schedule`
+trigger on a quiet repository, so teko noticing the pre-release and writing a verdict is not
+bounded by anything mc controls (§ Implementation notes below has the measured timestamps). A
+second workflow, `promote-pending.yml`, asks the SAME question every 30 minutes, forever, with no
+timeout of its own, and is what actually promotes a release whose verdict lands late.
 
 ```
-  mc: publish ──► GitHub Release created as a PRE-RELEASE, all assets attached
-                          │
-  teko: schedule (15 min) │ GET /repos/minicompiler/mc/releases   (public, no token)
-                          ▼
-                  newer pre-release than its pin? → run the whole recipe against the tarball
-                          │
-                          ▼  writes with its OWN GITHUB_TOKEN, to its own repo
-        raw.githubusercontent.com/teko-org/teko-lang/canary/<version>.json
-                          │
-  mc: promote ◄───────────┘ polls that URL every 60 s, up to 90 minutes
-        ok      → gh release edit "$TAG" --prerelease=false --latest
-        fail    → job RED, the release stays a pre-release, nothing is unmade
-        timeout → advisory before 1.0.0, RED at 1.0.0
-                          │
-                          ▼
-  mc: publish-to-registry  needs: promote   (a pre-release must not become the newest row)
+  mc: publish ──────► GitHub Release created as a PRE-RELEASE, all assets attached
+                             │
+  teko: schedule (~15 min)  │ GET /repos/minicompiler/mc/releases   (public, no token)
+                             ▼
+                     newer pre-release than its pin? → run the whole recipe against the tarball
+                             │
+                             ▼  writes with its OWN GITHUB_TOKEN, to its own repo
+           raw.githubusercontent.com/teko-org/teko-lang/canary/<version>.json
+                             │
+       ┌─────────────────────┴─────────────────────┐
+       │                                            │
+  mc: promote (in-run)                    mc: promote-pending (scheduled, every 30 min, forever)
+  asks ONCE per poll, for 15 min          asks ONCE per pending pre-release, no timeout
+       │                                            │
+       ├─ ok      → gh release edit --prerelease=false --latest, THEN announce to the registry
+       ├─ fail     → step fails; RED at 1.0.0, green-with-a-failed-step before it; nothing unmade
+       └─ timeout  → defers silently; NEVER fails, NEVER promotes; the next road keeps trying
+                             │
+                             ▼ (in-run job only)
+  mc: publish-to-registry  needs: promote, gated on `outputs.promoted` — NOT on the job's result,
+                            since a timeout is a `result: success` that promoted nothing
 ```
+
+A release the in-run job could not resolve therefore leaves the registry announcement to
+`promote-pending.yml`, which duplicates the one `minicompiler/register-action@v1` step for exactly
+the tags it promotes this run (§ Job `promote-pending.yml` below).
 
 ### The contract
 
@@ -795,32 +821,74 @@ A file and not a commit status, because a status is about a *teko commit* and th
 an *mc version*, and the mapping would have to be invented. A branch and not GitHub Pages, because
 it needs no Pages setup and is versioned by git.
 
-### Job `promote` — `ubuntu-latest`
+**Two roads read that same file, and the order matters.** `raw.githubusercontent.com` sits behind
+a CDN that can serve a STALE body for minutes after the file changes underneath it — measured on a
+real release: the CDN kept answering an older cached `fail` for several minutes after the corrected
+`ok` had already been committed. `api.github.com`'s contents endpoint
+(`/repos/OWNER/REPO/contents/NAME?ref=BRANCH`) is never CDN-cached, so `scripts/canary-poll.sh`
+tries it FIRST and falls back to raw only when the API road answers nothing (no `gh`, no network
+path to it). An `ok` read from raw alone is trusted as is — teko never *downgrades* a verdict, so a
+stale `ok` cannot exist — but a `fail` read from raw ALONE is re-checked against the API before it
+is acted on, because blocking a good release on a stale cached failure is the expensive mistake and
+missing one more poll cycle is not.
+
+### Job `promote` — `ubuntu-latest` (in `release.yml`)
 
 `if: vars.MC_CANARY == 'true'`, `needs: publish`, `permissions: contents: write`,
-`timeout-minutes: 95`, `continue-on-error: ${{ vars.MC_CANARY_REQUIRED != 'true' }}`. One checkout
-and one step, `sh scripts/canary-poll.sh "$TAG"`.
+`timeout-minutes: 20`, `continue-on-error: ${{ vars.MC_CANARY_REQUIRED != 'true' }}`. One checkout
+and one step, `id: canary`, `sh scripts/canary-poll.sh "$TAG"`, with a job `output` —
+`promoted: ${{ steps.canary.outputs.promoted }}` — read by `publish-to-registry` below.
 
 It is a job and not a step inside `publish` for `publish-to-registry`'s exact reason: a failed
 promotion must not be able to unmake a published release, and a rerun of the job alone is the
 retry.
 
-**The 90-minute budget**: up to 15 minutes for teko's schedule to notice the pre-release, plus its
-recipe — on its 2026-09-14 dry run a build, 64 fixtures, a bootstrap fixed point, `check-docs` and
-`mc limits`. A `workflow_dispatch` on teko's side removes the 15. The job's own
-`timeout-minutes: 95` is the poll's 90 plus the checkout.
+**The 15-minute budget is deliberately short**, not the 90 minutes it used to be: with
+`promote-pending.yml` as the real backstop, an idling runner bought nothing past the common case
+where teko's own poller happens to already be awake. `timeout-minutes: 20` is that 15 plus the
+checkout.
 
 **Manual promotion is one command**, printed in the release note and by the script on every path
 that does not promote:
 
 ```sh
 gh release edit v0.17.0 --prerelease=false --latest
+```
 
 `--latest` is not optional: a release born a pre-release is created with `make_latest` off, and
-clearing the pre-release flag does not turn it back on -- so without it the "Latest" badge stays
-on the last release that was published directly (measured on 1.0.0: GitHub kept 0.16.0 as latest
-until `gh release edit v1.0.0 --latest` was run by hand).
-```
+clearing the pre-release flag does not turn it back on — so without it the "Latest" badge stays on
+the last release that was published directly (measured on 1.0.0: GitHub kept 0.16.0 as latest until
+`gh release edit v1.0.0 --latest` was run by hand).
+
+### Job `promote-pending.yml` — the scheduled backstop
+
+A separate workflow file, `schedule: "*/30 * * * *"` plus `workflow_dispatch` (an optional `tag`
+input to check one release, and a `dry_run` boolean that prints what would happen and touches
+nothing). Two jobs:
+
+- **`sweep`** — lists every pre-release GitHub currently shows for this repository whose tag is a
+  plain `vX.Y.Z` (the same shape `release.yml`'s own `case "$VERSION" in *-*)` recognizes — a
+  hand-pushed `-suffix` release-candidate tag is outside the canary by design), and asks
+  `scripts/canary-poll.sh --once "$tag"` for each: `ok` promotes it (`gh release edit
+  --prerelease=false --latest`) and records the tag; `fail` prints a `::warning::` and moves on;
+  anything else prints "no verdict yet" and moves on. Idempotent by construction — it lists the
+  LIVE release state fresh every run rather than remembering what a previous run did, so a missed
+  or delayed run (GitHub throttles `schedule` on a quiet repository) costs nothing but time, and a
+  release that stays `fail` is warned about again on the next run rather than being silenced after
+  the first.
+- **`announce`** — a matrix job over exactly the tags `sweep` promoted THIS run, one
+  `minicompiler/register-action@v1` step per tag, gated on `MC_REGISTRY_PUBLISH` like
+  `publish-to-registry`. It duplicates that single step rather than re-running `release.yml`:
+  dispatching the whole release workflow again was considered and rejected, since it would rebuild
+  every platform's binary from scratch to announce a tag that already has a published, verified
+  release — the exact cost this workflow exists to avoid. A cleaner shape for later is turning
+  `publish-to-registry` into a reusable `workflow_call` job both workflows invoke; duplicating the
+  one lightweight step (the real work happens server-side, inside the registry's own sandbox) is
+  the pragmatic choice today.
+
+Its own `permissions: contents: read` in `announce` and `contents: write` in `sweep` — it needs to
+call `gh release edit`, and nothing else — and no credential of any kind reaches teko's repository
+from either job, for the same reason as the in-run `promote` job.
 
 ### The two variables
 
@@ -830,7 +898,7 @@ gating shape as `MC_REGISTRY_PUBLISH`: a job that is red by design would hide a 
 | variable | default | armed |
 |---|---|---|
 | `MC_CANARY` | unset | `true` — every release is born a pre-release and `promote` runs. **Unset, nothing changes**: `promote` is skipped and the release is created exactly as it was before M53 |
-| `MC_CANARY_REQUIRED` | unset | `true` at 1.0.0 (*"bloqueante no 1.0.0"*) — `continue-on-error` becomes false and a timeout leaves the release a pre-release |
+| `MC_CANARY_REQUIRED` | unset | `true` at 1.0.0 (*"bloqueante no 1.0.0"*) — a `fail` VERDICT reddens the run instead of leaving it green with a failed step |
 | `MC_CANARY_REPO` | unset → `teko-org/teko-lang` | `owner/repo` publishing the verdict, if it ever moves |
 
 ```sh
@@ -839,17 +907,29 @@ gh variable set MC_CANARY_REQUIRED --body true   # at 1.0.0, and not before
 gh variable list
 ```
 
-A `fail` **verdict** always leaves the release a pre-release and `promote` red, armed or required —
-`continue-on-error` keeps the *run* green before 1.0.0 but the job still shows as failed. What the
-two variables change is only the **timeout**: advisory, it is a `::notice::` and the release is
-promoted anyway, so a teko outage cannot hold an mc patch; required, it is an `::error::` and the
-release stays a pre-release.
+**What the three outcomes mean, since a timeout stopped being a kind of failure:**
+
+| outcome | in-run `promote` | `promote-pending.yml` | `publish-to-registry` |
+|---|---|---|---|
+| verdict `ok` | promotes, exits 0 | (already promoted, nothing to do) | runs — `outputs.promoted == 'true'` |
+| verdict `fail` | step fails, exits 1 — RED at 1.0.0, green-with-a-failed-step before it | `::warning::`, re-checked every run until it changes | never runs for this tag from `release.yml`; a human (or a later `ok` verdict) is what unblocks it |
+| no verdict within the budget | exits 0, promotes NOTHING, `outputs.promoted = 'false'` — required or not | keeps asking every 30 minutes, no timeout of its own | does not run yet; runs once `promote-pending.yml` promotes and announces it |
+
+**A timeout is no longer an error the owner must act on, required or not.** The release is
+correctly still a pre-release, and `promote-pending.yml` is what finishes the job once a verdict —
+`ok` or `fail` — actually exists. What `MC_CANARY_REQUIRED` still changes is only the SEVERITY of a
+`fail` VERDICT on the release run's own visible status: advisory, `continue-on-error` keeps the run
+green with a failed step; required, the run itself goes red. Neither setting makes a mere timeout
+fail anything, and neither one blindly promotes on a timeout the way the pre-`promote-pending.yml`
+design once did — that auto-promote-on-timeout is gone, because it is no longer needed: the
+scheduled workflow keeps asking instead of guessing.
 
 `publish-to-registry` is `needs: [publish, promote]` with an `if` that names `!cancelled()`, because
 a job whose `needs` is *skipped* is skipped too — and `promote` is skipped on every release while
-`MC_CANARY` is unset. `needs.promote.result != 'failure'` is what holds the announcement back: at
-1.0.0, with `continue-on-error` false, a `fail` verdict or a timeout makes that result `failure` and
-the registry is never told about a pre-release.
+`MC_CANARY` is unset. The gate itself reads `needs.promote.outputs.promoted == 'true'` (or the
+canary being unarmed at all) rather than the job's `result`, precisely because a 15-minute timeout
+is now a `result: success` that promoted nothing — reading `result` alone would announce a
+still-pre-release build to the registry the moment the in-run job merely ran out of time.
 
 ### `scripts/canary-poll.sh`
 
@@ -857,21 +937,35 @@ The poll and the flip are a script and not thirty lines of YAML so that they can
 off a runner, the way `next-version.sh --test` is:
 
 ```sh
-sh scripts/canary-poll.sh --test            # 7 assertions, no network, no framework
-sh scripts/canary-poll.sh --url v0.17.0     # prints the URL it would poll
+sh scripts/canary-poll.sh --test            # assertions, no network, no framework
+sh scripts/canary-poll.sh --once v0.17.0    # one lookup, no sleeping — see exit codes below
+sh scripts/canary-poll.sh --url v0.17.0     # prints the raw URL it would poll
 DRY_RUN=1 CANARY_URL=file://$PWD/verdict.json \
   sh scripts/canary-poll.sh v0.17.0         # the real poll, against a local verdict
 ```
 
-`CANARY_REPO`, `CANARY_BRANCH`, `CANARY_URL`, `CANARY_TIMEOUT`, `CANARY_INTERVAL`,
-`CANARY_REQUIRED` and `DRY_RUN` are the knobs; the script's header lists them with their defaults.
-It exits 0 when the release was promoted (verdict `ok`, or an advisory timeout) and 1 when it was
-not, and it reads the verdict with `curl` and **no token at all**.
+`--once TAG` is one lookup and no sleeping — what `promote-pending.yml` uses, since it is itself
+the poll, run every 30 minutes. It exits 0 and prints `ok` for a confirmed `ok` verdict, 1 and
+prints `fail` for a confirmed `fail` verdict, and 2 and prints `no verdict` for anything else
+(missing, unparsable, another version's file, or a `fail` read from raw alone that the contents
+API could not confirm).
 
-What the mc side owes is exactly the list above; it does **not** owe teko's workflow, which is
-teko's pull request, and it does not owe a fallback — if teko never publishes a verdict, every
-release before 1.0.0 is promoted on the timeout and the pipeline is what it is today.
+The polling form (no `--once`) is what `release.yml`'s in-run `promote` job runs: it loops until a
+verdict or `CANARY_TIMEOUT` (15 minutes by default there), then behaves as
+[the table above](#the-two-variables) describes, and — inside a GitHub Actions step, where
+`GITHUB_OUTPUT` is set — writes `promoted=true` or `promoted=false` to it so a caller can gate on
+the OUTCOME rather than the exit code, which conflates "promoted" and "deferred, try later" into
+the same 0.
 
+`CANARY_REPO`, `CANARY_BRANCH`, `CANARY_URL`, `CANARY_API_CMD` (a test hook, not a real road),
+`CANARY_TIMEOUT`, `CANARY_INTERVAL`, `CANARY_REQUIRED` and `DRY_RUN` are the knobs; the script's
+header lists them with their defaults. It reads the verdict with `gh api`/`curl` and no token owed
+to teko's repository in either case.
+
+What the mc side owes is exactly the two workflows above; it does **not** owe teko's own workflow,
+which is teko's pull request, and it does not owe a fallback beyond "keep asking" — if teko never
+publishes a verdict, the release simply stays a pre-release, checked again every 30 minutes,
+forever, which is the pipeline's honest answer to an outage on the consumer's side.
 ---
 
 ## `site.yml`

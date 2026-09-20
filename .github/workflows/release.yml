@@ -640,8 +640,9 @@ jobs:
               echo
               echo "## Canary"
               echo
-              echo "Published as a **pre-release**. The \`promote\` job waits up to 90 minutes"
-              echo "for teko's verdict and clears the flag when it says \`ok\`. To promote by hand:"
+              echo "Published as a **pre-release**. The \`promote\` job waits up to 15 minutes for"
+              echo "teko's verdict, and a scheduled workflow keeps checking every 30 minutes after"
+              echo "that; either one clears the flag when the verdict says \`ok\`. To promote by hand:"
               echo
               echo '```sh'
               echo "gh release edit $tag --prerelease=false --latest"
@@ -688,23 +689,38 @@ jobs:
   # this job is what clears the flag. Nothing crosses the repository boundary but
   # two public reads -- teko polls mc's releases API with no token and writes its
   # verdict into a branch of its own repository with its own token; this job
-  # `curl`s that file, also with no token.
+  # reads that file with no token owed to teko either.
   #
   # It is a job and not a step inside `publish` for `publish-to-registry`'s exact
   # reason: a failed promotion must not be able to unmake a published release,
   # and a rerun of this job alone is the retry. Manual promotion is one command,
   # printed in the release note and by the script.
   #
+  # This job's own budget is deliberately SHORT (15 minutes, not 90): teko's
+  # schedule is not guaranteed to notice a pre-release within any fixed window
+  # -- GitHub throttles `schedule` triggers on a quiet repository the same way
+  # it throttled teko's, and a v1.1.0 verdict once landed 90 minutes after this
+  # job had already given up waiting -- so a long budget here just idles a
+  # runner. `.github/workflows/promote-pending.yml` is the real backstop: it
+  # asks ONCE per pre-release, every 30 minutes, forever, and is what actually
+  # promotes a release whose verdict lands late. This job only catches the
+  # common case where teko's own poller was already awake.
+  #
+  # A TIMEOUT here therefore never fails the run and never promotes blindly --
+  # required or not, the release is correctly left a pre-release and the
+  # scheduled promoter finishes the job once a real verdict exists. A `fail`
+  # VERDICT still fails this job's step, always; `continue-on-error` below only
+  # decides whether that failure also reddens the overall WORKFLOW run.
+  #
   # Two repository variables:
   #   MC_CANARY           `true` arms it. Unset, this job is skipped and the
   #                       pipeline is byte for byte what it was: the release is
   #                       created exactly as before and the registry job follows
   #                       `publish` as it always did.
-  #   MC_CANARY_REQUIRED  `true` at 1.0.0 ("bloqueante no 1.0.0"). Until then the
-  #                       job is `continue-on-error` and a timeout promotes the
-  #                       release anyway with a `::notice::`, so a teko outage
-  #                       cannot hold an mc patch. A `fail` VERDICT always leaves
-  #                       the release a pre-release, armed or required.
+  #   MC_CANARY_REQUIRED  `true` at 1.0.0 ("bloqueante no 1.0.0"). Until then a
+  #                       `fail` verdict is `continue-on-error`, so the run stays
+  #                       green with a failed step; at 1.0.0 it reddens the run.
+  #                       Either way the release stays a pre-release.
   #   MC_CANARY_REPO      owner/repo publishing the verdict; the script's default
   #                       is `teko-org/teko-lang`.
   promote:
@@ -712,12 +728,17 @@ jobs:
     if: ${{ vars.MC_CANARY == 'true' }}
     needs: publish
     runs-on: ubuntu-latest
-    # 90 minutes of polling plus the checkout: teko needs up to 15 for its
-    # schedule to notice the pre-release, plus its recipe.
-    timeout-minutes: 95
+    # 15 minutes of polling plus the checkout -- the fast path only; see above.
+    timeout-minutes: 20
     permissions:
       contents: write
     continue-on-error: ${{ vars.MC_CANARY_REQUIRED != 'true' }}
+    outputs:
+      # Set by canary-poll.sh: `true` only once the pre-release flag was
+      # actually cleared. `publish-to-registry` gates on THIS, not on the
+      # job's own result, so a timeout (job result: success) cannot be mistaken
+      # for a promotion.
+      promoted: ${{ steps.canary.outputs.promoted }}
     steps:
       - name: Check out the tag
         uses: actions/checkout@v4
@@ -725,6 +746,7 @@ jobs:
           ref: ${{ inputs.tag || github.ref }}
 
       - name: Wait for teko's verdict, then promote
+        id: canary
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG_INPUT: ${{ inputs.tag }}
@@ -763,17 +785,23 @@ jobs:
   # the registry's newest row. The `if` names a status function on purpose -- a
   # job whose `needs` is SKIPPED is skipped too unless it does, and `promote` is
   # skipped whenever the canary is unarmed, which is every release before the
-  # owner sets MC_CANARY. `needs.promote.result != 'failure'` is what holds the
-  # announcement back: at 1.0.0, with MC_CANARY_REQUIRED set, `continue-on-error`
-  # is false and a `fail` verdict or a timeout makes that result `failure`, so
-  # this job does not run and the pre-release is not announced.
+  # owner sets MC_CANARY.
+  #
+  # The gate reads `needs.promote.outputs.promoted`, NOT the job's `result`,
+  # because since the `promote` job's budget dropped to 15 minutes a plain
+  # timeout is a `result: success` (docs/ci.md § The canary) -- the release is
+  # correctly still a pre-release, and gating on `result` alone would announce
+  # it to the registry anyway. `promoted` is `true` only once
+  # `scripts/canary-poll.sh` actually cleared the flag; when the canary is
+  # unarmed there is no such output at all, which is why the check is skipped
+  # in that case rather than compared against it.
   publish-to-registry:
     name: Publish to the mc registry
     if: >-
       ${{ !cancelled()
           && vars.MC_REGISTRY_PUBLISH == 'true'
           && needs.publish.result == 'success'
-          && needs.promote.result != 'failure' }}
+          && (vars.MC_CANARY != 'true' || needs.promote.outputs.promoted == 'true') }}
     needs: [publish, promote]
     runs-on: ubuntu-latest
     timeout-minutes: 20
