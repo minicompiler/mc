@@ -287,11 +287,9 @@ arena memory with no collector, classes, interfaces, generics, a C FFI. Its comp
 teko, and it reports rebuilding itself to a byte-identical fixed point on top of `mc`, the same
 criterion [70-bootstrap.md](70-bootstrap.md) applies here.
 
-[**mc-php**](https://github.com/minicompiler/mc-php) reads PHP 8.5. The front end is one Tier 3
-module: the whole grammar, taught from ordinary source, with nothing added to the core. Its oracle
-is php-src's own `.phpt` corpus, run under `php` and under it, and over the whole 21,395-test
-corpus the two agree on 1,704 -- byte for byte on stdout and on the exit code. It is a proof of
-concept and says so; what it demonstrates for `mc` is the size of a surface a module can carry.
+[**mc-php**](https://github.com/minicompiler/mc-php) reads PHP 8.5, and its whole front end is one
+Tier 3 module. It has a page of its own, because what it measures is the size of a surface a
+module can carry: [62-mc-php.md](62-mc-php.md).
 
 Neither is a fork. Both are what [30-teaching.md](30-teaching.md) describes, taken as far as its
 authors needed.
