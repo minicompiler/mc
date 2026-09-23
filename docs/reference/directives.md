@@ -49,8 +49,11 @@ Errors: `#include expects a string`, `unterminated #include <name>`, `unknown bu
 ## `#define NAME expr`
 
 A **folded constant**, not a textual macro: `expr` is parsed and folded at definition time and
-the name becomes that value from there on. A repeat is `duplicate #define`, and declaring a
-local, parameter, global or function with a name a `#define` already owns is
+the name becomes that value from there on. Repeating a definition is legal when it says the
+same thing — the second `#define` folds to the same value and is ignored — and `duplicate
+#define` is an error only when the value differs. That is C's own rule for an object-like
+macro, and it is what lets one program include two files that each define the same constant.
+Declaring a local, parameter, global or function with a name a `#define` already owns is
 `name already defined by #define` — in either order.
 
 ```mc
@@ -58,11 +61,13 @@ local, parameter, global or function with a name a `#define` already owns is
 #define ROWS 6
 #define COLS 7
 #define CELLS (ROWS * COLS)        // folded here, not expanded at each use
+#define ROWS 6                     // legal: the same value again
 
 i64 main() { return CELLS; }
 ```
 
-Errors: `#define expects a name`, `#define expects a constant expression`, `duplicate #define`.
+Errors: `#define expects a name`, `#define expects a constant expression`, `duplicate #define`
+(the same name with a different value).
 
 ---
 

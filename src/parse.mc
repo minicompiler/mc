@@ -367,7 +367,17 @@ i64 def_find(uptr s, i64 len) {
 }
 
 void def_add(uptr name, i64 val, i64 line, uptr fl) {
-    if (def_find(name, cstrlen(name)) >= 0) err_at(fl, line, "duplicate #define");
+    // C's rule for an object-like macro: repeating a definition is legal when it
+    // says the same thing, and an error only when it says something else. Two
+    // files may each own a constant a unit that carries both then sees twice --
+    // `O_RDONLY` is 0 in src/arena.mc and 0 in lib/sys_windows.mc, and refusing
+    // that made a one-step Windows binary impossible to write without moving
+    // #defines between files for ever.
+    i64 prev = def_find(name, cstrlen(name));
+    if (prev >= 0) {
+        if (de_val(de_at(prev)) == val) return;
+        err_at(fl, line, "duplicate #define");
+    }
     defs = grow(T_DEFINES, defs, ndefs, &defcap, DE_SIZE);
     uptr e = de_at(ndefs);
     set_de_name(e, name);
