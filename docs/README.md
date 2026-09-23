@@ -93,9 +93,7 @@ the reasoning and the milestone history.
 The road to 1.0.0 — [plan.md](plan.md) § "What 1.0.0 promises, and what it does not" — is what
 turns the API's current stability into a written promise: a recorded public surface (421 names
 and formats across seven kinds, [reference/hooks.md](reference/hooks.md) § 8) that does not lose
-an entry without a MAJOR, ten committed fixed points on five hosts, and a release canary — a real
-out-of-tree consumer's own build gating every publish before the registry hears about it
-([ci.md](ci.md) § The canary). It does **not** promise a `src/` internal, a message's wording, or
+an entry without a MAJOR, and ten committed fixed points on five hosts. It does **not** promise a `src/` internal, a message's wording, or
 an emitted byte, which is [determinism.md](determinism.md)'s promise and moves by design. The
 surface freeze itself landed in 0.17.0 ([specs/M53.md](specs/M53.md)); 1.0.0 is cut when the
 real-world consumer's own gap list reaches zero.
