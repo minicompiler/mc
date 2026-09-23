@@ -598,6 +598,10 @@ while (i < toml_entries()) {
 }
 ```
 
+`opt_val` and `dylib_add` in that loop are the driver's own and are **not** in the recorded
+surface: what a module copies is the shape -- walk `0 .. toml_entries() - 1`, test the path's
+prefix, read the value -- with a prefix test of its own.
+
 `toml_add`, the four `toml_err*` diagnostics, `toml_push`/`toml_pop` (the re-entrant parse a nested
 manifest needs), `toml_bp` and `toml_occurrences` stay internal: nothing outside `src/toml.mc`'s
 own callers has a documented reason to call them, and they are not in the recorded surface.
