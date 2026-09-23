@@ -7434,124 +7434,118 @@ agents (`.claude/agents/`): `stage0-dev` (C23), `mc-dev` (`.mc` code), `reviewer
   14 lock, machine v6) under `docs/reference/hooks.md` § 8 -- an entry removed or changed is a MAJOR.
   The registry pin follows (`minicompiler/mc-registry` PR #34, six spellings, autoDeploy on merge).
 - A taught compiler can say its own name (0.16.x; reported with a released `mc-php` 0.2.0 binary,
-  which is `mc` plus one Tier 3 module): **`program_name()` and `program_version()`**, two
-  registrations a module makes from `user_init()`. `stage0/` untouched (2848/3000,
-  `/usr/bin/git diff origin/main -- stage0/` empty). Measured on that binary before anything was
-  written: `mc-php --version` -> `mc 1.1.0` (the wrong tool, and a version belonging to something
-  else) and every diagnostic prefixed `mc: `. Every taught compiler shipped as a binary has it --
-  mc-php, teko's `tekoc`, and each of this repository's own `examples/*` that produce a compiler.
-  * **The names.** `program_name(uptr name)` / `program_version(uptr ver)` to register,
-    `prog_name()` / `prog_version()` to read -- the noun-shaped registration every other registry
-    uses (`machine`, `backend`, `target`, `subcommand`, `type_alias`) with a shorter reader, the
-    `type_alias` -> `alias_find` precedent. All four are surface and frozen.
-  * **`mc_version()` is NOT touched, and the two uses cannot share one accessor** -- the finding
-    the task asked for. `mc_version()` is the version of the COMPILER this binary IS: it is what
-    `[package].mc` is checked against (`src/deps.mc`), what names `<libs>/mc/v<version>/`
-    (`dp_mc_root`), what `mc build` stages beside a taught compiler (`drv_stage_libroot`), what the
-    sandbox binds into the box (`sb_lib_box`), and what `mc install`/`mc upgrade` resolve. A taught
-    compiler calling itself `mc-php 0.2.0` still runs on mc 1.1.0 and still resolves mc's library
-    tree by mc's version, so all eleven of those call sites go on calling `mc_version()` and only
-    `--version` and the diagnostic prefix read the registered pair. Two functions, not one with two
-    meanings.
-  * **Where they live, and why not in `hooks.mc` with every other registry**: `die()`/`die2()` are
-    in `src/arena.mc`, the FIRST file of `<mc/core_min>`, so a registry `hooks.mc` owned would be
-    invisible to the diagnostics that need it and to `src/lexdump.mc`, `src/tomldump.mc` and
-    `site/gen`, which include `arena.mc` and nothing else. `prog_nm`/`prog_ver`, `program_name`,
-    `program_version`, `prog_name` and `out_prog` are in `arena.mc`; `prog_version()` is in
-    `src/version.mc` for the mirror reason -- its default is `mc_version()`, declared two files
-    later. Being plain assignments they are callable from a recreated compiler's own `main()` too.
-  * **The eight literal `"mc: "` sites became one helper**, `out_prog()` (`src/arena.mc` x3,
-    `src/deps.mc`, `src/fetch.mc`, `src/pkg.mc`, `src/sandbox.mc` x2), so they cannot drift apart.
-    `out_prog` is documented nowhere in `docs/reference/` and is deliberately NOT surface (the
-    `lex_set_*_hook` precedent, M53 § 8).
-  * **A second finding, forced by running it: `user_init()` is too late for `--version`.** It was
-    answered in the argument loop, ~100 lines before `user_init()`, so a registration could never
-    reach it. Moving `user_init()` earlier is forbidden twice over -- M11 freezes `K_U8..K_EXTERN`
-    at `tok_init()`, and a module that calls `p_push_source` in `user_init` needs `lex_init`'s
-    frame stack (`lib/user_syntax_demo.mc` does). So `--version` now sets a flag in the loop and is
-    ANSWERED after `user_init()`, on a path that runs `tok_init()`, pushes an EMPTY in-memory source
-    (`p_push_source("--version", "", 0)`, which is what gives a pushing `user_init` somewhere to
-    push), then `core_types_init()` and `user_init()`. `mc --version` still takes no argument: the
-    branch sits before `if (in == 0) { usage(); return 1; }`. Verified on `lib/mc_syntax_demo.mc`
-    and `lib/mc_claim_rule.mc`, both of which push a source in `user_init`: exit 0, one line.
-  * **`--version` prints TWO lines for a taught compiler** -- its own name and version, then the mc
-    it was built on, which is the line a bug report needs and which `--host` does not carry. With
-    neither registration the test `prog_nm != 0 || prog_ver != 0` is false and the output is byte
-    for byte the single line it always was.
-  * **What the registration reaches, written down rather than hidden** (`docs/reference/hooks.md`
-    § 7, `docs/reference/diagnostics.md`): every message raised from `user_init()` onward, which is
-    the whole compile path. One raised BEFORE it -- an unknown flag, `-o requires an argument`, an
-    entry file that cannot be opened, and whatever `mc build`/`mc pkg`/`mc sandbox` report before
-    their own `user_init()` -- still says `mc:`, because nothing has said otherwise yet. A compiler
-    that wants its name on those few lines too registers from its own `main()`.
-  -- cost in `src/`: **100 added lines, 39 of them neither comment nor blank** (`arena.mc` +39/12,
-  `cli.mc` +41/18, `version.mc` +15/4, `deps.mc`/`fetch.mc`/`pkg.mc` +1/1 each, `sandbox.mc` +2/2).
-  **Zero new globals beyond the two the feature is** -- `check-limits` reports the same
-  `globals 268/512 (52%)` row on `src/mc_seed.mc`; seed headroom `funcs` 929 -> 935.
-  New fixtures `lib/user_progname.mc` (a module that teaches the compiler nothing else, so the
-  stock compiler is the control on every line) and `lib/mc_progname.mc`, deliberately NOT in
-  `tools/bundle.list` (the M41 precedent for check-script-only modules).
-  `scripts/check-surface.sh` +48: `--version` from both compilers (the stock one exactly one line
-  `mc <mc_version()>` read out of `src/version.mc`, the taught one `mcdemo 7.3.1` then that same
-  line) and a diagnostic from both (`mc: --libc applies to an executable: use --exe` against
-  `mcdemo: ...`). `scripts/surface-extract.sh` gained the four names as exact entries.
-  -- `make bundle` re-run BEFORE bootstrapping (60 files, raw 1264477 -> LZ 573878, blob 574652 B).
+  which is `mc` plus one Tier 3 module): **`program(name, version)`**, one registration a module
+  makes from `user_init()` or a recreated compiler from its own `main()`. `stage0/` untouched
+  (2848/3000, `/usr/bin/git diff origin/main -- stage0/` empty). Measured on that binary before
+  anything was written: `mc-php --version` -> `mc 1.1.0` (the wrong tool, and a version belonging
+  to something else), `mc-php` with no argument -> sixteen usage lines naming mc, and every
+  diagnostic prefixed `mc: `. Every taught compiler shipped as a binary has it -- mc-php, teko's
+  `tekoc`, and each of this repository's own `examples/*` that produce a compiler.
+  * **The names.** `program(uptr name, uptr version)` registers; `program_name()` and
+    `program_version()` read. Three surface entries. The first draft had TWO registrations
+    (`program_name(name)` / `program_version(ver)`) with readers `prog_name`/`prog_version`, and
+    the review killed both halves of that: a reader must not truncate its writer (no other
+    registry does), and two calls made **a half registration expressible**, which is a plausible
+    lie -- a name with no version printed `mc-php 0.0.0-dev`, attributing mc's dev sentinel to
+    another tool, and a version with no name printed `mc 0.2.0` above `mc 0.0.0-dev`, one program
+    name carrying two versions. One call makes both unrepresentable; a 0 in either argument is
+    `program: a name and a version are required`. A module that wants the rename and mc's own
+    version writes `program("myc", mc_version())`.
+  * **`mc_version()` is NOT touched, and the two uses cannot share one accessor.** `mc_version()`
+    is the version of the COMPILER this binary IS: `[package].mc` (`src/deps.mc`),
+    `<libs>/mc/v<version>/` (`dp_mc_root`), the tree `mc build` stages beside a taught compiler
+    (`drv_stage_libroot`), the one the sandbox binds (`sb_lib_box`), `mc install`, `mc upgrade`.
+    All fourteen call sites still call it -- the review checked every one -- and only `--version`,
+    the usage and the diagnostic prefix read the registered pair.
+  * **All 27 prefix sites, not the 8 a grep found.** The first draft converted the two-call
+    spelling (`out_str(2, "mc: "); out_str(2, msg);`) and missed the one-call majority,
+    `out_str(2, "mc: <message>")`: `src/sysroot.mc` (10), `src/pkg.mc` (7), `src/sandbox.mc:906`,
+    `src/upgrade.mc:367`. The review reproduced the consequence -- a recreated compiler printing
+    `myc: cannot open:` from `dep_die` and `mc: unknown target:` from `src/sysroot.mc:374`, two
+    names from one binary, with `sb_unsupported` printing either name depending on `host_os()`.
+    All 27 now go through `out_prog()`; `grep -rn 'out_str(2, "mc' src/` is empty.
+  * **`--version`, `--host` and the usage are answered at the same point, after `user_init()`.**
+    `user_init()` cannot move earlier: M11 freezes `K_U8..K_EXTERN` at `tok_init()`, and `lex_init`
+    opens with `nopen = 0`, which would throw away a source a `user_init` had pushed (the review
+    confirmed that second constraint is real and independent of M11). So the answer moved instead,
+    onto a path that runs `tok_init()`, pushes an EMPTY in-memory source (what gives a pushing
+    `user_init` somewhere to push), then `core_types_init()` and `user_init()`. `usage()` rides
+    with them at no extra cost -- the program with no argument is the FIRST thing a user types.
+    Two consequences, both deliberate and both documented in `docs/reference/cli.md`: the whole
+    argument list is now VALIDATED first, so `mc --version --bogus` reports the bad flag instead
+    of ignoring it (same for `--version -o`, `--version a.mc b.mc`, `--version --opt=2`,
+    `--version --libc=xx`); and given both, the LAST one wins -- `mc --version --host` prints the
+    host, `mc --host --version` the version -- the rule every other flag in that loop follows,
+    where before each returned where it was read.
+  * **The subcommand usage lines** are literals in `src/core_build.mc`, `src/core_pkg.mc` and
+    `src/core_sandbox.mc` (`       mc pkg ...`). `sub_use_print` substitutes the FIRST standalone
+    `mc` word on each line at PRINT time -- registration time is too early, every part's `*_init`
+    runs before `mc_main` -- so `mc.toml` and `<mc/core>` inside a line are left alone and a
+    module that already writes its own name keeps it.
+  * **`--version` prints TWO lines for a RENAMED compiler**, its own then the mc under it. The
+    test is on the NAME and not on "did anything register", so one binary can never print two
+    versions under one name: `program("mc", "1.2.3")` prints its one line and no contradiction.
+  * **What a `user_init()` registration reaches, written down**: every message from there on, the
+    whole compile path, plus `--version`, `--host` and the usage. Not the argument loop's own
+    refusals, not the entry file's `cannot open`, not any subcommand (dispatched before the loop).
+    A compiler that wants those too registers from its own `main()` -- `lib/mc_prognamemain.mc` is
+    `src/main.mc` with one line added and is the gate for it.
+  -- cost in `src/`: **201 added lines, 97 of them neither comment nor blank** -- `arena.mc`
+  +51/15, `cli.mc` +73/30, `hooks.mc` +38/24, `version.mc` +15/4 is the new logic (73 code lines),
+  and the other 24 are the one-call prefix sites rewritten in place (`sysroot.mc` 10, `pkg.mc` 8,
+  `sandbox.mc` 3, `deps.mc` 1, `fetch.mc` 1, `upgrade.mc` 1). **Zero new globals beyond the
+  two the feature is** -- `check-limits` reports the same `globals 268/512 (52%)` row on
+  `src/mc_seed.mc`. New fixtures `lib/user_progname.mc`, `lib/mc_progname.mc` (the `user_init`
+  road) and `lib/mc_prognamemain.mc` (the `main()` road), deliberately NOT in `tools/bundle.list`
+  (the M41 precedent for check-script-only modules). `scripts/check-surface.sh` +100: five cases --
+  `--version` from both compilers, all 15 usage lines, a diagnostic from both, ONE name per binary
+  across `arena.mc`/`sysroot.mc`/`sandbox.mc` on the `main()` road, and the `--version`/`--host`
+  ordering. `scripts/surface-extract.sh` gained the three names as exact entries.
+  -- `make bundle` re-run BEFORE bootstrapping (60 files, raw 1266559 -> LZ 574788, blob 575562 B).
   `make check` green end to end (**RC 0, zero FAIL**): `budget` 2848/3000, `test` 32/32,
   `check-lex`/`check-ast`/`check-asm` **108/108** with `tests/golden/seed-cmp.txt` **unmoved at
   407** (the change adds no comparison), `check-obj` **32/32 identical to the frozen seed**,
-  `check-bundle`, `bootstrap` at BOTH fixed points (`mc2.o == mc3.o`, `mc2o.o == mc3o.o`) with the
-  cross-road identity (`build/mc2o src/mc.mc == build/mc2.o`) and **both `--dump-asm` diffs between
-  `mc1` and `mc2` empty**, `check-surface` 32/32 + the two new cases + inert, `check-opt`,
-  `test-exe` 32/32, `check-mc`, `check-standalone`, `check-parts`, `check-libroot` 11/11,
-  `check-toml`, `check-build`, `check-pkg`, `check-tool`, `check-stubs`, `check-sysroots`,
-  `check-limits` **17/17 seed limits under 90%**, `check-minimal`, `test-windows` /
-  `test-windows-x86_64`, `check-examples`, `check-lang`, `check-conc`, `check-desktop`,
-  `check-float`, `check-wide`, `check-kernel`, `test-sandbox` **73 ok / 0 failed / 1 skipped**,
-  `check-docs` (**275 symbols**, 50 flags, 36 TOML keys, 10 directives, 52 samples, 601 links),
-  **`check-freeze` 487 entries** (275 sym, 50 flag, 36 toml, 10 dir, 101 bundle, 14 lock,
-  1 machine -- +4, re-recorded in this commit), `site` + `check-site`.
-  The six Docker legs were re-run through this machine's Lima daemon after the main run (the
-  default docker context has no daemon, so they self-skipped there): `test-linux` **57/57** on
-  linux/aarch64 and **53/53** on linux/x86_64, the four `--exe` cells **60/60 (aarch64 musl) +
-  60/60 (aarch64 gnu) + 56/56 (x86_64 musl) + 56/56 (x86_64 gnu)**, `check-site-linux` **101 pages
-  byte for byte the macOS render on all four cells, 0 link problems**. `check-avr`'s LOCAL oracle
-  (simavr 1.7) passed every case and `avr.elf` is the same 15255 bytes; its Docker "the version the
-  CI leg has" sub-case could not run on this machine -- the legacy builder in this Lima daemon
-  ignores `--platform linux/amd64` and tags the image `linux/arm64`, so `docker run --platform
-  linux/amd64` cannot resolve it. Environment, not code: it self-skips without Docker and the CI
-  leg builds it with buildx.
-  `make check-linux-host` **RC 0 over all four cells** (aarch64 and x86_64 x musl and gnu), each
-  after its own plain AND optimized fixed point (`mc2l.o == mc3l.o`, `mc2lo.o == mc3lo.o`), its own
-  cross-road identity and the cross proof (`mc2l --backend=macho src/mc.mc` byte for byte the macOS
-  `build/mc2.o`) green in all four.
+  `check-bundle`, `bootstrap` at BOTH fixed points with the cross-road identity and **both
+  `--dump-asm` diffs between `mc1` and `mc2` empty**, `check-surface` 32/32 + the five new cases +
+  inert, `check-opt`, `test-exe` 32/32, `check-mc`, `check-standalone`, `check-parts`,
+  `check-libroot` 11/11, `check-toml`, `check-build`, `check-pkg`, `check-tool`, `check-stubs`,
+  `check-sysroots`, `check-limits` **17/17 seed limits under 90%**, `check-minimal`,
+  `test-windows` / `test-windows-x86_64`, `check-examples`, `check-lang`, `check-conc`,
+  `check-desktop`, `check-float`, `check-wide`, `check-kernel`, `test-sandbox` **73 ok / 0 failed /
+  1 skipped**, `check-docs` (**274 symbols**, 50 flags, 36 TOML keys, 10 directives, 52 samples,
+  602 links), **`check-freeze` 486 entries** (274 sym, +3 over main, re-recorded in this commit),
+  `site` + `check-site`.
   `scripts/check-inert.sh <mc1 from origin/main 507513a> build/mc1`: **33 objects identical on the
   plain road and 33 with `--opt=1`** (`tests/*.mc` and `src/mc.mc`) plus byte-identical artefacts
   for `examples/api`, `lang`, `conc`, `desktop` and `kernel` through the taught compiler each side
   builds -- nothing in the corpus registers a name, so nothing the compiler emits could move.
+  `make check-linux-host` **RC 0 over all four cells** (aarch64 and x86_64 x musl and gnu), each
+  after its own plain AND optimized fixed point and with the cross proof
+  (`mc2l --backend=macho src/mc.mc` byte for byte the macOS `build/mc2.o`) green.
   **All ten goldens rewritten once**, each only after its own criterion: `mc2.sha256`
-  `c75f9539396a5b7b7fd594cd66bfa87c4b4f451d30e44302e6b645fd7057ee0f` and `mc2-opt.sha256`
-  `5f73caf91ccba5d1b8c951e8e18d3406184f660472b564c15a25f5a4cfc8ced8` (recorded by
+  `42359f24ae172fb991f2d205a69d65b7b43e89ea03b007b887766ac56160c6b2` and `mc2-opt.sha256`
+  `0a838e11dccf54f93f0f3d69f2e13249152ccd271b131cae22cf7943f357a8e6` (recorded by
   `scripts/bootstrap.sh` after the two empty `--dump-asm` diffs and the two `cmp`s); the four Linux
   ones deleted and re-recorded by `make check-linux-host` -- `mc2-linux-arm64`
-  `0ee05e3fcb2319de276e061e80cb9ed6a8da5fe1535bf61525842766b75c538a`, `mc2-linux-arm64-opt`
-  `4437f1fc01641d5458aab1995e7fd68f9a87cc2f3ebf152032285b80449adc20`, `mc2-linux-x86_64`
-  `11d7b988a94bd096e93a5f3605c869d465eeefb74257f4b6246f6fe47bd437e5`, `mc2-linux-x86_64-opt`
-  `cf9c47d113a62431bb2d15c133462fa3123ff744996d30d0f11b06dce5dddf2b`; the four Windows ones
+  `ada299fd0995ba3fe1484d95caaefeaa5a9cf6607d384a08752f79509dc8ebba`, `mc2-linux-arm64-opt`
+  `e4dec23d256840df1749acc7af269471c0f75e0b097306a709041e91ea5e3493`, `mc2-linux-x86_64`
+  `d78d3827ef47296cd05eb32b9233ac9bcd3cd5b40ba8e2cd62d697d264096781`, `mc2-linux-x86_64-opt`
+  `bdf4ded167d7b25a972789cf91f42b30487751d53cdde297957613e06c480a08`; the four Windows ones
   cross-computed on macOS per `tests/golden/README.md` -- `mc2-windows-arm64`
-  `b7e8e3b899f328b7fdd09dfd2395b08a4ca4dbf9b445c3eea880f3f9ffe6e2a3` (1497486 B),
+  `a7e5069283b2ee26a925f3ba465df8e8aaa1948bc94b1e130214917706f61f17` (1500665 B),
   `mc2-windows-arm64-opt`
-  `649b57497c78f13f0793d49a75d22a12967bea0420d04d6b8a326a882019122f` (1438462 B),
+  `3faab76d822f3bb115bd74fad2cb524ea9b776a7bc652f613c7a044a1203a5cd` (1441577 B),
   `mc2-windows-x86_64`
-  `9ac1bbb6aec893903c2b8be050acfd817838a055d046a6a64df709b39a544c79` (1553442 B),
+  `030da30b78611735d6073cc3e34d5e43d99c5d02306e941d6e6e8c2656997950` (1557021 B),
   `mc2-windows-x86_64-opt`
-  `8408b847d3eca70c94b552da39f5e5b81a891671ecff8aa6a2c28d6e831a542d` (1480910 B), the two plain
+  `0a98b883870a0910b117ee262f420ca13ec6b57c34b17a9a89bb15f146dd810b` (1484389 B), the two plain
   ones also written byte for byte by `build/mc2`.
-  Docs: `docs/reference/hooks.md` § 7 (the two registrations, the read side, what `mc_version()`
-  keeps meaning, the two-line `--version`, and what the registration reaches),
-  `docs/reference/cli.md` (`--version`'s row, the taught example, and why it is answered after
-  `user_init()`), `docs/reference/diagnostics.md` (§ The four shapes: `mc` is the PROGRAM's name,
-  not a literal), plus the counts in § 8 and `tests/golden/README.md` brought to 487/275 (both were
-  stale at 423/211 by two earlier PRs).
+  Docs: `docs/reference/hooks.md` § 7 (the registration, the two readers, why one call, what
+  `mc_version()` keeps meaning, the two-line `--version`, and the two roads with what each
+  reaches), `docs/reference/cli.md` (`--version`'s row, the taught example, the validation and
+  ordering consequences), `docs/reference/diagnostics.md` (`mc` is the PROGRAM's name, one helper,
+  which registration road reaches which messages), plus the stale counts in `hooks.md` § 8 and
+  `tests/golden/README.md` (423/211 by two earlier PRs) brought to 486/274.
 - Next (rewritten 2026-09-15, the final docs pass before 1.0.0): **M49, M50, M52 and M53's own
   steps A-C are all closed and shipped** — the register allocator/peephole/hoisting on all five
   hosts (1.30x `clang -O2` on the workload, AArch64), the reproducible bench cell on three GitHub

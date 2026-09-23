@@ -51,7 +51,7 @@ Arguments are read left to right. The first non-flag argument is the source; a s
 | `--backend=NAME` | pick a registered backend. Built in: `macho`, `macho-exe`, `elf-obj`, `elf-obj-x86_64`, `elf-exe`, `elf-exe-x86_64`, `coff-obj-arm64`, `coff-obj-x86_64`, `pe-exe-x86_64`. The default is the HOST's object backend — the object slot of the host's `target()` registration, `macho` on macOS and `elf-obj`/`elf-obj-x86_64` on Linux (M37) — resolved after `user_init()` like `--exe`'s (post-M41 review), so a module that re-registers the host pair is honoured here too. A host registered with 0 in that slot has no object step at all, and the default is refused with `<os>/<arch> has no object backend: use --exe`. A taught compiler adds its own with `backend("name", &f)`. An unknown name lists what exists and exits 1. |
 | `--include=DIR` | add one `#include "…"` search root, exactly like a `[include].paths` entry does for `mc build`. Repeatable; roots are tried in the order given, after the includer's own directory. It is what lets one source tree carry two platform layers in different directories and pick one without a `mc.toml` (`examples/conc/lib/macos`, `lib/linux`). |
 | `--host` | print what this binary is and exit 0 — three lines, no source needed. |
-| `--version` | print `<program> <version>` and exit 0 — no source needed. |
+| `--version` | print `<program> <version>` and exit 0 — no source needed, but the rest of the argument list is still checked (below). |
 | `--opt=N` | the optimization level, `0` or `1`. **Default 0**, the plain road, on every host and in every release — the unoptimized lowering is the reference every determinism gate compares against ([determinism.md](../determinism.md)), so it does not move when the optimizer improves. `--opt=1` turns on the register allocator (M49): locals and parameters that qualify live in `x19..x28` for the length of the function instead of going through a frame slot on every read. It changes no observable behaviour — `scripts/check-opt.sh` runs the whole corpus on both roads and compares exit code and stdout — and it changes nothing at all for a machine that answers 0 to `MTASK_REG_COUNT` ([machine.md](machine.md) § 5). The dump modes honour it: `--dump-asm --opt=1` is how the optimized lowering is read. Anything but `0` or `1` is `mc: --opt must be 0 or 1: <value>`. The last of `--opt=`/`-O` on the command line wins. |
 | `-O` | an alias for `--opt=1`, and the only short flag `mc` has besides `-o`. It is spelled out here rather than derived, because `scripts/check-docs.sh` enumerates the `--` literals `src/` compares argv against and a bare `-O` is not one of them. |
 | `--machine=NAME` | pick the machine the `--dump-*` modes lower with: `arm64` (the host's, default), `x86_64` (System V) or `x86_64-win` (Win64 — the same instruction set, the Windows calling convention). A compile does **not** need it — an object backend names its own machine, because the file records the architecture — so this flag exists for looking at what a machine selects (`--dump-asm --machine=x86_64-win`). An unknown name is `mc: unknown machine: NAME`. |
@@ -88,8 +88,8 @@ a compiler whose own `--version` is the same line. See [../ci.md](../ci.md) § V
 
 A taught compiler shipped as its own tool says so instead, and adds a second line naming the mc it
 was built on — the line a bug report against it needs, and one `--host` does not carry. That is
-`program_name()`/`program_version()` from `user_init()` ([hooks.md](hooks.md) § 7); a compiler
-that registers neither prints the single line above, byte for byte.
+`program()` from `user_init()` ([hooks.md](hooks.md) § 7); a compiler that registers nothing prints
+the single line above, byte for byte.
 
 ```
 $ mc-php --version
@@ -97,9 +97,21 @@ mc-php 0.2.0
 mc 1.1.0
 ```
 
-`--version` is answered after `user_init()` so that a module can have said its name by then. Every
-other one-shot flag is answered in the argument loop, which is why a diagnostic raised there — an
-unknown option, an entry file that cannot be opened — still carries the `mc:` prefix.
+**`--version`, `--host` and the usage are answered after `user_init()`**, so that a module can have
+said its name by then, and after the whole argument list has been read. Two consequences, both
+deliberate:
+
+* the rest of the command line is **validated first**, so `mc --version --bogus` reports
+  `unknown option: --bogus` and exits 1 rather than printing a version and ignoring the flag. The
+  same holds for `--version -o`, `--version a.mc b.mc`, `--version --opt=2` and `--version
+  --libc=xx`. A `--version` on its own, or beside `--opt=N`, is unaffected;
+* given both, **the last one wins** — `mc --version --host` prints the host and `mc --host
+  --version` the version — the rule every other flag in the loop already follows.
+
+A diagnostic raised before `user_init()` still carries the `mc:` prefix: the argument loop's own
+refusals, the entry file's `cannot open`, and every subcommand, which is dispatched before the
+loop. A compiler that wants its name on those too registers from its own `main()`
+([hooks.md](hooks.md) § 7).
 
 Backends are documented in [objects.md](objects.md) and in [../guide/40-backends.md](../guide/40-backends.md).
 

@@ -903,7 +903,7 @@ i64 sb_check() {
 // setrlimit, and cannot name a refusal (§ 7).
 i64 sb_unsupported(uptr tail) {
     if (str_eq(host_os(), "macos")) {
-        out_str(2, "mc: the sandbox is a Linux feature; on this Mac: limactl shell mc-k7 build/mc-linux-arm64 ");
+        out_prog(); out_str(2, "the sandbox is a Linux feature; on this Mac: limactl shell mc-k7 build/mc-linux-arm64 ");
         out_str(2, tail);
         out_str(2, " (docs/build.md § Lima)\n");
         return SB_EXIT_SETUP;

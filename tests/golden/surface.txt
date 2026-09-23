@@ -365,10 +365,9 @@ sym	pass	1
 sym	pass_fn_at	1
 sym	path_join	2
 sym	path_norm	1
-sym	prog_name	0
-sym	prog_version	0
-sym	program_name	1
-sym	program_version	1
+sym	program	2
+sym	program_name	0
+sym	program_version	0
 sym	read_file	2
 sym	reloc_add	6
 sym	sec_align	1

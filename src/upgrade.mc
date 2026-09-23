@@ -364,7 +364,7 @@ i64 upgrade_cmd(i64 argc, uptr argv) {
     if (!str_eq(gotsum, wantsum)) {
         unlink(archive);
         unlink(sumfile);
-        out_str(2, "mc: checksum mismatch for ");
+        out_prog(); out_str(2, "checksum mismatch for ");
         out_str(2, pkg_what("mc", want));
         out_str(2, "\n  expected ");
         out_str(2, wantsum);

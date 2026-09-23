@@ -79,20 +79,22 @@ void dump_host() {
 // carries no `v`, because `docs/ci.md` § Versioning says the `v` belongs to the
 // tag name and nothing else -- it is the same string release-assets.sh takes as
 // its first argument. `0.0.0-dev` in any binary built from the working tree
-// (src/version.mc). `--host` is the shape: a one-shot informational flag,
-// stdout, exit 0, answered before anything else is read.
+// (src/version.mc).
 //
-// A taught compiler that registered a name or a version gets a SECOND line
-// naming the mc it was built on: a bug report against `mc-php 0.2.0` has to say
-// which compiler produced the bytes, and `--host` does not carry it. With
-// neither registration the two reads answer `mc` and mc_version(), the test is
-// false, and the output is byte for byte the single line it always was.
+// A taught compiler that renamed itself gets a SECOND line naming the mc it was
+// built on: a bug report against `mc-php 0.2.0` has to say which compiler
+// produced the bytes, and `--host` does not carry it. The test is on the NAME
+// and not on "did anything register", so one binary can never print two
+// versions under one name: program("mc", "1.2.3") -- a compiler that keeps the
+// name and changes the version -- prints its one line and no contradiction
+// under it, and with no registration at all the two readers answer `mc` and
+// mc_version() and the output is byte for byte the single line it always was.
 void dump_version() {
-    out_str(1, prog_name());
+    out_str(1, program_name());
     out_str(1, " ");
-    out_str(1, prog_version());
+    out_str(1, program_version());
     out_str(1, "\n");
-    if (prog_nm != 0 || prog_ver != 0) {
+    if (!str_eq(program_name(), "mc")) {
         out_str(1, "mc ");
         out_str(1, mc_version());
         out_str(1, "\n");
@@ -158,9 +160,15 @@ void dump_machine() {
 // compiler without <mc/core_build> has none and prints just the two -- which is
 // the honest answer, since `mc build` is not in it.
 void usage() {
-    out_str(2, "usage: mc [--dump-tokens|--dump-ast|--dump-asm|--dump-syms|--dump-rules|--dump-machine] [--backend=NAME|--exe] [--machine=NAME] [--include=DIR] [--opt=N|-O] [--libc=gnu|musl] [--interp=PATH] [--link=dynamic|static] source.mc [-o out]\n");
-    out_str(2, "       mc --host\n");
-    out_str(2, "       mc --version\n");
+    out_str(2, "usage: ");
+    out_str(2, program_name());
+    out_str(2, " [--dump-tokens|--dump-ast|--dump-asm|--dump-syms|--dump-rules|--dump-machine] [--backend=NAME|--exe] [--machine=NAME] [--include=DIR] [--opt=N|-O] [--libc=gnu|musl] [--interp=PATH] [--link=dynamic|static] source.mc [-o out]\n");
+    out_str(2, "       ");
+    out_str(2, program_name());
+    out_str(2, " --host\n");
+    out_str(2, "       ");
+    out_str(2, program_name());
+    out_str(2, " --version\n");
     subcommand_usage();
 }
 
@@ -179,7 +187,8 @@ i64 mc_main(i64 argc, uptr argv, uptr envp) {
     uptr mname = 0;                             // --machine=, for the dump modes
     i64 mode = M_COMPILE;
     i64 want_exe = 0;                           // --exe: the HOST's exe backend
-    i64 want_ver = 0;                           // --version, answered after user_init
+    i64 want_info = 0;                          // 1 = --version, 2 = --host; both
+                                                // answered after user_init, last one wins
     uptr linkflag = 0;                          // the last of --libc/--interp/--link
     i64 optn = 0;                               // M49: --opt=N / -O, 0 = the plain road
 
@@ -208,8 +217,8 @@ i64 mc_main(i64 argc, uptr argv, uptr envp) {
     loop {
         if (i >= argc) break;
         uptr a = ld64(argv + i * 8);
-        if (str_eq(a, "--host"))          { dump_host(); return 0; }
-        else if (str_eq(a, "--version"))  want_ver = 1;
+        if (str_eq(a, "--host"))          want_info = 2;
+        else if (str_eq(a, "--version"))  want_info = 1;
         else if (str_eq(a, "--dump-tokens")) mode = M_TOKENS;
         else if (str_eq(a, "--dump-ast"))   mode = M_AST;
         else if (str_eq(a, "--dump-asm"))   mode = M_ASM;
@@ -281,23 +290,40 @@ i64 mc_main(i64 argc, uptr argv, uptr envp) {
     }
     // `--version` names the PROGRAM, and a taught compiler only becomes itself
     // inside user_init(): there is no hook before that one, and moving it is
-    // what M11 forbids (the token ids are frozen by tok_init) and what a module
-    // pushing a source in it forbids (p_push_source needs lex_init's frame
-    // stack). So the answer is given HERE, after the module has had its say,
-    // and not in the loop above with --host, which says nothing about identity.
+    // what M11 forbids (the token ids are frozen by tok_init) and what lex_init
+    // forbids on its own -- it opens with `nopen = 0`, which would throw away a
+    // source a user_init had pushed. So the answer is given HERE, after the
+    // module has had its say. `--host` is answered in the same place, not
+    // because it needs a registration but because the two are one kind of flag
+    // and a user should not have to know that one of them is read earlier. Given
+    // both, the LAST one wins -- the rule every other flag in this loop already
+    // follows -- which is also what the old split happened to do, since each
+    // returned where it was read.
     //
-    // The entry file is never read on this road -- `mc --version` takes no
+    // The price, deliberately taken and documented in docs/reference/cli.md: the
+    // whole argument list is now VALIDATED before either is answered, so
+    // `mc --version --bogus` reports the bad flag instead of ignoring it. Every
+    // caller in scripts/, the Makefile and .github/ passes the flag alone or
+    // beside `--opt=0`.
+    //
+    // usage() rides with them, for the same reason and at no extra cost: the
+    // program with no argument at all is the FIRST thing a user types, and it
+    // named mc -- sixteen lines of it, including subcommands a taught compiler
+    // may not even carry.
+    //
+    // The entry file is never read on this road -- none of the three takes an
     // argument -- so the lexer is opened on an empty in-memory source instead,
     // which is what gives a user_init that pushes one somewhere to push.
-    if (want_ver) {
+    if (want_info || in == 0) {
         tok_init();
         p_push_source("--version", "", 0);
         core_types_init();
         user_init();
-        dump_version();
-        return 0;
+        if (want_info == 2) { dump_host();    return 0; }
+        if (want_info)      { dump_version(); return 0; }
+        usage();
+        return 1;
     }
-    if (in == 0) { usage(); return 1; }
 
     // M23/M41: the pre-scan sizes every table before the first one exists. It
     // lives in <mc/core_build> and reaches here through on_plan(); with that

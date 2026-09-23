@@ -23,11 +23,16 @@ came from inside the binary (`syntax_demo_test:10: type expected at top level`).
 printed as `?`.
 
 `mc` in the first two shapes is the PROGRAM's name, not a literal: a taught compiler shipped as
-its own binary registers its own with `program_name()` ([hooks.md](hooks.md) § 7) and its
-diagnostics read `mc-php: cannot open: sys.mc`. A registration made from `user_init()` reaches
-every message raised from there on, which is all of the compile path; one raised before it — an
-unknown flag, an entry file that cannot be opened, and whatever `mc build`/`mc pkg`/`mc sandbox`
-report before their own `user_init()` — still says `mc:`, because nothing has said otherwise yet.
+its own binary registers its own with `program()` ([hooks.md](hooks.md) § 7) and its diagnostics
+read `mc-php: cannot open: sys.mc`. All twenty-seven sites that write the prefix go through one
+helper, so they cannot say different things in one binary.
+
+Which of them a registration reaches depends on where it is made. From `user_init()` — the
+ordinary road — it reaches every message raised from there on, which is all of the compile path,
+plus `--version`, `--host` and the usage. It does not reach the argument loop's own refusals, the
+entry file's `cannot open` (`lex_init` must precede `user_init`), or any subcommand, which is
+dispatched before the loop; those still say `mc:`, because nothing has said otherwise yet. From a
+recreated compiler's own `main()`, before `mc_main()`, it reaches all of them.
 
 ```mc
 // expect-error: type expected at top level
