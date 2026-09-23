@@ -21,9 +21,8 @@ you teach it from ordinary `mc` source.
   run time against C, Go, Zig, Rust and C#
 - **CI and releases** — [`docs/ci.md`](docs/ci.md)
 - **Examples** — [`examples/`](examples/)
-- **On the road to 1.0.0** — the public surface is recorded and frozen against removal
-  (`docs/reference/hooks.md` § 8), gated by an out-of-tree consumer's own build before every
-  release publishes (`docs/ci.md` § The canary); see [`docs/plan.md`](docs/plan.md) §
+- **1.0.0 is cut** — the public surface is recorded and frozen against removal
+  (`docs/reference/hooks.md` § 8); see [`docs/plan.md`](docs/plan.md) §
   "What 1.0.0 promises, and what it does not"
 
 <!-- release-excerpt-end -->

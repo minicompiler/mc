@@ -594,7 +594,6 @@ jobs:
       - name: Compose the release body
         env:
           TAG_INPUT: ${{ inputs.tag }}
-          CANARY: ${{ vars.MC_CANARY }}
         run: |
           set -eu
           tag="${TAG_INPUT:-$GITHUB_REF_NAME}"
@@ -631,23 +630,6 @@ jobs:
             echo '```'
             cat dist/*.sha256
             echo '```'
-            # The canary (docs/ci.md § The canary): while it is armed every
-            # release is born a pre-release and the `promote` job flips the flag
-            # on teko's verdict. Say so here, with the one command that does it
-            # by hand, so the note is self-contained for whoever finds the
-            # release still marked pre-release.
-            if [ "${CANARY:-}" = "true" ]; then
-              echo
-              echo "## Canary"
-              echo
-              echo "Published as a **pre-release**. The \`promote\` job waits up to 15 minutes for"
-              echo "teko's verdict, and a scheduled workflow keeps checking every 30 minutes after"
-              echo "that; either one clears the flag when the verdict says \`ok\`. To promote by hand:"
-              echo
-              echo '```sh'
-              echo "gh release edit $tag --prerelease=false --latest"
-              echo '```'
-            fi
           } > "$RUNNER_TEMP/body.md"
           cat "$RUNNER_TEMP/body.md"
           echo "TAG=$tag" >> "$GITHUB_ENV"
@@ -656,7 +638,6 @@ jobs:
       - name: Create the GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CANARY: ${{ vars.MC_CANARY }}
         run: |
           set -eu
           # A version with a `-` suffix (0.2.0-rc1) is a pre-release. Neither
@@ -667,15 +648,6 @@ jobs:
           case "$VERSION" in
             *-*) prerelease="--prerelease" ;;
           esac
-          # M53 § 6.2: while the canary is armed EVERY release is born a
-          # pre-release, whatever the version string says. The assets, the
-          # checksums and the body are identical; the flag is the only
-          # difference, and it is the one thing the `promote` job below can flip
-          # afterwards. With MC_CANARY unset this is exactly the `case` above
-          # and nothing about the release changes.
-          if [ "${CANARY:-}" = "true" ]; then
-            prerelease="--prerelease"
-          fi
           # shellcheck disable=SC2086
           gh release create "$TAG" \
             --title "mc $VERSION" \
@@ -684,125 +656,13 @@ jobs:
             $prerelease \
             dist/mc-*.tar.gz dist/mc-*.tar.gz.sha256
 
-  # The canary (docs/specs/M53.md § 6, docs/ci.md § The canary): the release the
-  # job above published is a PRE-RELEASE while `vars.MC_CANARY` is armed, and
-  # this job is what clears the flag. Nothing crosses the repository boundary but
-  # two public reads -- teko polls mc's releases API with no token and writes its
-  # verdict into a branch of its own repository with its own token; this job
-  # reads that file with no token owed to teko either.
-  #
-  # It is a job and not a step inside `publish` for `publish-to-registry`'s exact
-  # reason: a failed promotion must not be able to unmake a published release,
-  # and a rerun of this job alone is the retry. Manual promotion is one command,
-  # printed in the release note and by the script.
-  #
-  # This job's own budget is deliberately SHORT (15 minutes, not 90): teko's
-  # schedule is not guaranteed to notice a pre-release within any fixed window
-  # -- GitHub throttles `schedule` triggers on a quiet repository the same way
-  # it throttled teko's, and a v1.1.0 verdict once landed 90 minutes after this
-  # job had already given up waiting -- so a long budget here just idles a
-  # runner. `.github/workflows/promote-pending.yml` is the real backstop: it
-  # asks ONCE per pre-release, every 30 minutes, forever, and is what actually
-  # promotes a release whose verdict lands late. This job only catches the
-  # common case where teko's own poller was already awake.
-  #
-  # A TIMEOUT here therefore never fails the run and never promotes blindly --
-  # required or not, the release is correctly left a pre-release and the
-  # scheduled promoter finishes the job once a real verdict exists. A `fail`
-  # VERDICT still fails this job's step, always; `continue-on-error` below only
-  # decides whether that failure also reddens the overall WORKFLOW run.
-  #
-  # Two repository variables:
-  #   MC_CANARY           `true` arms it. Unset, this job is skipped and the
-  #                       pipeline is byte for byte what it was: the release is
-  #                       created exactly as before and the registry job follows
-  #                       `publish` as it always did.
-  #   MC_CANARY_REQUIRED  `true` at 1.0.0 ("bloqueante no 1.0.0"). Until then a
-  #                       `fail` verdict is `continue-on-error`, so the run stays
-  #                       green with a failed step; at 1.0.0 it reddens the run.
-  #                       Either way the release stays a pre-release.
-  #   MC_CANARY_REPO      owner/repo publishing the verdict; the script's default
-  #                       is `teko-org/teko-lang`.
-  promote:
-    name: Promote the release (canary)
-    if: ${{ vars.MC_CANARY == 'true' }}
-    needs: publish
-    runs-on: ubuntu-latest
-    # 15 minutes of polling plus the checkout -- the fast path only; see above.
-    timeout-minutes: 20
-    permissions:
-      contents: write
-    continue-on-error: ${{ vars.MC_CANARY_REQUIRED != 'true' }}
-    outputs:
-      # Set by canary-poll.sh: `true` only once the pre-release flag was
-      # actually cleared. `publish-to-registry` gates on THIS, not on the
-      # job's own result, so a timeout (job result: success) cannot be mistaken
-      # for a promotion.
-      promoted: ${{ steps.canary.outputs.promoted }}
-    steps:
-      - name: Check out the tag
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.tag || github.ref }}
-
-      - name: Wait for teko's verdict, then promote
-        id: canary
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG_INPUT: ${{ inputs.tag }}
-          CANARY_REPO: ${{ vars.MC_CANARY_REPO }}
-          CANARY_REQUIRED: ${{ vars.MC_CANARY_REQUIRED }}
-        run: sh scripts/canary-poll.sh "${TAG_INPUT:-$GITHUB_REF_NAME}"
-
-  # S5 of the registry (docs/specs/M47-S5.md): the release `publish` created is
-  # announced to the mc package registry, which clones the tag,
-  # hashes it, validates it inside `mc sandbox` and -- if it is accepted --
-  # writes the row a consumer reads. `minicompiler/mc` is the first registered
-  # repository and the package it publishes is `mc` itself
-  # (docs/reference/packages.md § The `mc` package).
-  #
-  # The action carries NO secret: the whole request is this repository's public
-  # URL, and the registry answers with a job id whose report the action prints
-  # into this log. It is `continue-on-error: false` on purpose -- a refused
-  # validation is a red release, not a footnote.
-  #
-  # It needs the release to EXIST (§ 13b: a version is publishable only when a
-  # GitHub Release names its tag), which is why it is `needs: publish` and not a
-  # step inside it: a failed announcement must not be able to unmake the
-  # release, and a rerun of this job alone is the retry.
-  #
-  # The repository has to be registered once, by a person, on
-  # https://minicompiler.dev/me. Until that has happened the registry answers
-  # 404 `not registered` and this job is red while everything above it is green.
-  #
-  # Gated by the repository variable MC_REGISTRY_PUBLISH (owner, 2026-09-06):
-  # the registry's GitHub token and the apex flip are both scheduled for the
-  # 1.0.0 release, and a job that is red by design on every release until then
-  # would hide a real failure. The variable is set to `true` at the flip
-  # (docs/ci.md); until then the job is skipped, never red.
-  #
-  # `needs: [publish, promote]` since M53 step C: a pre-release must never become
-  # the registry's newest row. The `if` names a status function on purpose -- a
-  # job whose `needs` is SKIPPED is skipped too unless it does, and `promote` is
-  # skipped whenever the canary is unarmed, which is every release before the
-  # owner sets MC_CANARY.
-  #
-  # The gate reads `needs.promote.outputs.promoted`, NOT the job's `result`,
-  # because since the `promote` job's budget dropped to 15 minutes a plain
-  # timeout is a `result: success` (docs/ci.md § The canary) -- the release is
-  # correctly still a pre-release, and gating on `result` alone would announce
-  # it to the registry anyway. `promoted` is `true` only once
-  # `scripts/canary-poll.sh` actually cleared the flag; when the canary is
-  # unarmed there is no such output at all, which is why the check is skipped
-  # in that case rather than compared against it.
   publish-to-registry:
     name: Publish to the mc registry
     if: >-
       ${{ !cancelled()
           && vars.MC_REGISTRY_PUBLISH == 'true'
-          && needs.publish.result == 'success'
-          && (vars.MC_CANARY != 'true' || needs.promote.outputs.promoted == 'true') }}
-    needs: [publish, promote]
+          && needs.publish.result == 'success' }}
+    needs: [publish]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:

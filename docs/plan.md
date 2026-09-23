@@ -447,11 +447,6 @@ as stated for a reader who already accepts it), `docs/specs/M53.md` (the decisio
   `-O`: one generation is byte-identical to the next, and the optimized compiler writes the same
   object the plain one does when asked for the plain road (`tests/golden/README.md`).
   `check-obj` keeps agreeing with the frozen C seed for the whole test suite.
-* **Every release is gated by an outside consumer's own build.** `mc` is born a GitHub
-  pre-release; teko (the one real out-of-tree consumer today) polls the public release, runs its
-  whole recipe against the published tarball and writes a verdict; a `promote` job flips the
-  release visible only on a green one (`docs/ci.md` § The canary). Advisory before 1.0.0,
-  required from 1.0.0 on (`vars.MC_CANARY_REQUIRED`).
 
 **What is deliberately NOT promised** (`docs/specs/M53.md` § 3, `docs/reference/hooks.md` § 8):
 
@@ -476,7 +471,7 @@ reading (`docs/specs/M52.md` § 16).
 **When it is cut**: no earlier than teko's own gap list reaching zero, self-hosting on its five
 legs and publishing `teko_std` with no new hook requested of `mc` (`docs/specs/M53.md` § 13,
 the owner's direction verbatim). Nothing on this side waits for that date to arrive: 0.17.0
-already carries the freeze, the inventory and the canary in advisory mode, and 0.17.x takes bug
+already carries the freeze and the inventory, and 0.17.x takes bug
 fixes only until the tag (`docs/specs/M53.md` § 7, D19).
 
 ---
