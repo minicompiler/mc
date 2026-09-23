@@ -297,7 +297,7 @@ repo=${CANARY_REPO:-teko-org/teko-lang}
 branch=${CANARY_BRANCH:-canary}
 url=${CANARY_URL:-}
 [ -n "$url" ] || url="https://raw.githubusercontent.com/$repo/$branch/$version.json"
-timeout=${CANARY_TIMEOUT:-5400}
+timeout=${CANARY_TIMEOUT:-900}
 interval=${CANARY_INTERVAL:-60}
 
 [ -n "$urlonly" ] && { echo "$url"; exit 0; }
