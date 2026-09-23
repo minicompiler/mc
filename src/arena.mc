@@ -232,7 +232,7 @@ uptr arena_base() {
 // what was asked, what is already reserved, what the plan had estimated, where
 // the parser was, and what to change. `n` is the request that did not fit.
 void arena_die(uptr what, i64 n) {
-    out_str(2, "mc: ");
+    out_prog();
     out_str(2, what);
     out_str(2, " (");
     out_num(2, heap_res >> 20);
@@ -540,13 +540,49 @@ void out_hex(i64 fd, u64 v) {
     io_write(fd, tmp + i, 18 - i);
 }
 
+// ---- the program's own name and version ----
+// A taught compiler is `mc` plus a module, shipped as its own binary: mc-php,
+// teko's tekoc, every `examples/*` that produces a compiler. Until now it could
+// not say so -- every diagnostic began `mc: ` and `--version` answered `mc
+// <mc's version>`, so a user could not report a bug against the tool they had
+// installed and the version they were told belonged to something else.
+//
+// Two registrations from user_init() answer it, and NEITHER touches
+// mc_version(), which stays the version of the COMPILER this binary is: that is
+// what `[package].mc` is checked against and what names <libs>/mc/v<version>/,
+// and a taught compiler calling itself `mc-php 0.2.0` still runs on mc 1.1.0
+// and still resolves mc's library tree by mc's version. Nothing that locates a
+// file or compares a constraint reads what is below.
+//
+// They live here, and not in hooks.mc with every other registry, because die()
+// is thirty lines down and arena.mc is the first file of <mc/core_min>: a
+// registry hooks.mc owned would be invisible to the diagnostics that need it,
+// and to src/lexdump.mc, src/tomldump.mc and site/gen, which include arena.mc
+// and nothing else. prog_version() is version.mc's for the mirror reason: its
+// default is mc_version(), which is declared two files later.
+uptr prog_nm = 0;
+uptr prog_ver = 0;
+
+void program_name(uptr name)   { prog_nm = name; }
+void program_version(uptr ver) { prog_ver = ver; }
+
+// The name every diagnostic is prefixed with, `mc` until a module says otherwise.
+uptr prog_name() {
+    if (prog_nm) return prog_nm;
+    return "mc";
+}
+
+// `<name>: ` on stderr. One helper and not the two calls open-coded, so the
+// eight sites that used to write the literal `"mc: "` cannot drift apart.
+void out_prog() { out_str(2, prog_name()); out_str(2, ": "); }
+
 void die(uptr msg) {
-    out_str(2, "mc: "); out_str(2, msg); out_str(2, "\n");
+    out_prog(); out_str(2, msg); out_str(2, "\n");
     _exit(1);
 }
 
 void die2(uptr msg, uptr detail) {
-    out_str(2, "mc: "); out_str(2, msg); out_str(2, ": "); out_str(2, detail); out_str(2, "\n");
+    out_prog(); out_str(2, msg); out_str(2, ": "); out_str(2, detail); out_str(2, "\n");
     _exit(1);
 }
 

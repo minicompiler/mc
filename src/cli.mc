@@ -73,18 +73,30 @@ void dump_host() {
     out_str(1, "\n");
 }
 
-// `mc --version`: the version this binary was BUILT as, one line, `mc X.Y.Z`.
-// The program name is on the line because that is what every other `--version`
-// on the machine prints and what a bug report gets pasted into; the version
-// itself carries no `v`, because `docs/ci.md` § Versioning says the `v` belongs
-// to the tag name and nothing else -- it is the same string release-assets.sh
-// takes as its first argument. `0.0.0-dev` in any binary built from the working
-// tree (src/version.mc). `--host` is the shape: a one-shot informational flag,
+// `mc --version`: the program this binary IS, one line, `<name> X.Y.Z`. The
+// program name is on the line because that is what every other `--version` on
+// the machine prints and what a bug report gets pasted into; the version itself
+// carries no `v`, because `docs/ci.md` § Versioning says the `v` belongs to the
+// tag name and nothing else -- it is the same string release-assets.sh takes as
+// its first argument. `0.0.0-dev` in any binary built from the working tree
+// (src/version.mc). `--host` is the shape: a one-shot informational flag,
 // stdout, exit 0, answered before anything else is read.
+//
+// A taught compiler that registered a name or a version gets a SECOND line
+// naming the mc it was built on: a bug report against `mc-php 0.2.0` has to say
+// which compiler produced the bytes, and `--host` does not carry it. With
+// neither registration the two reads answer `mc` and mc_version(), the test is
+// false, and the output is byte for byte the single line it always was.
 void dump_version() {
-    out_str(1, "mc ");
-    out_str(1, mc_version());
+    out_str(1, prog_name());
+    out_str(1, " ");
+    out_str(1, prog_version());
     out_str(1, "\n");
+    if (prog_nm != 0 || prog_ver != 0) {
+        out_str(1, "mc ");
+        out_str(1, mc_version());
+        out_str(1, "\n");
+    }
 }
 
 // M24 (M9): `--dump-machine` — every registered machine, one line per task, with
@@ -167,6 +179,7 @@ i64 mc_main(i64 argc, uptr argv, uptr envp) {
     uptr mname = 0;                             // --machine=, for the dump modes
     i64 mode = M_COMPILE;
     i64 want_exe = 0;                           // --exe: the HOST's exe backend
+    i64 want_ver = 0;                           // --version, answered after user_init
     uptr linkflag = 0;                          // the last of --libc/--interp/--link
     i64 optn = 0;                               // M49: --opt=N / -O, 0 = the plain road
 
@@ -196,7 +209,7 @@ i64 mc_main(i64 argc, uptr argv, uptr envp) {
         if (i >= argc) break;
         uptr a = ld64(argv + i * 8);
         if (str_eq(a, "--host"))          { dump_host(); return 0; }
-        else if (str_eq(a, "--version"))  { dump_version(); return 0; }
+        else if (str_eq(a, "--version"))  want_ver = 1;
         else if (str_eq(a, "--dump-tokens")) mode = M_TOKENS;
         else if (str_eq(a, "--dump-ast"))   mode = M_AST;
         else if (str_eq(a, "--dump-asm"))   mode = M_ASM;
@@ -265,6 +278,24 @@ i64 mc_main(i64 argc, uptr argv, uptr envp) {
         else if (in == 0)          in = a;
         else                       die2("duplicate entry", a);
         i = i + 1;
+    }
+    // `--version` names the PROGRAM, and a taught compiler only becomes itself
+    // inside user_init(): there is no hook before that one, and moving it is
+    // what M11 forbids (the token ids are frozen by tok_init) and what a module
+    // pushing a source in it forbids (p_push_source needs lex_init's frame
+    // stack). So the answer is given HERE, after the module has had its say,
+    // and not in the loop above with --host, which says nothing about identity.
+    //
+    // The entry file is never read on this road -- `mc --version` takes no
+    // argument -- so the lexer is opened on an empty in-memory source instead,
+    // which is what gives a user_init that pushes one somewhere to push.
+    if (want_ver) {
+        tok_init();
+        p_push_source("--version", "", 0);
+        core_types_init();
+        user_init();
+        dump_version();
+        return 0;
     }
     if (in == 0) { usage(); return 1; }
 

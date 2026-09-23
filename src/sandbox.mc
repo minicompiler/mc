@@ -527,10 +527,10 @@ i64 sb_sys(i64 sn, i64 a, i64 b, i64 c, i64 d, i64 e, i64 f) {
 }
 
 // ---- small helpers ----
-void sb_err(uptr msg) { out_str(2, "mc: "); out_str(2, msg); out_str(2, "\n"); }
+void sb_err(uptr msg) { out_prog(); out_str(2, msg); out_str(2, "\n"); }
 
 void sb_err2(uptr msg, uptr detail) {
-    out_str(2, "mc: "); out_str(2, msg); out_str(2, ": "); out_str(2, detail); out_str(2, "\n");
+    out_prog(); out_str(2, msg); out_str(2, ": "); out_str(2, detail); out_str(2, "\n");
 }
 
 // the name of a small errno, or `errno N`. The report has to be readable by a

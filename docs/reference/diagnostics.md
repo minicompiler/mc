@@ -22,6 +22,13 @@ says why it did not.
 came from inside the binary (`syntax_demo_test:10: type expected at top level`). A missing file is
 printed as `?`.
 
+`mc` in the first two shapes is the PROGRAM's name, not a literal: a taught compiler shipped as
+its own binary registers its own with `program_name()` ([hooks.md](hooks.md) § 7) and its
+diagnostics read `mc-php: cannot open: sys.mc`. A registration made from `user_init()` reaches
+every message raised from there on, which is all of the compile path; one raised before it — an
+unknown flag, an entry file that cannot be opened, and whatever `mc build`/`mc pkg`/`mc sandbox`
+report before their own `user_init()` — still says `mc:`, because nothing has said otherwise yet.
+
 ```mc
 // expect-error: type expected at top level
 notatype main() { return 0; }

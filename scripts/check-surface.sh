@@ -2283,6 +2283,54 @@ else
     fails=$((fails + 1))
 fi
 
+# ---- the program's own name and version ----
+# A taught compiler is `mc` plus a module, shipped as its own binary, and until
+# program_name()/program_version() it could not say so: `--version` answered
+# `mc <mc's version>` -- the wrong tool and a version belonging to something
+# else -- and every die()/die2() it wrote began `mc: `. lib/user_progname.mc
+# registers both and teaches the compiler nothing else, so the stock compiler is
+# the control on every line.
+progname="build/mc-progname"
+rm -f "$progname"
+cat > "$tmp/prog-ok.mc" <<'EOF'
+i64 main() { return 42; }
+EOF
+if ! msg=$("$mc1" --exe lib/mc_progname.mc -o "$progname" 2>&1); then
+    echo "FAIL: compiling lib/mc_progname.mc: $msg"
+    fails=$((fails + 1))
+else
+    # the stock compiler is one line, `mc <version>`, byte for byte what it has
+    # always printed; the taught one is its own name and version, and then the
+    # mc it was built on -- which is the line a bug report needs and which
+    # --host does not carry.
+    "$mc1"      --version > "$tmp/ver-stock" 2>&1
+    "$progname" --version > "$tmp/ver-taught" 2>&1
+    mcver=$(sed -n 's/^uptr mc_version() { return "\(.*\)"; }$/\1/p' src/version.mc | head -1)
+    if [ "$(wc -l < "$tmp/ver-stock")" -eq 1 ] \
+       && [ "$(head -1 "$tmp/ver-stock")" = "mc $mcver" ] \
+       && [ "$(head -1 "$tmp/ver-taught")" = "mcdemo 7.3.1" ] \
+       && [ "$(sed -n 2p "$tmp/ver-taught")" = "$(head -1 "$tmp/ver-stock")" ] \
+       && [ "$(wc -l < "$tmp/ver-taught")" -eq 2 ]; then
+        echo "ok program_name/program_version: --version names the tool, then the mc under it"
+    else
+        echo "FAIL --version: stock [$(cat "$tmp/ver-stock")] taught [$(cat "$tmp/ver-taught")]"
+        fails=$((fails + 1))
+    fi
+    # and a diagnostic. --libc is refused on the object road, and that check is
+    # one of the ones raised AFTER user_init() -- which is the whole reachable
+    # half: a flag the loop rejects, or an entry file that cannot be opened,
+    # is answered before any module has had a say and still says `mc:`.
+    stock=$("$mc1"      --libc=gnu "$tmp/prog-ok.mc" -o "$tmp/prog-ok.o" 2>&1)
+    taught=$("$progname" --libc=gnu "$tmp/prog-ok.mc" -o "$tmp/prog-ok.o" 2>&1)
+    if [ "$stock" = "mc: --libc applies to an executable: use --exe" ] \
+       && [ "$taught" = "mcdemo: --libc applies to an executable: use --exe" ]; then
+        echo "ok program_name: the taught compiler prefixes its own diagnostics"
+    else
+        echo "FAIL diagnostic prefix: stock [$stock] taught [$taught]"
+        fails=$((fails + 1))
+    fi
+fi
+
 # ---- M21 acceptance 6(5): inert by construction ----
 # With nothing registered, the compiler has to produce exactly what a compiler
 # with no Tier 3 at all produces. `$mc0` IS that compiler: the frozen C seed

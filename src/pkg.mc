@@ -178,7 +178,7 @@ void pk_set_yes(i64 v)       { st64(pk_state() + PKS_YES, v); }
 // is not ready" (a download that failed, a checksum that did not match, a tree
 // that is not there). dep_die() is src/deps.mc's and carries the `run:` line.
 void pkg_die1(uptr msg, uptr det) {
-    out_str(2, "mc: ");
+    out_prog();
     out_str(2, msg);
     if (det != 0) {
         out_str(2, ": ");

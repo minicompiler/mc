@@ -1508,7 +1508,7 @@ What the host layer decides, in the driver and the CLI:
 
 ## 7. M41 — the composable core
 
-Eight registrations, all in `src/hooks.mc`, all called from `user_init()` (or,
+Ten registrations, eight of them in `src/hooks.mc`, all called from `user_init()` (or,
 for the ones a PART owns, from that part's own `*_init`). They exist so that a
 compiler assembled from a subset of `<mc/core>`'s parts still has a working
 command line, and so that a dialect can take a word out of the language.
@@ -1640,6 +1640,70 @@ the initializer 8 bytes — byte for byte what the compiler did before the
 mechanism existed. Declare it from `user_init()`, before a byte of the source
 is read.
 
+### `void program_name(uptr name)` · `void program_version(uptr ver)`
+
+The name and the version this binary reports as its own. A taught compiler is
+`mc` plus a module, shipped as its own binary — `mc-php`, teko's `tekoc`, every
+`examples/*` that produces a compiler — and without these two it could not say
+so: `--version` answered `mc <mc's version>`, naming the wrong tool and a
+version that belonged to something else, and every `die()` it wrote began
+`mc: `.
+
+```
+void user_init() {
+    program_name("mc-php");
+    program_version("0.2.0");
+}
+```
+
+With neither registered the compiler prints byte for byte what it printed
+before: `prog_name()` answers `mc` and `prog_version()` answers `mc_version()`.
+
+**They do not touch `mc_version()`, and that is the point.** `mc_version()` is
+the version of the COMPILER this binary is: it is what `[package].mc` is
+checked against, what names `<libs>/mc/v<version>/`, what `mc build` stages
+beside a taught compiler, what the sandbox binds into the box, and what
+`mc install` and `mc upgrade` resolve. A taught compiler calling itself
+`mc-php 0.2.0` still runs on mc 1.1.0 and still resolves mc's library tree by
+mc's version. Two functions and not one accessor with two meanings: everything
+that locates a file or compares a constraint goes on calling `mc_version()`,
+and only `--version` and the diagnostic prefix read what is registered here.
+
+`--version` therefore prints **two** lines for a taught compiler — its own
+name and version, then the mc it was built on, which is the line a bug report
+needs and which `--host` does not carry:
+
+```
+$ mc-php --version
+mc-php 0.2.0
+mc 1.1.0
+```
+
+They are not in `src/hooks.mc` with the other registries but in `src/arena.mc`
+(`prog_name`, `out_prog`) and `src/version.mc` (`prog_version`), because
+`die()` is in `arena.mc` — the first file of `<mc/core_min>` — and a registry
+`hooks.mc` owned would be invisible to the diagnostics that need it and to
+`src/lexdump.mc`, `src/tomldump.mc` and `site/gen`, which include `arena.mc`
+and nothing else. Being plain assignments they may be called from anywhere: a
+recreated compiler with its own `main()` (§ 7 above) can set them there instead.
+
+**What they reach.** `--version` is answered after `user_init()` for exactly
+this reason. A diagnostic raised BEFORE `user_init()` still says `mc:` — an
+unknown flag, `-o requires an argument`, an entry file that cannot be opened,
+and everything `mc build`/`mc pkg`/`mc sandbox` report before they reach their
+own `user_init()`. Nothing has said otherwise yet at that point, and the
+alternative — running `user_init()` earlier — is what M11 forbids (the token
+ids `K_U8..K_EXTERN` are frozen by `tok_init()`) and what a module pushing a
+source in it forbids (`p_push_source` needs `lex_init`'s frame stack). A
+compiler that wants its name on those few lines too registers from its own
+`main()`, before `mc_main()`.
+
+### `uptr prog_name()` · `uptr prog_version()`
+
+The read side, for a module that wants to print its own identity. `prog_name()`
+is `mc` until `program_name()` says otherwise; `prog_version()` is
+`mc_version()` until `program_version()` does.
+
 ### `i64 mc_main(i64 argc, uptr argv, uptr envp)`
 
 Not a registration, but the other half of the same idea: the whole command line
@@ -1661,12 +1725,12 @@ Every name on this page — and every CLI flag, TOML key, directive, `<mc/*>` na
 registry-index key documented elsewhere in `docs/reference/` — is in the recorded public surface:
 [`../../tests/golden/surface.txt`](../../tests/golden/surface.txt), extracted by
 `scripts/surface-extract.sh` and compared on every `make check` by `check-freeze`
-([`../../tests/golden/README.md`](../../tests/golden/README.md)). Seven kinds, **423 entries**
+([`../../tests/golden/README.md`](../../tests/golden/README.md)). Seven kinds, **487 entries**
 today (the count moves only by `--record`, never by hand), none of them written by hand:
 
 | kind | is | count |
 |---|---|---|
-| `sym` | a function a module outside `src/` may call, **with its parameter count** | 211 |
+| `sym` | a function a module outside `src/` may call, **with its parameter count** | 275 |
 | `flag` | a command-line option `mc` accepts | 50 |
 | `toml` | a key `mc.toml` may carry | 36 |
 | `dir` | a `#directive` | 10 |
