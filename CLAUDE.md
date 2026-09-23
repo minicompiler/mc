@@ -7985,3 +7985,31 @@ agents (`.claude/agents/`): `stage0-dev` (C23), `mc-dev` (`.mc` code), `reviewer
   the new § "The `<mc/core>` facilities a handler stands on"), `docs/reference/diagnostics.md`
   (one new row, `p_skip_to outside the source token`), `scripts/surface-extract.sh`'s own header
   (what the widening freezes and what it deliberately leaves out).
+- The `toml_*` read family, frozen (0.16.x; reported by the mc-php consumer): eight names in
+  `src/toml.mc` a module stands on to drive itself from a project file of its own existed and
+  worked but were frozen nowhere -- neither in `tests/golden/surface.txt` nor documented as
+  callables in `docs/reference/`. Docs-only change; `git diff --stat src/ stage0/ lib/
+  tests/golden/*.sha256` is **empty**, nothing compiled moved.
+  Frozen, as exact names in `scripts/surface-extract.sh`'s `sym` list (arity computed
+  automatically from the definition): `toml_parse(path)` 1, `toml_get(path)` 1,
+  `toml_get_array(path, k)` 2, `toml_count(path)` 1, `toml_int(path, dflt)` 2, `toml_entries()` 0,
+  `toml_path_at(i)` 1, `toml_val_at(i)` 1 -- the by-value pair, the array pair, the entry-walk
+  trio, and `toml_parse` itself, which a module needs to load a file of its own (the driver's own
+  road parses the project file BEFORE `user_init()` runs, so a module reading THAT SAME file needs
+  no second call; a module reading a different file must call it itself).
+  Left out, per the task's own exclusion list, with no documented reason found to include them:
+  `toml_add`, the four `toml_err*` diagnostics, `toml_push`/`toml_pop` (the re-entrant nested-parse
+  pair), `toml_bp`, `toml_find`, `toml_occurrences` and the `tme_*` row accessors -- all internal,
+  none named as a callable anywhere in `docs/reference/` before this change. Also left out:
+  `toml_type_at`/`toml_line_at`, which exist beside `toml_path_at`/`toml_val_at` but are called by
+  no consumer in `src/` and asked for by nobody.
+  Documented in a new `docs/reference/toml.md` § "Reading the file from a module": each
+  signature, what a missing key/index returns, the `[[array of tables]]` path form
+  (`server.0.host`), and the entry-walking loop every `src/` reader already uses.
+  `tests/golden/surface.txt` re-recorded with `make record-surface`: **486 -> 494 entries
+  (274 -> 282 sym)**, all eight additive. `sh scripts/check-freeze.sh` -> `ok freeze: 494 entries
+  (282 sym, 50 flag, 36 toml, 10 dir, 101 bundle, 14 lock, 1 machine)`. `sh scripts/check-docs.sh
+  build/mc1` -> `docs ok: 282 symbols, 50 flags, 36 toml keys, 10 directives, 52 samples,
+  594 links`. `sh scripts/check-surface.sh build/mc0 build/mc1` -> 165 ok lines, 0 FAIL.
+  `tests/golden/README.md` and `docs/reference/hooks.md` § 8's own count table brought from
+  486/274 to 494/282.
