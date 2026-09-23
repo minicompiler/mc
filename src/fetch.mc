@@ -219,7 +219,7 @@ void fx_add(uptr rel, i64 isdir) {
 // down, and the name is what the registry row points at.
 void fetch_refuse(uptr archive, uptr why, uptr member) {
     unlink(archive);                           // a refused archive is poison
-    out_str(2, "mc: ");
+    out_prog();
     out_str(2, fetch_basename(archive));
     out_str(2, ": ");
     out_str(2, why);

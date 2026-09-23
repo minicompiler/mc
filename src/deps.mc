@@ -30,7 +30,7 @@
 // script has to be able to tell it from "your program does not compile", which
 // is 1 (docs/reference/cli.md § Exit codes).
 void dep_die(uptr msg, uptr det, uptr run) {
-    out_str(2, "mc: ");
+    out_prog();
     out_str(2, msg);
     if (det != 0) {
         out_str(2, ": ");

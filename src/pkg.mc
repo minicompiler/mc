@@ -178,7 +178,7 @@ void pk_set_yes(i64 v)       { st64(pk_state() + PKS_YES, v); }
 // is not ready" (a download that failed, a checksum that did not match, a tree
 // that is not there). dep_die() is src/deps.mc's and carries the `run:` line.
 void pkg_die1(uptr msg, uptr det) {
-    out_str(2, "mc: ");
+    out_prog();
     out_str(2, msg);
     if (det != 0) {
         out_str(2, ": ");
@@ -209,7 +209,7 @@ void pkg_get(uptr src, uptr file, i64 cap) {
     // post-M44 review, finding 6: a body over the ceiling is a refusal of its
     // own, before the shape of the source is even discussed
     if (rc == FETCH_TOOBIG) {
-        out_str(2, "mc: larger than the cap of ");
+        out_prog(); out_str(2, "larger than the cap of ");
         out_str(2, tm_num_str(cap));
         out_str(2, " bytes: ");
         out_str(2, src);
@@ -217,13 +217,13 @@ void pkg_get(uptr src, uptr file, i64 cap) {
         _exit(2);
     }
     if (!fetch_is_url(src)) {
-        out_str(2, "mc: cannot open: ");
+        out_prog(); out_str(2, "cannot open: ");
         out_str(2, src);
         out_str(2, "\n");
         _exit(2);
     }
     if (rc < 0) {
-        out_str(2, "mc: no downloader on this PATH (tried ");
+        out_prog(); out_str(2, "no downloader on this PATH (tried ");
         out_str(2, host_downloader());
         if (host_downloader_alt() != 0) {
             out_str(2, ", ");
@@ -232,7 +232,7 @@ void pkg_get(uptr src, uptr file, i64 cap) {
         out_str(2, ")\n");
         _exit(2);
     }
-    out_str(2, "mc: the download failed (exit ");
+    out_prog(); out_str(2, "the download failed (exit ");
     out_str(2, tm_num_str(rc));
     out_str(2, "): ");
     out_str(2, src);
@@ -991,7 +991,7 @@ void pkg_fetch_one(uptr name, uptr ver, uptr url, i64 strip, uptr want) {
     if (fetch_extract(archive, dir, strip, 0) != 0) {
         unlink(archive);
         pkg_unbless(dir);
-        out_str(2, "mc: tar could not extract ");
+        out_prog(); out_str(2, "tar could not extract ");
         out_str(2, fetch_basename(url));
         out_str(2, "\n");
         _exit(2);
@@ -1018,7 +1018,7 @@ void pkg_fetch_one(uptr name, uptr ver, uptr url, i64 strip, uptr want) {
     }
     if (want != 0 && !str_eq(got, want)) {
         pkg_unbless(dir);
-        out_str(2, "mc: checksum mismatch for ");
+        out_prog(); out_str(2, "checksum mismatch for ");
         out_str(2, pkg_what(name, ver));
         out_str(2, "\n  expected ");
         out_str(2, want);
@@ -1486,7 +1486,7 @@ i64 pkg_sync() {
             uptr want = 0;
             if (r >= 0) want = ld64(pk_vr(r) + VR_SHA);
             if (want != 0 && !str_eq(got, want)) {
-                out_str(2, "mc: checksum mismatch for ");
+                out_prog(); out_str(2, "checksum mismatch for ");
                 out_str(2, pkg_what(name, ver));
                 out_str(2, "\n  expected ");
                 out_str(2, want);

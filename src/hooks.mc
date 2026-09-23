@@ -1143,6 +1143,43 @@ i64 subcommand_find(uptr name) {
 // listing the replaced entry (or listing the name twice) would describe a
 // compiler that does not exist. Order and text come from opposite ends of the
 // table on purpose.
+// A subcommand's usage text is written with `mc` in it -- `usage: mc build ...`,
+// `       mc pkg ...` -- because that is what the compiler these parts belong to
+// is called. A taught compiler shipped as its own binary is not, and the program
+// with no argument is the first thing a user types, so the word is substituted
+// at PRINT time: the FIRST standalone `mc` on each line becomes program_name().
+// Standalone means a word boundary on both sides, so `mc.toml` and `<mc/core>`
+// are left alone, and first-on-the-line means the command position, whether the
+// line opens with `usage: ` or with the spaces that align under it. A line with
+// no such word -- `mc tool`'s continuation line -- is copied unchanged, and so
+// is a module's usage that already writes its own name.
+//
+// Print time and not registration time: every part's *_init runs before
+// mc_main, and program() is called from user_init inside it.
+void sub_use_print(uptr s) {
+    i64 i = 0;
+    i64 bound = 1;                                 // is this a word boundary?
+    i64 done = 0;                                  // already substituted on this line?
+    loop {
+        i64 c = ld8(s + i);
+        if (c == 0) break;
+        if (!done && bound && c == 'm' && ld8(s + i + 1) == 'c') {
+            i64 after = ld8(s + i + 2);
+            if (after == ' ' || after == '\n' || after == 0) {
+                out_str(2, program_name());
+                i = i + 2;
+                done = 1;
+                bound = 0;
+                continue;
+            }
+        }
+        out_bytes(2, s + i, 1);
+        if (c == '\n') { done = 0; bound = 1; }
+        else             bound = c == ' ';
+        i = i + 1;
+    }
+}
+
 void subcommand_usage() {
     i64 i = 0;
     loop {
@@ -1155,7 +1192,7 @@ void subcommand_usage() {
             if (str_eq(sub_name_at(j), nm)) dup = 1;
             j = j + 1;
         }
-        if (!dup) out_str(2, sub_use_at(subcommand_find(nm)));
+        if (!dup) sub_use_print(sub_use_at(subcommand_find(nm)));
         i = i + 1;
     }
 }

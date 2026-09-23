@@ -232,7 +232,7 @@ uptr arena_base() {
 // what was asked, what is already reserved, what the plan had estimated, where
 // the parser was, and what to change. `n` is the request that did not fit.
 void arena_die(uptr what, i64 n) {
-    out_str(2, "mc: ");
+    out_prog();
     out_str(2, what);
     out_str(2, " (");
     out_num(2, heap_res >> 20);
@@ -540,13 +540,61 @@ void out_hex(i64 fd, u64 v) {
     io_write(fd, tmp + i, 18 - i);
 }
 
+// ---- the program's own name and version ----
+// A taught compiler is `mc` plus a module, shipped as its own binary: mc-php,
+// teko's tekoc, every `examples/*` that produces a compiler. Until now it could
+// not say so -- every diagnostic began `mc: `, `mc` with no argument printed a
+// usage naming mc, and `--version` answered `mc <mc's version>`, so a user could
+// not report a bug against the tool they had installed and the version they were
+// told belonged to something else.
+//
+// ONE registration answers it, and it takes both halves at once. Two separate
+// calls were the first shape and they made a half registration expressible: a
+// name with no version printed `mc-php <mc's dev sentinel>`, and a version with
+// no name printed `mc 0.2.0` above `mc 0.0.0-dev` -- one program name carrying
+// two versions, which is exactly the bug-report confusion this exists to remove.
+// A module that wants the rename and mc's version says so: program("myc",
+// mc_version()).
+//
+// It does NOT touch mc_version(), which stays the version of the COMPILER this
+// binary is: that is what `[package].mc` is checked against and what names
+// <libs>/mc/v<version>/, and a taught compiler calling itself `mc-php 0.2.0`
+// still runs on mc 1.1.0 and still resolves mc's library tree by mc's version.
+// Nothing that locates a file or compares a constraint reads what is below.
+//
+// It lives here, and not in hooks.mc with every other registry, because die()
+// is thirty lines down and arena.mc is the first file of <mc/core_min>: a
+// registry hooks.mc owned would be invisible to the diagnostics that need it,
+// and to src/lexdump.mc, src/tomldump.mc and site/gen, which include arena.mc
+// and nothing else. program_version() is version.mc's for the mirror reason:
+// its default is mc_version(), which is declared nine files later.
+uptr prog_nm = 0;
+uptr prog_ver = 0;
+
+void program(uptr name, uptr version) {
+    if (name == 0 || version == 0) die("program: a name and a version are required");
+    prog_nm = name;
+    prog_ver = version;
+}
+
+// The name every diagnostic is prefixed with and every usage line names, `mc`
+// until a module says otherwise.
+uptr program_name() {
+    if (prog_nm) return prog_nm;
+    return "mc";
+}
+
+// `<name>: ` on stderr. One helper and not the two calls open-coded, so the
+// twenty-seven sites that used to write the literal `"mc: "` cannot drift apart.
+void out_prog() { out_str(2, program_name()); out_str(2, ": "); }
+
 void die(uptr msg) {
-    out_str(2, "mc: "); out_str(2, msg); out_str(2, "\n");
+    out_prog(); out_str(2, msg); out_str(2, "\n");
     _exit(1);
 }
 
 void die2(uptr msg, uptr detail) {
-    out_str(2, "mc: "); out_str(2, msg); out_str(2, ": "); out_str(2, detail); out_str(2, "\n");
+    out_prog(); out_str(2, msg); out_str(2, ": "); out_str(2, detail); out_str(2, "\n");
     _exit(1);
 }
 

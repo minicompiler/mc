@@ -31,3 +31,18 @@
 // For ordering, `0.0.0-dev` compares as `0.0.0`: every release is newer.
 
 uptr mc_version() { return "0.0.0-dev"; }
+
+// The version this binary REPORTS. A module sets it with program() when it ships
+// as its own tool; by default it is this compiler's own, so a compiler that
+// registers nothing prints exactly what it printed before.
+//
+// mc_version() above never moves with it. Every reader that locates a file or
+// compares a constraint -- `[package].mc` (src/deps.mc), <libs>/mc/v<version>/
+// (dp_mc_root), the tree `mc build` stages beside a taught compiler, the one the
+// sandbox binds into the box, `mc install` and `mc upgrade` -- means the
+// COMPILER, not the program, and goes on calling mc_version(). That is the whole
+// reason the two are separate functions rather than one with two callers.
+uptr program_version() {
+    if (prog_ver) return prog_ver;
+    return mc_version();
+}

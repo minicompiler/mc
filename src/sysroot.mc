@@ -303,7 +303,7 @@ void sysroot_manual(uptr os, uptr arch) {
 }
 
 void sysroot_missing(uptr os, uptr arch) {
-    out_str(2, "mc: no sysroot for ");
+    out_prog(); out_str(2, "no sysroot for ");
     out_str(2, sysroot_target(os, arch));
     out_str(2, "\n");
     if (sr_tried != 0) {
@@ -371,7 +371,7 @@ i64 sysroot_target_index(uptr name) {
 }
 
 void sysroot_unknown(uptr name) {
-    out_str(2, "mc: unknown target: ");
+    out_prog(); out_str(2, "unknown target: ");
     out_str(2, name);
     out_str(2, "\nregistered: ");
     i64 i = 0;
@@ -557,7 +557,7 @@ i64 sysroot_fetch(uptr name, i64 yes) {
     }
     uptr dest = sysroot_cache_dir(os, arch);
     if (dest == 0) {
-        out_str(2, "mc: nowhere to put ");
+        out_prog(); out_str(2, "nowhere to put ");
         out_str(2, name);
         out_str(2, ": no --sysroot-dir, no [sysroot].cache and no HOME\n");
         _exit(2);
@@ -571,7 +571,7 @@ i64 sysroot_fetch(uptr name, i64 yes) {
     uptr file = tm_cat(tm_cat(dest, "/"), fetch_basename(ss_url_at(r)));
     i64 rc = fetch_get(ss_url_at(r), file, FETCH_MAXARCHIVE);
     if (rc == FETCH_TOOBIG) {
-        out_str(2, "mc: larger than the cap of ");
+        out_prog(); out_str(2, "larger than the cap of ");
         out_str(2, tm_num_str(FETCH_MAXARCHIVE));
         out_str(2, " bytes: ");
         out_str(2, ss_url_at(r));
@@ -579,7 +579,7 @@ i64 sysroot_fetch(uptr name, i64 yes) {
         sysroot_fetch_failed(os, arch);
     }
     if (rc < 0) {
-        out_str(2, "mc: no downloader on this PATH (tried ");
+        out_prog(); out_str(2, "no downloader on this PATH (tried ");
         out_str(2, host_downloader());
         if (host_downloader_alt() != 0) {
             out_str(2, ", ");
@@ -590,7 +590,7 @@ i64 sysroot_fetch(uptr name, i64 yes) {
     }
     if (rc != 0) {
         unlink(file);
-        out_str(2, "mc: the download failed (exit ");
+        out_prog(); out_str(2, "the download failed (exit ");
         out_str(2, tm_num_str(rc));
         out_str(2, ")\n");
         sysroot_fetch_failed(os, arch);
@@ -604,7 +604,7 @@ i64 sysroot_fetch(uptr name, i64 yes) {
     uptr got = hex64(dg);
     if (!str_eq(got, ss_sha_at(r))) {
         unlink(file);
-        out_str(2, "mc: checksum mismatch for ");
+        out_prog(); out_str(2, "checksum mismatch for ");
         out_str(2, fetch_basename(ss_url_at(r)));
         out_str(2, "\n  expected ");
         out_str(2, ss_sha_at(r));
@@ -615,14 +615,14 @@ i64 sysroot_fetch(uptr name, i64 yes) {
     }
     if (len != ss_size_at(r)) {
         unlink(file);
-        out_str(2, "mc: wrong size for ");
+        out_prog(); out_str(2, "wrong size for ");
         out_str(2, fetch_basename(ss_url_at(r)));
         out_str(2, "\n");
         sysroot_fetch_failed(os, arch);
     }
     if (sysroot_extract(r, file, dest) != 0) {
         unlink(file);
-        out_str(2, "mc: tar could not extract ");
+        out_prog(); out_str(2, "tar could not extract ");
         out_str(2, fetch_basename(ss_url_at(r)));
         out_str(2, "\n");
         sysroot_fetch_failed(os, arch);
@@ -636,7 +636,7 @@ i64 sysroot_fetch(uptr name, i64 yes) {
     if (miss == 0) miss = sysroot_missing_marker(dest, os);
     if (miss != 0) {
         sysroot_unbless(dest, os);
-        out_str(2, "mc: the archive did not carry ");
+        out_prog(); out_str(2, "the archive did not carry ");
         out_str(2, miss);
         out_str(2, "\n");
         sysroot_fetch_failed(os, arch);

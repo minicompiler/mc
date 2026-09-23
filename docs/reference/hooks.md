@@ -1508,7 +1508,7 @@ What the host layer decides, in the driver and the CLI:
 
 ## 7. M41 — the composable core
 
-Eight registrations, all in `src/hooks.mc`, all called from `user_init()` (or,
+Ten registrations, eight of them in `src/hooks.mc`, all called from `user_init()` (or,
 for the ones a PART owns, from that part's own `*_init`). They exist so that a
 compiler assembled from a subset of `<mc/core>`'s parts still has a working
 command line, and so that a dialect can take a word out of the language.
@@ -1640,6 +1640,85 @@ the initializer 8 bytes — byte for byte what the compiler did before the
 mechanism existed. Declare it from `user_init()`, before a byte of the source
 is read.
 
+### `void program(uptr name, uptr version)`
+
+The name and the version this binary reports as its own. A taught compiler is
+`mc` plus a module, shipped as its own binary — `mc-php`, teko's `tekoc`, every
+`examples/*` that produces a compiler — and without this it could not say so:
+`--version` answered `mc <mc's version>`, naming the wrong tool and a version
+that belonged to something else; the usage it printed with no argument named
+`mc` and listed subcommands it may not carry; and every `die()` it wrote began
+`mc: `.
+
+```
+void user_init() {
+    program("mc-php", "0.2.0");
+}
+```
+
+With nothing registered the compiler prints byte for byte what it printed
+before: `program_name()` answers `mc` and `program_version()` answers
+`mc_version()`.
+
+**One call and not two, because a half registration is a plausible lie.** A name
+with no version prints `mc-php <mc's dev sentinel>`, attributing mc's version to
+another tool; a version with no name prints `mc 0.2.0` above `mc 0.0.0-dev`, one
+program name carrying two versions. Both are exactly the bug-report confusion
+this exists to remove, so neither is expressible. A module that wants the rename
+and mc's own version says so: `program("myc", mc_version())`. A 0 in either
+argument is `program: a name and a version are required`.
+
+**It does not touch `mc_version()`, and that is the point.** `mc_version()` is
+the version of the COMPILER this binary is: it is what `[package].mc` is checked
+against, what names `<libs>/mc/v<version>/`, what `mc build` stages beside a
+taught compiler, what the sandbox binds into the box, and what `mc install` and
+`mc upgrade` resolve. A taught compiler calling itself `mc-php 0.2.0` still runs
+on mc 1.1.0 and still resolves mc's library tree by mc's version. Two functions
+and not one accessor with two meanings: everything that locates a file or
+compares a constraint goes on calling `mc_version()`, and only `--version`, the
+usage and the diagnostic prefix read what is registered here.
+
+`--version` therefore prints **two** lines for a renamed compiler — its own name
+and version, then the mc it was built on, which is the line a bug report needs
+and which `--host` does not carry:
+
+```
+$ mc-php --version
+mc-php 0.2.0
+mc 1.1.0
+```
+
+The second line is keyed on the NAME, not on "did anything register", so one
+binary can never print two versions under one name: `program("mc", "1.2.3")` —
+a compiler that keeps the name and changes the version — prints its one line and
+no contradiction under it.
+
+`program` is not in `src/hooks.mc` with the other registries but in
+`src/arena.mc`, because `die()` is there and `arena.mc` is the first file of
+`<mc/core_min>`: a registry `hooks.mc` owned would be invisible to the
+diagnostics that need it and to `src/lexdump.mc`, `src/tomldump.mc` and
+`site/gen`, which include `arena.mc` and nothing else. `program_version()` is in
+`src/version.mc` for the mirror reason — its default is `mc_version()`, declared
+nine files later.
+
+**Two roads, and they reach different sets of messages.** Called from
+`user_init()` it reaches every message raised from there on, which is the whole
+compile path, plus `--version`, `--host` and the usage — all three are answered
+after `user_init()` for exactly this reason. It does **not** reach the argument
+loop's own refusals (`unknown option`, `-o requires an argument`, `duplicate
+entry`), the entry file's `cannot open` (`lex_init` must precede `user_init`: it
+opens with `nopen = 0`, which would throw away a source a `user_init` had
+pushed), or any subcommand, which is dispatched before the loop. A compiler that
+wants its name on those too is a recreated one with its own `main()` (§ 7 above)
+and calls `program()` there, before `mc_main()` — then all twenty-seven
+diagnostic sites, on every road, print the one name.
+
+### `uptr program_name()` · `uptr program_version()`
+
+The read side, for a module that wants to print its own identity, and what the
+compiler itself reads. `program_name()` is `mc` and `program_version()` is
+`mc_version()` until `program()` says otherwise.
+
 ### `i64 mc_main(i64 argc, uptr argv, uptr envp)`
 
 Not a registration, but the other half of the same idea: the whole command line
@@ -1661,12 +1740,12 @@ Every name on this page — and every CLI flag, TOML key, directive, `<mc/*>` na
 registry-index key documented elsewhere in `docs/reference/` — is in the recorded public surface:
 [`../../tests/golden/surface.txt`](../../tests/golden/surface.txt), extracted by
 `scripts/surface-extract.sh` and compared on every `make check` by `check-freeze`
-([`../../tests/golden/README.md`](../../tests/golden/README.md)). Seven kinds, **423 entries**
+([`../../tests/golden/README.md`](../../tests/golden/README.md)). Seven kinds, **486 entries**
 today (the count moves only by `--record`, never by hand), none of them written by hand:
 
 | kind | is | count |
 |---|---|---|
-| `sym` | a function a module outside `src/` may call, **with its parameter count** | 211 |
+| `sym` | a function a module outside `src/` may call, **with its parameter count** | 274 |
 | `flag` | a command-line option `mc` accepts | 50 |
 | `toml` | a key `mc.toml` may carry | 36 |
 | `dir` | a `#directive` | 10 |

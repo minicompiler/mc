@@ -37,6 +37,11 @@
 #            lex_word_id and the lex_set_*_hook plumbing are named nowhere in
 #            docs/reference/ and are not frozen (M53 § 8: a global or an
 #            undocumented helper is not surface).
+#            program and its readers program_name/program_version are three
+#            more: the identity a taught compiler shipped as its own binary
+#            registers, documented in hooks.md § 7 and reached by no prefix.
+#            out_prog() and sub_use_print(), the two printers they feed, are
+#            named nowhere in docs/reference/ and are not frozen.
 #            The arity is counted from the definition's own parameter list:
 #            0 for `()`, otherwise commas + 1.
 #   flag     the literals inside a str_eq(x, "--flag") / opt_val(x, "--flag="),
@@ -58,7 +63,7 @@ LC_ALL=C
 export LC_ALL
 
 sym() {
-    grep -hoE '^(void|i64|uptr|u8|u16|u32|u64) +((p_|syntax|type_|pass|backend|machine|sec_|sym_|reloc_add|gen_|on_|decl_|host_|intrinsic|walk_|subcommand|c_|nd_|set_nd_)[A-Za-z_0-9]*|parse_unary|parse_top|parse_expr|parse_stmt|parse_block|parse_params|parse_function|top_add|def_add|def_find|de_at|de_val|param_new|list_append|node_new|do_directive|lex_include|lex_file|lex_set_libs|lex_set_bundle|lex_root_of|lex_root_count|lex_root_name|lex_root_dir|lex_inc_count|lex_inc_at|tok_add|word_id|path_join|path_norm|read_file|xalloc|xstrdup|str_eq|cstrlen|err_at2|err_at|source_claim|val_reg|dst_reg|dst_done|cmp_cond_of|cmp_cond)\([^)]*\)' src/*.mc \
+    grep -hoE '^(void|i64|uptr|u8|u16|u32|u64) +((p_|syntax|type_|pass|backend|machine|sec_|sym_|reloc_add|gen_|on_|decl_|host_|intrinsic|walk_|subcommand|c_|nd_|set_nd_)[A-Za-z_0-9]*|parse_unary|parse_top|parse_expr|parse_stmt|parse_block|parse_params|parse_function|top_add|def_add|def_find|de_at|de_val|param_new|list_append|node_new|do_directive|lex_include|lex_file|lex_set_libs|lex_set_bundle|lex_root_of|lex_root_count|lex_root_name|lex_root_dir|lex_inc_count|lex_inc_at|tok_add|word_id|path_join|path_norm|read_file|xalloc|xstrdup|str_eq|cstrlen|err_at2|err_at|source_claim|program_version|program_name|program|val_reg|dst_reg|dst_done|cmp_cond_of|cmp_cond)\([^)]*\)' src/*.mc \
         | sed -E 's/^[a-z0-9]+ +//' \
         | awk -F'[()]' '{ n = $1; p = $2; gsub(/ /, "", p);
                           print n "\t" (p == "" ? 0 : gsub(/,/, ",", p) + 1) }'

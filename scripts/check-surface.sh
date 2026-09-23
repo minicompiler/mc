@@ -2283,6 +2283,109 @@ else
     fails=$((fails + 1))
 fi
 
+# ---- the program's own name and version ----
+# A taught compiler is `mc` plus a module, shipped as its own binary, and until
+# program() it could not say so: `--version` answered `mc <mc's version>` -- the
+# wrong tool and a version belonging to something else -- the usage it printed
+# with no argument named mc, and every die()/die2() it wrote began `mc: `.
+# lib/user_progname.mc registers a name and teaches the compiler nothing else,
+# so the stock compiler is the control on every line.
+#
+# Two roads, because they reach different sets of messages. lib/mc_progname.mc
+# is the ordinary one (a user_init), and lib/mc_prognamemain.mc is src/main.mc
+# with one line added -- a recreated compiler registering before mc_main, which
+# is the only road that reaches the argument loop, the entry file's `cannot
+# open` and every subcommand.
+progname="build/mc-progname"
+prognamemain="build/mc-prognamemain"
+rm -f "$progname" "$prognamemain"
+cat > "$tmp/prog-ok.mc" <<'EOF'
+i64 main() { return 42; }
+EOF
+if ! msg=$("$mc1" --exe lib/mc_progname.mc -o "$progname" 2>&1); then
+    echo "FAIL: compiling lib/mc_progname.mc: $msg"
+    fails=$((fails + 1))
+elif ! msg=$("$mc1" --exe lib/mc_prognamemain.mc -o "$prognamemain" 2>&1); then
+    echo "FAIL: compiling lib/mc_prognamemain.mc: $msg"
+    fails=$((fails + 1))
+else
+    # 1. --version. The stock compiler is one line, `mc <version>`, byte for
+    # byte what it has always printed; a renamed one is its own name and version
+    # and then the mc it was built on -- the line a bug report needs and which
+    # --host does not carry.
+    mcver=$(sed -n 's/^uptr mc_version() { return "\(.*\)"; }$/\1/p' src/version.mc | head -1)
+    "$mc1"      --version > "$tmp/ver-stock" 2>&1
+    "$progname" --version > "$tmp/ver-taught" 2>&1
+    if [ "$(wc -l < "$tmp/ver-stock")" -eq 1 ] \
+       && [ "$(head -1 "$tmp/ver-stock")" = "mc $mcver" ] \
+       && [ "$(head -1 "$tmp/ver-taught")" = "mcdemo 7.3.1" ] \
+       && [ "$(sed -n 2p "$tmp/ver-taught")" = "mc $mcver" ] \
+       && [ "$(wc -l < "$tmp/ver-taught")" -eq 2 ]; then
+        echo "ok program(): --version names the tool, then the mc under it"
+    else
+        echo "FAIL --version: stock [$(cat "$tmp/ver-stock")] taught [$(cat "$tmp/ver-taught")]"
+        fails=$((fails + 1))
+    fi
+
+    # 2. the usage, which is the FIRST thing a user types. Every line of it --
+    # the three fixed ones and one per registered subcommand -- names the
+    # program, and the stock compiler's is unchanged.
+    "$mc1"      > "$tmp/use-stock" 2>&1
+    "$progname" > "$tmp/use-taught" 2>&1
+    nst=$(grep -c '^\(usage: \)\?\( *\)mc ' "$tmp/use-stock")
+    ntg=$(grep -c '^\(usage: \)\?\( *\)mcdemo ' "$tmp/use-taught")
+    if [ "$nst" -ge 15 ] && [ "$ntg" = "$nst" ] \
+       && ! grep -q '^\(usage: \)\?\( *\)mc ' "$tmp/use-taught"; then
+        echo "ok program(): all $ntg usage lines name the program, none says mc"
+    else
+        echo "FAIL usage: stock $nst mc-lines, taught $ntg mcdemo-lines"
+        grep -n 'mc ' "$tmp/use-taught" | sed -n 1,3p
+        fails=$((fails + 1))
+    fi
+
+    # 3. a diagnostic. --libc is refused on the object road, and that check is
+    # one of the ones raised AFTER user_init(), which is what the ordinary road
+    # reaches.
+    stock=$("$mc1"      --libc=gnu "$tmp/prog-ok.mc" -o "$tmp/prog-ok.o" 2>&1)
+    taught=$("$progname" --libc=gnu "$tmp/prog-ok.mc" -o "$tmp/prog-ok.o" 2>&1)
+    if [ "$stock" = "mc: --libc applies to an executable: use --exe" ] \
+       && [ "$taught" = "mcdemo: --libc applies to an executable: use --exe" ]; then
+        echo "ok program(): the taught compiler prefixes its own diagnostics"
+    else
+        echo "FAIL diagnostic prefix: stock [$stock] taught [$taught]"
+        fails=$((fails + 1))
+    fi
+
+    # 4. ONE name per binary. The twenty-seven `mc: ` sites are one set or they
+    # are not: a compiler that registers in its own main() must print its name
+    # from src/arena.mc's die2 (the entry that cannot be opened), from
+    # src/sysroot.mc (a subcommand, dispatched before the loop) and from
+    # src/sandbox.mc -- three different files on three different roads.
+    a=$("$prognamemain" nosuch.mc -o /dev/null 2>&1 | head -1)
+    b=$("$prognamemain" sysroot path nosuchtarget 2>&1 | head -1)
+    c=$("$prognamemain" sandbox check 2>&1 | head -1)
+    if [ "$a" = "myc: cannot open: nosuch.mc" ] \
+       && [ "${b#myc: }" != "$b" ] && [ "${c#myc: }" != "$c" ] \
+       && [ "$("$prognamemain" --version | head -1)" = "myc 3.1.4" ] \
+       && [ "$("$prognamemain" 2>&1 | head -1 | cut -d' ' -f2)" = "myc" ]; then
+        echo "ok program() from main(): one name on every road (arena, sysroot, sandbox, usage)"
+    else
+        echo "FAIL one name per binary: [$a] [$b] [$c]"
+        fails=$((fails + 1))
+    fi
+
+    # 5. --version and --host are answered at the same point, so the LAST one
+    # wins whichever way round they are written. Before, each returned where it
+    # was read and the pair was order-dependent in a way nothing documented.
+    if [ "$("$mc1" --version --host | head -1)" = "os $( "$mc1" --host | head -1 | cut -d' ' -f2)" ] \
+       && [ "$("$mc1" --host --version)" = "mc $mcver" ]; then
+        echo "ok --version and --host: the last one wins, both ways round"
+    else
+        echo "FAIL --version/--host ordering"
+        fails=$((fails + 1))
+    fi
+fi
+
 # ---- M21 acceptance 6(5): inert by construction ----
 # With nothing registered, the compiler has to produce exactly what a compiler
 # with no Tier 3 at all produces. `$mc0` IS that compiler: the frozen C seed
