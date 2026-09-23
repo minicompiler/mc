@@ -71,7 +71,7 @@ notatype main() { return 0; }
 | `directive not yet supported` | a directive the parser recognises but does not handle | none: this is reachable only from a partially added directive |
 | `#define expects a name` | `#define` followed by something that is not an identifier | give it a name |
 | `#define expects a constant expression` | the value does not fold to a constant | `#define` is a folded constant, not a textual macro; it cannot mention a variable |
-| `duplicate #define` | the same name defined twice | rename one, or delete the second |
+| `duplicate #define` | the same name defined twice with a **different** value; repeating the same value is legal | rename one, or delete the second |
 | `name already defined by #define` | a local, parameter, global or function declared with a name a `#define` owns | rename either, in whichever order they appear |
 | `#token expects a string` | `#token` without a quoted lexeme | quote it |
 | `#infix expects the precedence` | `#infix "op"` with no integer after the lexeme | add a precedence, 1..100 |
