@@ -1,4 +1,4 @@
-# Two worked examples
+# Worked examples
 
 Everything in [30-teaching.md](30-teaching.md) and [40-backends.md](40-backends.md) exists because
 of two programs in this repository. Neither of them changes a single line in `src/` or `stage0/`.
@@ -275,10 +275,24 @@ Both examples are meant to be read. Start at `examples/api/oop.mc` — it is the
 uses only `syntax` and `type_alias`. Then `examples/lang/lang_expr.mc`, which is where
 `syntax_infix(".")` and the generic instantiation live.
 
-The one deviation on record: `examples/lang/mc.toml` sets `[compiler].core = "lang_core.mc"`
-instead of using the bundled `<mc/core>`, because the bundle's data array plus a module that size
-exhausted the arena at the time it was written. The mechanism that removes that cause is in
-place; the example was left exactly as it was verified.
+## Built with mc, outside this repository
+
+The two examples above live here, so they are read as documentation. Two projects live elsewhere
+and are read as evidence: each consumes a published `mc` release the way any other project would,
+and neither can change a line of `src/` to get what it needs. When one of them has found something
+missing, it arrived as a gap report and left as an additive release.
+
+[**teko**](https://github.com/teko-org/teko-lang) is a language of its own -- errors as values,
+arena memory with no collector, classes, interfaces, generics, a C FFI. Its compiler is written in
+teko, and it reports rebuilding itself to a byte-identical fixed point on top of `mc`, the same
+criterion [70-bootstrap.md](70-bootstrap.md) applies here.
+
+[**mc-php**](https://github.com/minicompiler/mc-php) reads PHP 8.5, and its whole front end is one
+Tier 3 module. It has a page of its own, because what it measures is the size of a surface a
+module can carry: [62-mc-php.md](62-mc-php.md).
+
+Neither is a fork. Both are what [30-teaching.md](30-teaching.md) describes, taken as far as its
+authors needed.
 
 ## Next
 

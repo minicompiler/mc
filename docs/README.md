@@ -31,7 +31,8 @@ bench cell (M50), not estimated. The sources are in [`../bench/`](../bench/READM
 | [Teaching the compiler](guide/30-teaching.md) | `#token`/`#infix`/`#prefix`, `#rule` and the prelude, then the syntax hooks with a worked toy language |
 | [Emitting bytes](guide/40-backends.md) | `#section`, `#opcode`, `emit()`/`reloc()`, `pass()`, `backend()`, and the `arm64-surface` proof |
 | [Cross-compiling](guide/50-cross-compile.md) | Linux arm64 targets, sysroots, external linkers |
-| [Two worked examples](guide/60-examples.md) | `examples/api` and `examples/lang`, walked through |
+| [Worked examples](guide/60-examples.md) | `examples/api` and `examples/lang`, walked through |
+| [PHP, carried by one module](guide/62-mc-php.md) | what a Tier 3 module was able to hold, measured against php's own corpus |
 | [How `mc` compiles itself](guide/70-bootstrap.md) | the bootstrap chain, the fixed point, and the determinism rules for contributors |
 | [Footprint](guide/80-footprint.md) | what the smallest program costs per target, floor by floor, and the ceilings that guard it |
 | [`mc` on a Linux host](guide/90-linux-host.md) | the host layer, the Linux bootstrap chain, cross-building the compiler, what `make check` skips on Linux and why |
