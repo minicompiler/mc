@@ -8013,3 +8013,91 @@ agents (`.claude/agents/`): `stage0-dev` (C23), `mc-dev` (`.mc` code), `reviewer
   594 links`. `sh scripts/check-surface.sh build/mc0 build/mc1` -> 165 ok lines, 0 FAIL.
   `tests/golden/README.md` and `docs/reference/hooks.md` § 8's own count table brought from
   486/274 to 494/282.
+- M49 step E ✔ (`docs/specs/M49.md` § Step E + its § Implementation notes -- step E): **the byte
+  loop -- one branch per loop exit, immediate operands and folded addressing, scratch registers in a
+  leaf.** Reopened by a consumer's measurement: mc-php's `examples/decimal` ran 4.1x its C twin and
+  its profile named `mc`'s code generation (its `docs/plan.md` § 5, a leaf saving four `x19..x22`
+  and `movz x10, #1; add x19, x19, x10` for `i + 1`). A section of M49 and not an M54: everything it
+  touches is M49's (the `-O` road, the two goldens per host, `check-opt`, the null-slot rule, the
+  contract). `stage0/` untouched (2848/3000). **The plain road is byte-identical**:
+  `scripts/check-inert.sh <mc1 from main> build/mc1` -- 33 objects and the five taught examples
+  identical on the plain road, the optimized road different for 24 tests and `src/mc.mc`.
+  * **Measured before any code** (§ E.2, hand-emitted variants of today's `--dump-asm -O`, assembled
+    and timed, plus two prototype scripts that ARE the peepholes): the lever is not one the consumer
+    named. `loop { if (c) break; ... }` -- also every prelude `while` -- took TWO taken branches per
+    iteration; one conditional branch halved the byte sum by itself. Immediates and addressing pay
+    once the branches are gone; scratch registers are 0 on a long loop and 2-4% on the call-bound
+    phase. Removing the `b L1` a return jumps over was measured and is noise (not taken).
+  * **E.1, the exit branch** (`src/gen_walk.mc`): an `if` with no `else` whose `then` is only a
+    `break N`/`continue N` lowers as `MTASK_JNZ` to the loop's label; one helper (`jump_label`) now
+    validates the level for both lowerings, same messages. Gated on `walk_reg_count() > 0`, so the
+    null-slot riscv64 and AVR stay byte-identical on both roads (`check-opt`'s proof holds).
+  * **E.2, machine-private emission-time folds.** P5: a lone constant (arm64 `movz`, x86 `mov r,
+    imm32`) into the right operand's register becomes the immediate form -- `add`/`sub`/`cmp` #0..4095
+    and `and` with a mask (existing forms) and **`lsl`/`lsr`/`asr` #0..63 (new `I_LSLI/LSRI/ASRI`)**;
+    x86 `add/sub/and/or/xor/cmp` imm8/imm32 and `shl/shr/sar` imm8 (**new `X_ADDI..X_SARI`**, `D1 /d`
+    for a shift by one, as `llvm-mc` picks). P6: the address `add` folds into the access -- **`I_MEMR`,
+    one new arm64 family `ldr*/str* [xn, xm]`** at every width, or the existing `[xn, #k]`; x86
+    **`[base + index]` through a SIB byte**. P7: a lone `movz` joins arm64's store-rewrite whitelist.
+    P8 (x86 only): `mov rd, rx; op rd, y` + a store into `rx` is `op rx, y` in place, so `i = i + 1`
+    is `add rbx, 1`. `lib/backend_arm64.mc` learned the new arm64 forms, and `check-surface` now
+    also compares 35 objects between `macho` and `arm64-surface` on the optimized road.
+  * **E.3, contract version 7: `MTASK_REG_SCRATCH` (37), `MTASK_COUNT` 38**, under the null-slot
+    rule. A LEAF (no call, no `callp`, no module intrinsic) hands out caller-saved registers before
+    any callee-saved one and saves none: arm64 `x0..x7` (`a64_allocreg`), System V `rdi`/`rsi`
+    (`x86_allocreg_at` 5/6); Win64 leaves the slot null. Index `count + j` IS integer argument
+    register `j`, so a taken 8-byte parameter of an all-integer function stays where it arrived
+    (`opt_assign`'s three passes). Two obligations recorded in `machine.md`: a machine whose non-call
+    task emits a call answers 0, and an overridden `MTASK_PARAM_REG` maps scratch indices through
+    the base map -- `fa_param_reg`, `wi_param_reg`, `fx_param_reg`, `xw_param_reg` do; the probe
+    machine checks the range and that no scratch register is saved. Win64 `rdi`/`rsi` still unnamed.
+  * **E.4 left out, measured**: small-leaf inlining and constant propagation -- no hot path of the
+    three benchmarks is a call to a small leaf (the two short ones in `decimal`'s profile are 2.5%).
+  * **The optimized fixed point found the one defect** (§ Implementation notes 4): P6's store fold
+    moved an `add` past the lone `movz` of the value, which overwrote the add's index
+    (`str x10, [x21, x10]` in `opt_scan`); `mc2o.o != mc3o.o` stopped `make check`. Fixed on both
+    machines; `tests/mc/104-opt-imm.mc` carries `st8(p + (i + 1), 5)`, which printed
+    72623859790382856 for 14 on `-O` before the fix.
+  * **Measured after** (one sitting, the step's compiler against `main`'s; `lowpowermode` was 1 for
+    the pre-code table and 0 for this one): (a) `bench/mc/bench.mc` 0.554 -> **0.523 s** against
+    `clang -O2`'s 0.426 -- **1.30x -> 1.23x**, `primes` 0.194 -> 0.179, `mix`/`fib` unchanged;
+    (b) `bench/leaf` (new: `leaf.mc` + `leaf.c`) `sum` 0.415 -> **0.210** (clang scalar 0.209),
+    `spn` 0.621 -> **0.314** (clang 0.261, alignment-sensitive: 0.257-0.295 by `nop` shift alone),
+    `dadd` 0.780 -> **0.312** (clang 0.847), short calls 1.720 -> **0.812** (clang 0.582);
+    (c) mc-php `decimal` built by an `mc-php` this compiler built, **0.521 -> 0.442 ms**, 4.1x ->
+    3.5x its C twin (check.php identical, bcmath 1219/0 wrong). Per item, the finished tree with one
+    item off: without E.1 short 1.470 s / decimal 0.483 ms; without E.2 1.153 / 0.475; without E.3
+    0.851 / 0.452. The `-O`-built `mc` compiles `src/mc.mc` in **0.561 s** against 0.788 s for step
+    D2's; `-O` itself costs nothing (0.867 vs 0.866 s); `src/mc.mc`'s `-O` `__text` 504 660 ->
+    470 188 B.
+  -- cost: **559 added lines in `src/`, 401 of them code** (`gen_walk.mc` +163/112,
+  `machine_arm64.mc` +167/112, `machine_x86_64.mc` +229/177), plus `lib/` +29 (the four
+  `*_param_reg`, the probe, `lib/backend_arm64.mc`) and `scripts/check-surface.sh` +87. **The llvm-mc
+  sweep** over the optimized `src/mc.mc`, `tests/mc/103..105`, `bench/leaf` and `bench/mc` objects:
+  3873 distinct instructions on each of mach-o/ELF/COFF AArch64, 2768 (ELF x86-64) and 2622 (COFF
+  x86-64), **0 mismatches**. `make check` RC 0 on macOS (`check-obj` 32/32 against the frozen seed,
+  both fixed points `mc2.o == mc3.o` 1 491 624 B and `mc2o.o == mc3o.o` 1 396 776 B, the cross-road
+  identity, both `--dump-asm` diffs between `mc1` and `mc2`/`mc2o` empty, `check-opt` 79/79,
+  `check-surface` with the new leaf rule -- arm64 493 leaves / 1 saving with all of `x0..x7` in
+  use, System V 493 / 30 with `rdi`/`rsi`; over `main`'s optimized dump the same rule reports 69
+  and 43 violations -- `test-linux` 63/63 and 59/59, the four `--exe` cells 66/66/62/62,
+  `check-float`, `check-wide`, `check-kernel`, `check-avr`, `test-sandbox` 73 ok, `check-docs`,
+  `check-freeze` 494 entries with `machine 7`, `site` 101 pages). `make check-linux-host` RC 0 over
+  all four cells, each after its own plain and optimized fixed point, cross-road identity and cross
+  proof. Docker Desktop could not start in this session; the Linux cells ran on the Lima VM's
+  Docker (`mc-k7`, x86-64 through emulation) with an anonymous `DOCKER_CONFIG`.
+  The ten goldens rewritten **once**, each after its own criterion: `mc2.sha256`
+  `78819abf9f6e845cb016e4a33c3bc54bacab3ee53d8a8c1a69a3d51e627a0e5a`, `mc2-opt.sha256`
+  `0016c932099afd31fb05710925d242a4e00f3b4edc128091d3a1c566b4b73220`; `mc2-linux-arm64`
+  `c4c829cd83bbc0e348063ca9b387ab4aabdd5a5527f1ab228de7e1b1c87fa46d`, `-opt`
+  `2aad7730b0c63ac665ddcfbf1ad7716557064a4e33af3c9d85ad5566bed809dc`; `mc2-linux-x86_64`
+  `7f0dc4527913a1cb81d4962ed69a51966d2f0b534cd5ab0e5e76560e600f74af`, `-opt`
+  `3bed95c0abb27ca427a0fc67aa61c0532bdc794b7adbdb09d76c6bc55300f753`; `mc2-windows-arm64`
+  `3c9820316ffe433bef78112ad5521332eaaa7becd42edeb11d93e3d9ba65e928` (1 527 794 B), `-opt`
+  `4b53c40b0de4d2dd30685402a0d54575c698040f0207ebb52fdf32f610d725a6` (1 432 362 B);
+  `mc2-windows-x86_64` `ce213a7d3f5b1a76db58356fdda712bcb01a4452a049ddf91f56b6584f6a4f0b`
+  (1 587 774 B), `-opt` `21924171d3e7523e9207cb04f603dd28496d4cd84b2d4e6047caa31c17ce339c`
+  (1 474 082 B), the Windows four also written byte for byte by `build/mc2` / `build/mc2o`.
+  Docs: `docs/reference/machine.md` (version 7, the slot, the leaf rules, P5-P8), `objects.md`
+  § 4/4b/4c, `docs/guide/15-optimizing.md` (three items + the measured table), `docs/comparison.md`,
+  `bench/README.md` § E.

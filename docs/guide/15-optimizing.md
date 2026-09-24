@@ -170,23 +170,26 @@ calls into a loop, which is not something this compiler does. `primes` keeps a 0
 
 ## Step E, measured
 
-The rows above are the allocator's. [M49 § Step E](../specs/M49.md) measured the exit branch, the
-immediates and the leaf registers on three benchmarks, in ONE sitting on the same Apple M4 — which
-was in low-power mode that day, so every absolute number is about 1.9x the table above; the ratios
-are what compare:
+The rows above are the allocator's. [M49 § Step E](../specs/M49.md) added the exit branch, the
+immediates and the leaf registers, and measured them on three benchmarks in ONE sitting on the same
+Apple M4, the step's compiler against the one before it (best of seven, interleaved; `decimal` best
+of eleven processes):
 
 | | `-O` before | `-O` after | `clang -O2` |
 |---|---|---|---|
-| `bench/mc/bench.mc`, the whole workload | 1.030 s (1.31x) | **0.992 s (1.26x)** | 0.788 s |
-| `bench/leaf` `sum` (a byte sum, 4096 bytes x 200 000) | 0.798 s | **0.404 s** | 0.079 s (0.403 without vectorising) |
-| `bench/leaf` `spn` (php's `strspn` loop) | 1.193 s | **0.596 s** | 0.579 s |
-| `bench/leaf` `dadd` (a digit-buffer add) | 1.511 s | **0.603 s** | 1.626 s |
-| `bench/leaf` short inputs (16 bytes, 40M calls of the three) | 3.307 s | **1.610 s** | 1.118 s |
-| mc-php's `examples/decimal` (`bench.php`, per run) | 0.992 ms | **0.812 ms** | its C twin: 0.240 ms |
+| `bench/mc/bench.mc`, the whole workload | 0.554 s (1.30x) | **0.523 s (1.23x)** | 0.426 s |
+| `bench/leaf` `sum` (a byte sum, 4096 bytes x 200 000) | 0.415 s | **0.210 s** | 0.041 s (0.209 without vectorising) |
+| `bench/leaf` `spn` (php's `strspn` loop) | 0.621 s | **0.314 s** | 0.261 s |
+| `bench/leaf` `dadd` (a digit-buffer add) | 0.780 s | **0.312 s** | 0.847 s |
+| `bench/leaf` short inputs (16 bytes, 40M calls of the three) | 1.720 s | **0.812 s** | 0.582 s |
+| mc-php's `examples/decimal` (`bench.php`, per run) | 0.521 ms | **0.442 ms** | its C twin: 0.126 ms |
+| an `-O`-built `mc` compiling `src/mc.mc` | 0.788 s | **0.561 s** | — |
 
 Removing one item at a time from the finished compiler says which item bought what: without the
-exit branch the short phase is 2.850 s and `decimal` 0.918 ms; without the immediates and
-addressing, 2.214 s and 0.889 ms; without the leaf registers, 1.663 s and 0.845 ms.
+exit branch the short phase is 1.470 s and `decimal` 0.483 ms; without the immediates and
+addressing, 1.153 s and 0.475 ms; without the leaf registers, 0.851 s and 0.452 ms. `spn` moves
+between 0.26 and 0.31 s with nothing but the address its loop lands at -- the same instructions
+shifted by one to four `nop`s span that range -- so its column is the one to read loosely.
 
 ## Reading what it did
 

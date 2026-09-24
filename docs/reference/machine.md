@@ -365,14 +365,15 @@ to -- took TWO taken branches per iteration before it, and the M4 takes one a cy
 `walk_reg_count() > 0`, the optimizer on AND the machine taking part, so a null-slot machine lowers
 exactly what it always did.
 
-Measured (`docs/specs/M49.md` § Step E, Apple M4 in low-power mode, one sitting): the byte-loop
-microbenchmark `bench/leaf/` goes **`sum` 0.80 -> 0.40 s, `spn` 1.19 -> 0.60, `dadd` 1.51 -> 0.60
-and the call-bound short phase 3.31 -> 1.61** -- level with `clang -O2 -fno-vectorize` on the first
-two and 2.7x faster than clang on `dadd`; the M49 workload 1.03 -> 0.99 s against `clang -O2`'s
-0.79 (`primes` 0.37 -> 0.33); and mc-php's `examples/decimal`, built by an `mc-php` this compiler
-built, **0.99 -> 0.81 ms**, 4.1x -> 3.4x its C twin. The sweep of every distinct instruction of the
-optimized objects under `llvm-mc` -- 3875 on each AArch64 format, 2774 (System V) and 2629 (Win64)
-on x86-64 -- is 0 mismatches.
+Measured (`docs/specs/M49.md` § Step E, Apple M4, one sitting, the step's compiler against the one
+before it): the byte-loop microbenchmark `bench/leaf/` goes **`sum` 0.415 -> 0.210 s, `spn` 0.621
+-> 0.314, `dadd` 0.780 -> 0.312 and the call-bound short phase 1.720 -> 0.812** -- level with
+`clang -O2 -fno-vectorize` on the sum and 2.7x faster than clang on `dadd`; the M49 workload 0.554
+-> 0.523 s against `clang -O2`'s 0.426 (1.30x -> 1.23x); mc-php's `examples/decimal`, built by an
+`mc-php` this compiler built, **0.521 -> 0.442 ms**, 4.1x -> 3.5x its C twin; and an `-O`-built
+`mc` compiles `src/mc.mc` in 0.561 s against 0.788 s for the one step D2 built. The sweep of every
+distinct instruction of the optimized objects under `llvm-mc` -- 3873 on each AArch64 format, 2768
+(System V) and 2622 (Win64) on x86-64 -- is 0 mismatches.
 
 ### What the x86-64 allocators do (step D2)
 

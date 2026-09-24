@@ -385,14 +385,22 @@ the counting loop — and `fib(38)` is 0.132 against 0.073, a gap that is the nu
 the quality of the code between them (`clang -O2` turns one of the two recursive calls into a loop).
 The compiler's own `__text` is 10% SMALLER with `-O` than without.
 
+**M49 step E moved it again, to 1.23x.** Measured in one sitting, the step's compiler against
+the one before it: `-O` ran the workload in 0.554 s before step E and in **0.523 s after it,
+against `clang -O2`'s 0.426 s -- 1.30x -> 1.23x**, all of it in the sieve (0.194 -> 0.179 s),
+whose loops no longer take two branches per iteration. On a byte loop the step is larger:
+`bench/leaf/`'s byte sum, `strspn`-shaped scan and digit-buffer add each run about twice as fast,
+the sum level with `clang -O2 -fno-vectorize` ([M49 § Step E](specs/M49.md)).
+
 What `-O` is: the callee-saved registers (`x19..x28`) allocated to locals and parameters by weighted
 use count, two emission-time peepholes that fuse a comparison into the branch reading it, and a
-loop's invariant constants and global addresses materialised once at function entry
-([`guide/15-optimizing.md`](guide/15-optimizing.md),
+loop's invariant constants and global addresses materialised once at function entry; since step E
+also one conditional branch for a loop's exit test, immediate operands and address sums folded into
+the access, and a function that calls nothing using the registers it may clobber (`x0..x7`) before
+any it must save ([`guide/15-optimizing.md`](guide/15-optimizing.md),
 [`reference/machine.md`](reference/machine.md) § 5). What it is not: there is still no inlining, no
-constant propagation, no unrolling and no vectorisation ([`surface.md`](surface.md)), and the
-x86-64 machines have not been taught the allocator yet, so `--opt=1` on a Linux or Windows x86-64
-target is accepted and does nothing. The default stays 0 — the plain road is the determinism
+constant propagation, no unrolling and no vectorisation ([`surface.md`](surface.md)). The x86-64
+machines have had the allocator since M49 step D2 and step E's folds with it. The default stays 0 — the plain road is the determinism
 reference and the seed for every foreign bootstrap chain — so a project opts in with one flag or
 one `[project].opt` line.
 
@@ -512,7 +520,12 @@ links to the milestone that would carry it in [`plan.md`](plan.md).
    `clang -O2` on that phase on `ubuntu-latest` (§ "The same workload in the cell"). Whether the two
    registers Win64 makes callee-saved (`rdi`, `rsi`) are worth adding is now a question with a
    measurement in front of it, which is what M49 § 12 risk 11 was waiting for. See `plan.md` § M49
-   and [`guide/15-optimizing.md`](guide/15-optimizing.md).
+   and [`guide/15-optimizing.md`](guide/15-optimizing.md). **Step E** (M49 § Step E) came from a
+   consumer's profile rather than from this workload: mc-php's `examples/decimal`, a string-heavy
+   PHP extension compiled through `mc`, ran 4.1x its C twin; one conditional branch per loop exit,
+   immediate operands with folded addressing, and scratch registers in a leaf took it to **3.5x**
+   (0.521 -> 0.442 ms per run against the twin's 0.126) and this workload from 1.30x to 1.23x,
+   measured in one sitting.
 2. **A reproducible bench cell — done** (M50). One GitHub Actions job per toolchain on three cells,
    every version pinned in one file, a release tarball whose `.sha256` is verified before unpacking,
    the SHA-256 of every binary timed, and each run committed as dated JSON under
