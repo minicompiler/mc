@@ -113,6 +113,12 @@ i64 sur_encode(uptr e, i64 pc, uptr lab) {
         if (k == 0 || k == 64 || (m >> k) != 0) die("immediate and mask not supported");
         return 0x92400000 | ((k - 1) << 10) | (rn << 5) | rd;
     }
+    // M49 step E: the shifts by a constant (UBFM/SBFM) and the register-offset
+    // access, whose imm is the index of the access in the mem table
+    if (op == I_LSLI) return 0xD3400000 | (((64 - im) & 63) << 16) | ((63 - im) << 10) | (rn << 5) | rd;
+    if (op == I_LSRI) return 0xD3400000 | ((im & 63) << 16) | (63 << 10) | (rn << 5) | rd;
+    if (op == I_ASRI) return 0x93400000 | ((im & 63) << 16) | (63 << 10) | (rn << 5) | rd;
+    if (op == I_MEMR) return (sur_mem_base_at(im) & ~0x01000000) | 0x00206800 | (rm << 16) | (rn << 5) | rd;
     if (op == I_ADDI || op == I_SUBI) {
         if (ins_imm(e) < 0 || ins_imm(e) > 4095) die("add/sub immediate out of 12 bits");
         i64 base = 0xD1000000;

@@ -129,6 +129,28 @@ done
 
 echo "$((total - fails))/$total objects identical (arm64-surface vs macho)"
 
+# M49 step E: the same comparison on the OPTIMIZED road, which is where the
+# forms step E added live -- lsl/lsr/asr by a constant and the register-offset
+# loads and stores. tests/mc/103..105 are the programs that are about them.
+ofails=0
+ototal=0
+for f in tests/*.mc tests/mc/10[3-5]-*.mc; do
+    [ -f "$f" ] || continue
+    name=$(basename "$f" .mc)
+    ototal=$((ototal + 1))
+    a="$tmp/$name.surface-o.o"
+    b="$tmp/$name.macho-o.o"
+    if ! build/mc1s --opt=1 --backend=arm64-surface "$f" -o "$a" > "$tmp/d" 2>&1 ||
+       ! build/mc1s --opt=1 "$f" -o "$b" >> "$tmp/d" 2>&1 || ! cmp "$a" "$b" >> "$tmp/d" 2>&1; then
+        echo "FAIL $name --opt=1 ($(head -1 "$tmp/d"))"; ofails=$((ofails + 1)); continue
+    fi
+done
+if [ "$ofails" = "0" ]; then
+    echo "ok $ototal objects identical with --opt=1 (arm64-surface vs macho)"
+else
+    fails=$((fails + ofails))
+fi
+
 # the demo pass has to alter the AST of tests/061-pass.mc, and no other
 "$mc0"        --dump-ast tests/061-pass.mc > "$tmp/ast-sem" 2>&1
 build/mc1s    --dump-ast tests/061-pass.mc > "$tmp/ast-com" 2>&1
@@ -1020,6 +1042,8 @@ optbad=$(awk '
     function flush(  r, k) {
         if (fn == "") return
         for (k in used) if (!(k in saved) || !(k in restored)) { bad++; report = report " " fn ":x" k }
+        # step E: and nothing is saved that the body does not use
+        for (k in saved) if (!(k in used)) { bad++; report = report " " fn ":x" k "(unused)" }
         delete used; delete saved; delete restored
     }
     /^_/ { flush(); fn = $0; pro = 1; next }
@@ -1067,6 +1091,57 @@ else
     fails=$((fails + 1))
 fi
 
+# ---- M49 step E: the leaf rule (contract version 7) ----------------------------
+# A function that makes no call hands out the machine's SCRATCH registers before
+# a callee-saved one: x0..x7 on AArch64, rdi/rsi on System V. So a leaf may save
+# a callee-saved register only when every scratch register is already spoken
+# for -- and every one of them then appears in its body (an argument it read, or
+# a value it keeps there). leaf_rule FILE CALLRE SAVERE SCRATCH... prints
+# "bad|report|leaves|leaves that save".
+leaf_rule() {
+    f=$1; callre=$2; prore=$3; savere=$4; shift 4
+    awk -v callre="$callre" -v prore="$prore" -v savere="$savere" -v scr="$*" '
+        BEGIN { ns = split(scr, sr, " ") }
+        function flush(  i, miss) {
+            if (fn == "") return
+            if (!call) {
+                nleaf++
+                if (nsave) {
+                    nsaving++
+                    miss = ""
+                    for (i = 1; i <= ns; i++) if (!(sr[i] in seen)) miss = miss "," sr[i]
+                    if (miss != "") { bad++; report = report " " fn ":" substr(miss, 2) }
+                }
+            }
+            delete seen; call = 0; nsave = 0
+        }
+        /^_/ { flush(); fn = $0; pro = 1; next }
+        fn == "" { next }
+        # the save area is what follows the frame record, and only that: a
+        # body may store an allocated register into a memory local
+        pro && $0 ~ prore  { next }
+        pro && $0 ~ savere { nsave++; next }
+        { pro = 0 }
+        $0 ~ callre { call = 1 }
+        {
+            line = " " $0 " "
+            for (i = 1; i <= ns; i++)
+                if (match(line, "[^a-zA-Z0-9_]" sr[i] "[^a-zA-Z0-9_]")) seen[sr[i]] = 1
+        }
+        END { flush(); print bad + 0 "|" report "|" nleaf + 0 "|" nsaving + 0 }
+    ' "$f"
+}
+# (the patterns travel through `awk -v`, which eats one level of backslashes)
+lr=$(leaf_rule "$tmp/mc-opt.asm" '^  (bl|blr) ' '^  (stp x29, x30, \\[sp, #-16\\]!|mov x29, sp|sub sp, sp, #[0-9]+)$' \
+     '^  str x(19|2[0-8]), \\[sp' x0 x1 x2 x3 x4 x5 x6 x7)
+lrbad=$(printf '%s' "$lr" | cut -d'|' -f1)
+if [ "$lrbad" = "0" ]; then
+    echo "ok abi (--opt=1, leaf rule): $(printf '%s' "$lr" | cut -d'|' -f3) leaves, $(printf '%s' "$lr" | cut -d'|' -f4) of them save a callee-saved register, each with all of x0..x7 in use"
+else
+    echo "FAIL abi (--opt=1, leaf rule): $lrbad leaves save a callee-saved register with a scratch register free:$(printf '%s' "$lr" | cut -d'|' -f2 | cut -c1-400)"
+    fails=$((fails + 1))
+fi
+
 # ---- M49 step D2: the same assertion on the two x86-64 machines ---------------
 # The claim is the C promise, told in x86's vocabulary: rbx, r12, r13, r14 and
 # r15 are the callee's to preserve under System V AND under Win64, so a function
@@ -1090,6 +1165,7 @@ for m in x86_64 x86_64-win; do
         function flush(  r, k) {
             if (fn == "") return
             for (k in used) if (!(k in saved) || !(k in restored)) { bad++; report = report " " fn ":" k }
+            for (k in saved) if (!(k in used)) { bad++; report = report " " fn ":" k "(unused)" }
             delete used; delete saved; delete restored
         }
         /^_/ { flush(); fn = $0; pro = 1; next }
@@ -1132,6 +1208,17 @@ for m in x86_64 x86_64-win; do
         echo "FAIL abi ($m, --opt=1): $xcount functions use a callee-saved register they do not save and restore:$xwhere"
         echo "  rdi/rsi named on Win64: $nrdi"
         fails=$((fails + 1))
+    fi
+    # step E: System V's leaf rule, over rdi and rsi (Win64 has no scratch)
+    if [ "$m" = "x86_64" ]; then
+        xl=$(leaf_rule "$tmp/x-$m-o.asm" '^  call ' '^  (push rbp|mov rbp, rsp|sub rsp, [0-9]+)$' \
+             '^  mov \\[rbp-[0-9]+\\], (rbx|r1[2-5])$' rdi rsi)
+        if [ "$(printf '%s' "$xl" | cut -d'|' -f1)" = "0" ]; then
+            echo "ok abi ($m, --opt=1, leaf rule): $(printf '%s' "$xl" | cut -d'|' -f3) leaves, $(printf '%s' "$xl" | cut -d'|' -f4) of them save a callee-saved register, each with rdi and rsi in use"
+        else
+            echo "FAIL abi ($m, --opt=1, leaf rule):$(printf '%s' "$xl" | cut -d'|' -f2 | cut -c1-400)"
+            fails=$((fails + 1))
+        fi
     fi
 done
 

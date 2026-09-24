@@ -381,14 +381,15 @@ void wi_global_store(i64 ty, i64 d, i64 sym) {
 // the one rule a positional ABI would get wrong.
 void wi_param_reg(i64 ty, i64 i, i64 r) {
     if (iw_is(ty)) die("an i128/u128 parameter in an allocatable register");
+    i64 rd = a64_allocreg(r);                    // M49 step E: a scratch index is x0..x7
     if (iw_ngrn < REG_ARGS) {
-        e2(I_MOV, REG_ALLOC + r, iw_ngrn);
+        if (rd != iw_ngrn) e2(I_MOV, rd, iw_ngrn);
         iw_ngrn = iw_ngrn + 1;
     } else {
-        em(I_LDR, REG_ALLOC + r, REG_FP, 16 + iw_pstk * 8);
+        em(I_LDR, rd, REG_FP, 16 + iw_pstk * 8);
         iw_pstk = iw_pstk + 1;
     }
-    gen_cast(REG_ALLOC + r, ty);
+    gen_cast(rd, ty);
 }
 
 void wi_param(i64 ty, i64 i, i64 off) {

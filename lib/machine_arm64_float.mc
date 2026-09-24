@@ -322,14 +322,15 @@ void fa_param(i64 ty, i64 i, i64 off) {
 // register instead of a frame slot as its destination.
 void fa_param_reg(i64 ty, i64 i, i64 r) {
     if (fa_is_float(ty)) die("float parameter in an allocatable register");
+    i64 rd = a64_allocreg(r);                    // M49 step E: a scratch index is x0..x7
     if (fa_ngrn < REG_ARGS) {
-        e2(I_MOV, REG_ALLOC + r, fa_ngrn);
+        if (rd != fa_ngrn) e2(I_MOV, rd, fa_ngrn);
         fa_ngrn = fa_ngrn + 1;
     } else {
-        em(I_LDR, REG_ALLOC + r, REG_FP, 16 + fa_pstk * 8);
+        em(I_LDR, rd, REG_FP, 16 + fa_pstk * 8);
         fa_pstk = fa_pstk + 1;
     }
-    gen_cast(REG_ALLOC + r, ty);                 // the register holds the extended eight bytes
+    gen_cast(rd, ty);                            // the register holds the extended eight bytes
 }
 
 // a float constant is its BIT PATTERN, materialised into an integer scratch and

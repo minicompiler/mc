@@ -4,9 +4,11 @@
 // REGISTERS BY HAND (docs/reference/objects.md § 4, "#opcode names registers"),
 // and the walker inserts nothing around them. The allocator therefore refuses
 // the whole FUNCTION that contains one -- not the statement, the function --
-// because a local in x19 would be a local in a register such a word may be
-// using. The proof is that `raw`'s lowering is IDENTICAL on both roads, while
-// `hot` right beside it is allocated.
+// using. The proof is that `raw` names no allocatable register on either road
+// -- no x19..x28, and (M49 step E) none of x0..x7 as a scratch register either
+// -- while `hot` right beside it is allocated. What `raw` does get on the
+// optimized road is what names no register but an expression depth's: the
+// branch fusion of step B and the exit branch and immediates of step E.
 // expect-exit: 42
 // expect-stdout: 55 42
 // skip-x86_64: the #opcode template is an AArch64 word (movz); the x86-64 machine emits its own instruction set

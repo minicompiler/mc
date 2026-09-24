@@ -41,6 +41,11 @@
 // record, so the set is exactly x19..x28.
 #define REG_ALLOC 19
 #define REG_NALLOC 10
+// M49 step E (contract version 7): in a function that makes no call, x0..x7 are
+// free once the prologue has read the parameters, and they need no save -- the
+// caller already assumes they are gone. Index REG_NALLOC + j is x_j, which is
+// integer argument register j, so a parameter can stay where it arrived.
+#define REG_NSCRATCH 8
 
 // ---- full plan enum; the encoder only implements what it uses.
 // I_LABEL (0) belongs to gen_walk.mc: it is the one opcode the walker itself
@@ -101,7 +106,15 @@
 #define I_SXTB    50
 #define I_SXTH    51
 #define I_SXTW    52
-#define I_COUNT   53                  // one past the last: the bundled band ends here
+// M49 step E (P5, P6): the three shifts by a constant -- UBFM/SBFM, spelled
+// `lsl`/`lsr`/`asr xd, xn, #k` -- and ONE opcode for every load and store with
+// a register offset, `ldr*`/`str* rt, [xn, xm]`, whose imm is the mem_ins index
+// of the access it stands for (width, direction and sign in one number).
+#define I_LSLI    53
+#define I_LSRI    54
+#define I_ASRI    55
+#define I_MEMR    56
+#define I_COUNT   57                  // one past the last: the bundled band ends here
 
 // A derived machine claims a BAND of the opcode space above I_COUNT and passes
 // everything else down to this table (docs/reference/machine.md § 3). Seen from
@@ -450,7 +463,51 @@ void a64_const(i64 d, i64 imm) {
     dst_done(d, rd);
 }
 
+// ---- M49 step E: the emission-time folds P5 and P6 ---------------------------
+// Both are the P1/P2 shape: they read the LAST instruction, they are guarded by
+// walk_opt() and by adjacency (an I_LABEL between would be the last instruction
+// and matches nothing), and they only ever drop an instruction and emit one
+// form in its place.
+
+// P5: the value just written into depth d's own register by ONE movz, or -1.
+// A gen_imm chain ends in a movk, so a lone movz is the whole constant (0..65535),
+// and the only instruction that can be last and write a depth's register is the
+// one that produced the depth's value -- an aliased depth emitted nothing.
+i64 a64_lone_const(i64 d) {
+    if (walk_opt() == 0 || dalias_at(d) >= 0 || !in_reg(d) || nins <= ins_base) return 0 - 1;
+    uptr e = ins_at(nins - 1);
+    if (ins_op(e) != I_MOVZ || ins_rd(e) != REG_BASE + d) return 0 - 1;
+    return ins_imm(e);
+}
+
+i64 a64_mask(i64 k) { return k > 0 && (k & (k + 1)) == 0; }   // 2^n - 1
+
+// P5 for MTASK_BIN: the immediate form of `op` with constant k, or 0 when there
+// is none. add/sub #0..4095 and and-with-a-mask are forms the encoder has always
+// had; the three shifts by a constant are step E's.
+i64 a64_imm_op(i64 op, i64 k) {
+    if (op == MOP_ADD && k <= 4095) return I_ADDI;
+    if (op == MOP_SUB && k <= 4095) return I_SUBI;
+    if (op == MOP_AND && a64_mask(k)) return I_ANDI;
+    if (k > 63) return 0;
+    if (op == MOP_SHL) return I_LSLI;
+    if (op == MOP_SHR) return I_LSRI;
+    if (op == MOP_SAR) return I_ASRI;
+    return 0;
+}
+
 void a64_bin(i64 op, i64 d, i64 d2) {
+    i64 k = a64_lone_const(d2);
+    i64 iop = 0;
+    if (k >= 0) iop = a64_imm_op(op, k);
+    if (iop) {
+        set_ins_op(ins_at(nins - 1), I_NOP);     // the movz is consumed
+        i64 rs = val_reg(d, REG_S1);
+        i64 rt = dst_reg(d);
+        ei(iop, rt, rs, k);
+        dst_done(d, rt);
+        return;
+    }
     i64 rl = val_reg(d, REG_S1);
     i64 rr = val_reg(d2, REG_S2);
     i64 rd = dst_reg(d);
@@ -465,6 +522,16 @@ void a64_bin(i64 op, i64 d, i64 d2) {
 
 void a64_cmp(i64 cond, i64 d, i64 d2) {
     if (cond < 0 || cond >= 10) die("unknown condition");   // a code past this contract
+    i64 k = a64_lone_const(d2);                  // P5: cmp #0..4095
+    if (k >= 0 && k <= 4095) {
+        set_ins_op(ins_at(nins - 1), I_NOP);
+        i64 rs = val_reg(d, REG_S1);
+        i64 rt = dst_reg(d);
+        ei(I_CMPI, 0, rs, k);
+        ins_add(I_CSET, rt, 0, 0, cond_arm_at(cond), 0, 0);
+        dst_done(d, rt);
+        return;
+    }
     i64 rl = val_reg(d, REG_S1);
     i64 rr = val_reg(d2, REG_S2);
     i64 rd = dst_reg(d);
@@ -510,14 +577,57 @@ void a64_cast(i64 ty, i64 d) {
     dst_done(d, rd);
 }
 
+// P6: the `add` `back` instructions from the end, when it wrote the ADDRESS at
+// depth d into d's own register -- `add xd, xn, xm` or `add xd, xn, #k` -- or 0.
+// The address depth must not be aliased: an alias emitted nothing, and the
+// instruction found there would belong to something else.
+uptr a64_addr_add(i64 d, i64 back) {
+    if (walk_opt() == 0 || dalias_at(d) >= 0 || !in_reg(d) || nins - back <= ins_base) return 0;
+    uptr e = ins_at(nins - 1 - back);
+    if (ins_rd(e) != REG_BASE + d) return 0;
+    if (ins_op(e) != I_ADD && ins_op(e) != I_ADDI) return 0;
+    return e;
+}
+
+// P6: fold the `add` into access `op` (a mem_ins opcode) of register rt. A
+// register sum becomes the register-offset form; a constant sum the scaled
+// unsigned-offset form every frame access already uses, when the constant is a
+// multiple of the width and fits its twelve bits. Returns 1 when folded.
+i64 a64_fold_addr(uptr a, i64 op, i64 rt) {
+    if (a == 0) return 0;
+    i64 mi = mem_slot(op);
+    if (ins_op(a) == I_ADD) {
+        set_ins_op(a, I_NOP);
+        ins_add(I_MEMR, rt, ins_rn(a), ins_rm(a), mi, 0, 0);
+        return 1;
+    }
+    i64 k = ins_imm(a);
+    i64 sc = mem_scale_at(mi);
+    if (k < 0 || k % sc != 0 || k / sc > 4095) return 0;
+    set_ins_op(a, I_NOP);
+    em(op, rt, ins_rn(a), k);
+    return 1;
+}
+
 void a64_load(i64 ty, i64 d) {
-    i64 rp = val_reg(d, REG_S1);
     i64 rd = dst_reg(d);
+    if (a64_fold_addr(a64_addr_add(d, 0), mem_op(ty, 0), rd)) { dst_done(d, rd); return; }
+    i64 rp = val_reg(d, REG_S1);
     em(mem_op(ty, 0), rd, rp, 0);                // zero-extended by construction
     dst_done(d, rd);
 }
 
+// P6 for a store: the value at d + 1 was produced AFTER the address, so the
+// `add` is last only when the value emitted nothing (an alias), or second to
+// last when the value is one lone movz -- which reads no register. Anything
+// longer could read the address register and is left alone.
 void a64_store(i64 ty, i64 d) {
+    uptr a = 0;
+    if (dalias_at(d + 1) >= 0)          a = a64_addr_add(d, 0);
+    else if (a64_lone_const(d + 1) >= 0) a = a64_addr_add(d, 1);
+    if (a) {
+        if (a64_fold_addr(a, mem_op(ty, 1), val_reg(d + 1, REG_S2))) return;
+    }
     i64 rp = val_reg(d, REG_S1);
     i64 rv = val_reg(d + 1, REG_S2);
     em(mem_op(ty, 1), rv, rp, 0);
@@ -633,19 +743,32 @@ void a64_word(i64 w)         { ins_add(I_EMIT, 0, 0, 0, w, 0, 0); }
 // x19..x28, ten of them, and the walker gets to name them by index alone.
 i64 a64_reg_count() { return REG_NALLOC; }
 
+// M49 step E: the version 7 slot, and the one map from an allocatable index to
+// a register. The derived machines' MTASK_PARAM_REG ask it too
+// (lib/machine_arm64_float.mc, lib/i128.mc), which is why it is a function.
+i64 a64_reg_scratch() { return REG_NSCRATCH; }
+i64 a64_allocreg(i64 r) {
+    if (r < REG_NALLOC) return REG_ALLOC + r;
+    return r - REG_NALLOC;                       // x0..x7
+}
+
 // The save area is ordinary frame slots (docs/specs/M49.md § 4.3), so these two
 // are the `str`/`ldr` forms every encoder already has: no instruction form is
 // added to the sweep by the allocator, and lib/backend_arm64.mc needs no change.
-void a64_reg_save(i64 r, i64 off)    { em(I_STR, REG_ALLOC + r, REG_FRAME, 0 - off); }
-void a64_reg_restore(i64 r, i64 off) { em(I_LDR, REG_ALLOC + r, REG_FRAME, 0 - off); }
+void a64_reg_save(i64 r, i64 off)    { em(I_STR, a64_allocreg(r), REG_FRAME, 0 - off); }
+void a64_reg_restore(i64 r, i64 off) { em(I_LDR, a64_allocreg(r), REG_FRAME, 0 - off); }
 
 // argument i straight into its register, READING x0..x7 and never writing them.
 // M38's rule for parameter 9 and up applies unchanged: the caller left it above
 // the frame record, at [x29 + 16 + 8*(i-8)].
+//
+// Step E: a scratch index names x_i itself when the walker leaves a parameter
+// where it arrived, and then there is nothing to move.
 void a64_param_reg(i64 ty, i64 i, i64 r) {
-    if (i < REG_ARGS) e2(I_MOV, REG_ALLOC + r, i);
-    else              em(I_LDR, REG_ALLOC + r, REG_FP, 16 + (i - REG_ARGS) * 8);
-    gen_cast(REG_ALLOC + r, ty);                 // the register holds the extended eight bytes
+    i64 rd = a64_allocreg(r);
+    if (i < REG_ARGS) { if (rd != i) e2(I_MOV, rd, i); }
+    else              em(I_LDR, rd, REG_FP, 16 + (i - REG_ARGS) * 8);
+    gen_cast(rd, ty);                            // the register holds the extended eight bytes
 }
 
 // THE LOAD EMITS NOTHING. It records that depth `d` is the value of register
@@ -653,13 +776,14 @@ void a64_param_reg(i64 ty, i64 i, i64 r) {
 // which is what turns "locals in registers" into "the ALU reads the local
 // directly" and is the difference between 0.38 s and 0.28 s on the benchmark's
 // mix loop (docs/specs/M49.md § 1.2, variants A and B).
-void a64_reg_load(i64 d, i64 r) { set_dalias_at(d, REG_ALLOC + r); }
+void a64_reg_load(i64 d, i64 r) { set_dalias_at(d, a64_allocreg(r)); }
 
 // 1 when instruction `op` WRITES ins_rd. A store's rd is its SOURCE, so the
 // whole store half of mem_ins is excluded -- retargeting one would write the
 // value somewhere else entirely. movz/movk are excluded too: gen_imm writes the
 // same rd in up to four instructions and retargeting only the last is wrong.
-i64 a64_retarget_ok(i64 op) {
+i64 a64_retarget_ok(uptr e) {
+    i64 op = ins_op(e);
     i64 i = 0;
     loop {                                       // the eleven rd, rn, rm forms
         if (rrr_ins_at(i) == 0) break;
@@ -668,9 +792,14 @@ i64 a64_retarget_ok(i64 op) {
     }
     if (op == I_MSUB || op == I_MVN || op == I_NEG || op == I_CSET) return 1;
     if (op == I_ANDI || op == I_ADDI || op == I_SUBI) return 1;
+    if (op == I_LSLI || op == I_LSRI || op == I_ASRI) return 1;
+    // step E (P7): a LONE movz is a whole constant -- a gen_imm chain ends in a
+    // movk, which stays out -- so `x = 0` is one instruction
+    if (op == I_MOVZ) return 1;
     if (op == I_MOV || op == I_MOVW) return 1;
     if (op == I_SXTB || op == I_SXTH || op == I_SXTW) return 1;
     i64 mi = mem_slot(op);                       // even = load (writes rd), odd = store
+    if (op == I_MEMR) mi = ins_imm(e);          // step E: the access it stands for
     if (mi >= 0) return (mi & 1) == 0;
     return 0;
 }
@@ -685,11 +814,11 @@ i64 a64_retarget_ok(i64 op) {
 // this store and by nothing else, and because an I_LABEL between would BE the
 // last instruction and is not in the whitelist.
 void a64_reg_store(i64 ty, i64 d, i64 r) {
-    i64 rd = REG_ALLOC + r;
+    i64 rd = a64_allocreg(r);
     i64 done = 0;
     if (dalias_at(d) < 0 && in_reg(d) && nins > ins_base) {
         uptr e = ins_at(nins - 1);
-        if (a64_retarget_ok(ins_op(e)) && ins_rd(e) == REG_BASE + d) {
+        if (a64_retarget_ok(e) && ins_rd(e) == REG_BASE + d) {
             set_ins_rd(e, rd);
             // `mov x19, x19` is what a depth that already read this same local
             // collapses to; I_NOP generates no word
@@ -833,6 +962,16 @@ void dump_ins(uptr in) {
         return;
     }
     if (op == I_ANDI) { d_i("and", ins_rd(in), ins_rn(in), ins_imm(in)); return; }
+    if (op == I_LSLI) { d_i("lsl", ins_rd(in), ins_rn(in), ins_imm(in)); return; }
+    if (op == I_LSRI) { d_i("lsr", ins_rd(in), ins_rn(in), ins_imm(in)); return; }
+    if (op == I_ASRI) { d_i("asr", ins_rd(in), ins_rn(in), ins_imm(in)); return; }
+    if (op == I_MEMR) {                        // step E: [xn, xm], the access by its mem_ins index
+        i64 k = ins_imm(in);
+        d_head(mem_name_at(k));
+        if (mem_wreg(k)) { out_str(1, "w"); out_num(1, ins_rd(in)); } else d_reg(ins_rd(in));
+        out_str(1, ", ["); d_reg(ins_rn(in)); out_str(1, ", "); d_reg(ins_rm(in)); out_str(1, "]\n");
+        return;
+    }
     if (op == I_ADDI) { if (ins_imm(in) == 0) d_2("mov", ins_rd(in), ins_rn(in));
                         else d_i("add", ins_rd(in), ins_rn(in), ins_imm(in)); return; }
     if (op == I_SUBI) { d_i("sub", ins_rd(in), ins_rn(in), ins_imm(in)); return; }
@@ -919,6 +1058,13 @@ i64 encode(uptr in, i64 pc, uptr lab) {
         if (k == 0 || k == 64 || (m >> k) != 0) die("immediate and mask not supported");
         return 0x92400000 | ((k - 1) << 10) | (rn << 5) | rd;
     }
+    // step E: UBFM/SBFM with the fields `lsl`/`lsr`/`asr #k` are aliases of
+    if (op == I_LSLI) return 0xD3400000 | (((64 - im) & 63) << 16) | ((63 - im) << 10) | (rn << 5) | rd;
+    if (op == I_LSRI) return 0xD3400000 | ((im & 63) << 16) | (63 << 10) | (rn << 5) | rd;
+    if (op == I_ASRI) return 0x93400000 | ((im & 63) << 16) | (63 << 10) | (rn << 5) | rd;
+    // step E: LDR/STR (register), option LSL/UXTX with no shift -- the unsigned
+    // offset encoding of the same access with bit 24 cleared and 21, 14:13, 11 set
+    if (op == I_MEMR) return (mem_base_at(im) & ~0x01000000) | 0x00206800 | (rm << 16) | (rn << 5) | rd;
     if (op == I_ADDI || op == I_SUBI) {
         if (ins_imm(in) < 0 || ins_imm(in) > 4095) die("add/sub immediate out of 12 bits");
         i64 base = 0xD1000000;
@@ -996,5 +1142,6 @@ void machine_arm64_init() {
     machine_task(MTASK_REG_SAVE,     &a64_reg_save);
     machine_task(MTASK_REG_RESTORE,  &a64_reg_restore);
     machine_task(MTASK_PARAM_REG,    &a64_param_reg);
+    machine_task(MTASK_REG_SCRATCH,  &a64_reg_scratch);
     machine("arm64", m_arm64);
 }

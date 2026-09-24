@@ -122,7 +122,19 @@
 #define X_MOVSXB  49                  // movsx rd, rn (byte)
 #define X_MOVSXW  50                  // movsx rd, rn (word)
 #define X_MOVSXD  51                  // movsxd rd, rn (dword)
-#define X_COUNT   52
+// M49 step E (P5): the ALU with an immediate operand -- 83 /d ib or 81 /d id --
+// and the three shifts by a constant, C1 /d ib. `rd op= imm`, two-operand as
+// every x86 ALU form is; X_CMPI writes nothing but the flags.
+#define X_ADDI    52
+#define X_SUBI    53
+#define X_ANDI    54
+#define X_ORI     55
+#define X_XORI    56
+#define X_CMPI    57
+#define X_SHLI    58
+#define X_SHRI    59
+#define X_SARI    60
+#define X_COUNT   61
 
 // ---- how an opcode is encoded: the form decides which of five shapes, the
 // other five columns fill it in. Everything not in a shape is XF_SPEC and has
@@ -135,6 +147,8 @@
 #define XF_LD   5                     // opc /r, reg = rd, memory [rn + imm]
 #define XF_ST   6                     // the same bytes as XF_LD; only the dump differs
 #define XF_MG   7                     // opc /r, reg = `dig`, memory [rn + imm]
+#define XF_RI   8                     // step E: 83 /dig ib or 81 /dig id, rm = rd
+#define XF_SI   9                     // step E: C1 /dig ib, rm = rd
 
 #define XD_N 6                        // columns per opcode: form w opc dig pre rex
 
@@ -191,7 +205,16 @@ i64 x86_desc[] = {
     XF_LD,         1, 0x63,   0, 0,    0,        // 48 movsxd r64, dword [m]
     XF_RD,         1, 0x1be,  0, 0,    0,        // 49 movsx r64, r8
     XF_RD,         1, 0x1bf,  0, 0,    0,        // 50 movsx r64, r16
-    XF_RD,         1, 0x63,   0, 0,    0         // 51 movsxd r64, r32
+    XF_RD,         1, 0x63,   0, 0,    0,        // 51 movsxd r64, r32
+    XF_RI,         1, 0x81,   0, 0,    0,        // 52 add r, imm
+    XF_RI,         1, 0x81,   5, 0,    0,        // 53 sub r, imm
+    XF_RI,         1, 0x81,   4, 0,    0,        // 54 and r, imm
+    XF_RI,         1, 0x81,   1, 0,    0,        // 55 or r, imm
+    XF_RI,         1, 0x81,   6, 0,    0,        // 56 xor r, imm
+    XF_RI,         1, 0x81,   7, 0,    0,        // 57 cmp r, imm
+    XF_SI,         1, 0xc1,   4, 0,    0,        // 58 shl r, imm8
+    XF_SI,         1, 0xc1,   5, 0,    0,        // 59 shr r, imm8
+    XF_SI,         1, 0xc1,   7, 0,    0         // 60 sar r, imm8
 };
 
 uptr x86_name[] = { "", "nop", "push", "push", "leave", "ret", "mov", "mov32",
@@ -199,7 +222,8 @@ uptr x86_name[] = { "", "nop", "push", "push", "leave", "ret", "mov", "mov32",
     "xor32", "idiv", "div", "shl", "shr", "sar", "neg", "not", "cmp", "test",
     "set", "movzxb", "movzxw", "jmp", "j", "call", "call", "movzxb", "movzxw",
     "mov32", "mov", "mov8", "mov16", "mov32", "mov", "add", "sub", ".word",
-    "movsxb", "movsxw", "movsxd", "movsxb", "movsxw", "movsxd" };
+    "movsxb", "movsxw", "movsxd", "movsxb", "movsxw", "movsxd",
+    "add", "sub", "and", "or", "xor", "cmp", "shl", "shr", "sar" };
 
 uptr m_x86_64[MTASK_COUNT];           // the task table the walker drives
 uptr m_x86_64_win[MTASK_COUNT];       // the same thirty-one entries, Win64 prologue
@@ -262,8 +286,14 @@ void set_xalias_at(i64 i, i64 v) { st64(xdslot + (MAXDEPTH + i) * 8, v); }
 // set is rbx, r12..r15 -- not contiguous, unlike AArch64's x19..x28, so it takes
 // arithmetic rather than a base. A table would read better and would cost one
 // more file-level global, which is the frozen seed's tight row.
+//
+// M49 step E: index XREG_NALLOC + j is scratch register j of a leaf, and it IS
+// System V integer argument register j -- rdi, then rsi -- the only volatile
+// registers this machine does not already spend on a depth or a scratch.
 i64  x86_allocreg_at(i64 r) {
     if (r == 0) return XR_RBX;                   // 3
+    if (r == XREG_NALLOC) return XR_RDI;         // 5 -> rdi
+    if (r == XREG_NALLOC + 1) return XR_RSI;     // 6 -> rsi
     return r + 11;                               // 1..4 -> r12..r15
 }
 
@@ -446,11 +476,53 @@ void x86_divmod(i64 op, i64 d, i64 d2) {
     x86_dst_done(d, rd);
 }
 
+// ---- M49 step E: the emission-time folds P5 and P6, arm64's in x86's shape ----
+// P5: the value one `mov r, imm` just wrote into depth d's own register, when it
+// fits a sign-extended imm32; 1 in *ok. The only instruction that can be last and
+// write a depth's register is the one that produced the depth's value -- an
+// aliased depth emitted nothing.
+i64 x86_lone_const(i64 d, uptr ok) {
+    st64(ok, 0);
+    if (walk_opt() == 0 || xalias_at(d) >= 0 || !x86_in_reg(d) || nins <= ins_base) return 0;
+    uptr e = ins_at(nins - 1);
+    if (ins_op(e) != X_MOVI || ins_rd(e) != XREG_BASE + d) return 0;
+    i64 v = ins_imm(e);
+    if (v < 0 - 0x80000000 || v >= 0x80000000) return 0;
+    st64(ok, 1);
+    return v;
+}
+
+// the immediate form of `op`, or 0: every ALU op but the multiply and the four
+// divisions, and a shift by 0..63
+i64 x86_imm_op(i64 op, i64 k) {
+    if (op == MOP_ADD) return X_ADDI;
+    if (op == MOP_SUB) return X_SUBI;
+    if (op == MOP_AND) return X_ANDI;
+    if (op == MOP_OR)  return X_ORI;
+    if (op == MOP_XOR) return X_XORI;
+    if (k < 0 || k > 63) return 0;
+    if (op == MOP_SHL) return X_SHLI;
+    if (op == MOP_SHR) return X_SHRI;
+    if (op == MOP_SAR) return X_SARI;
+    return 0;
+}
+
 // x86 is two-operand: the destination is also the left operand, which is what
 // dst_reg and val_reg of the SAME depth already return.
 void x86_bin(i64 op, i64 d, i64 d2) {
     if (op == MOP_SDIV || op == MOP_UDIV || op == MOP_SMOD || op == MOP_UMOD) {
         x86_divmod(op, d, d2);
+        return;
+    }
+    i64 ok[1];
+    i64 k = x86_lone_const(d2, ok);
+    i64 iop = 0;
+    if (ld64(ok)) iop = x86_imm_op(op, k);
+    if (iop) {                                   // P5: the mov is consumed
+        set_ins_op(ins_at(nins - 1), X_NOP);
+        i64 rt = x86_own(d);
+        ei(iop, rt, 0, k);
+        x86_dst_done(d, rt);
         return;
     }
     i64 rd = x86_own(d);                         // two-operand: the dest is the left
@@ -466,6 +538,18 @@ void x86_bin(i64 op, i64 d, i64 d2) {
 
 void x86_cmp(i64 cond, i64 d, i64 d2) {
     if (cond < 0 || cond >= 10) die("unknown condition");   // a code past this contract
+    i64 ok[1];
+    i64 k = x86_lone_const(d2, ok);              // P5: cmp r, imm
+    if (ld64(ok)) {
+        set_ins_op(ins_at(nins - 1), X_NOP);
+        i64 rs = x86_val_reg(d, XREG_S1);
+        i64 rt = x86_dst_reg(d);
+        ei(X_CMPI, rs, 0, k);
+        ins_add(X_SETCC, rt, 0, 0, x86_cond_at(cond), 0, 0);
+        e2(X_MOVZXB, rt, rt);
+        x86_dst_done(d, rt);
+        return;
+    }
     i64 rl = x86_val_reg(d, XREG_S1);
     i64 rr = x86_val_reg(d2, XREG_S2);
     i64 rd = x86_dst_reg(d);
@@ -532,14 +616,55 @@ void x86_cast(i64 ty, i64 d) {
     x86_dst_done(d, rd);
 }
 
+// P6: the address at depth d was just produced -- two-operand -- by
+// `add rd, rr` or `add rd, imm` into d's own register, `back` instructions from
+// the end, optionally preceded by the `mov rd, rs` that x86_own emits for an
+// aliased left operand. Folds it into access `op` of register rt: the index form
+// [base + index] (a SIB byte, scale 1) for a register sum, [base + k] for a
+// constant one. The base is the mov's source when there is one, or rd itself --
+// its value before the add, which is still there, since the add is dropped.
+// Returns 1 when folded.
+i64 x86_fold_addr(i64 d, i64 back, i64 op, i64 rt) {
+    if (walk_opt() == 0 || xalias_at(d) >= 0 || !x86_in_reg(d) || nins - back <= ins_base) return 0;
+    uptr a = ins_at(nins - 1 - back);
+    i64 rd = XREG_BASE + d;
+    i64 aop = ins_op(a);
+    if (ins_rd(a) != rd || (aop != X_ADD && aop != X_ADDI)) return 0;
+    i64 base = rd;
+    if (nins - 2 - back >= ins_base) {
+        uptr m = ins_at(nins - 2 - back);
+        // not for `add rd, rd`: the index IS rd there, and it must keep the mov
+        if (ins_op(m) == X_MOV && ins_rd(m) == rd && !(aop == X_ADD && ins_rn(a) == rd)) {
+            base = ins_rn(m);
+            set_ins_op(m, X_NOP);
+        }
+    }
+    set_ins_op(a, X_NOP);
+    if (aop == X_ADD) ins_add(op, rt, base, ins_rn(a) + 1, 0, 0, 0);   // rm = index + 1
+    else              em(op, rt, base, ins_imm(a));
+    return 1;
+}
+
 void x86_load(i64 ty, i64 d) {
-    i64 rp = x86_val_reg(d, XREG_S1);
     i64 rd = x86_dst_reg(d);
+    if (x86_fold_addr(d, 0, x86_mem_op(ty, 0), rd)) { x86_dst_done(d, rd); return; }
+    i64 rp = x86_val_reg(d, XREG_S1);
     em(x86_mem_op(ty, 0), rd, rp, 0);            // zero-extended by construction
     x86_dst_done(d, rd);
 }
 
+// P6 for a store: the value at d + 1 was produced AFTER the address, so the add
+// is last only when the value emitted nothing (an alias), or second to last when
+// it is one `mov r, imm`, which reads no register.
 void x86_store(i64 ty, i64 d) {
+    i64 back = 0 - 1;
+    i64 ok[1];
+    if (xalias_at(d + 1) >= 0) back = 0;
+    else {
+        x86_lone_const(d + 1, ok);
+        if (ld64(ok)) back = 1;
+    }
+    if (back >= 0 && x86_fold_addr(d, back, x86_mem_op(ty, 1), x86_val_reg(d + 1, XREG_S2))) return;
     i64 rp = x86_val_reg(d, XREG_S1);
     i64 rv = x86_val_reg(d + 1, XREG_S2);
     em(x86_mem_op(ty, 1), rv, rp, 0);
@@ -715,6 +840,11 @@ void x86_label(i64 l)      { x86_alias_reset(); el(I_LABEL, l); }
 // rbx, r12..r15 on BOTH ABIs, and the walker names them by index alone.
 i64 x86_reg_count() { return XREG_NALLOC; }
 
+// M49 step E, the version 7 slot: rdi and rsi in a leaf, on System V only. On
+// Win64 they are callee-saved and every volatile register is already a depth or
+// a scratch, so that table leaves the slot null (machine_x86_64_init).
+i64 x86_reg_scratch() { return 2; }
+
 // The save area is ordinary frame slots (docs/specs/M49.md § 4.3), so these two
 // are mov forms the encoder already has: the allocator adds no instruction form
 // to the sweep, the frame record stays unconditional, `leave` still ends the
@@ -768,10 +898,37 @@ i64 x86_retarget_ok(i64 op) {
 // register and no `mov` is emitted at all. It is safe because the value at the
 // depth is consumed by this store and by nothing else, and because an I_LABEL
 // between would BE the last instruction and is not in the whitelist.
+// M49 step E (P8): the two-operand half the rewrite below cannot do. `x = x op y`
+// lowers as `mov r8, rx; op r8, y` and then comes here; when those are the last
+// two instructions the pair is `op rx, y` in place -- the depth register was
+// only ever a copy of rx on its way back into it. Not when the operation reads
+// the depth register as its SOURCE (`add r8, r8` is x + x, and its r8 is the
+// copy), which is what `srcok` rules out.
+i64 x86_inplace_ok(uptr e, i64 dr) {
+    i64 op = ins_op(e);
+    if (op >= X_ADDI && op <= X_XORI) return 1;
+    if (op == X_SHLI || op == X_SHRI || op == X_SARI) return 1;
+    if (op == X_NEG || op == X_NOT || op == X_SHL || op == X_SHR || op == X_SAR) return 1;
+    if (op == X_ADD || op == X_SUB || op == X_AND || op == X_OR || op == X_XOR || op == X_IMUL)
+        return ins_rn(e) != dr;
+    return 0;
+}
+
 void x86_reg_store(i64 ty, i64 d, i64 r) {
     i64 rd = x86_allocreg_at(r);
     i64 done = 0;
-    if (xalias_at(d) < 0 && x86_in_reg(d) && nins > ins_base) {
+    i64 dr = XREG_BASE + d;
+    if (walk_opt() && xalias_at(d) < 0 && x86_in_reg(d) && nins - 2 >= ins_base) {
+        uptr e = ins_at(nins - 1);
+        uptr m = ins_at(nins - 2);
+        if (ins_rd(e) == dr && x86_inplace_ok(e, dr) && ins_op(m) == X_MOV
+                && ins_rd(m) == dr && ins_rn(m) == rd) {
+            set_ins_op(m, X_NOP);
+            set_ins_rd(e, rd);
+            done = 1;
+        }
+    }
+    if (done == 0 && xalias_at(d) < 0 && x86_in_reg(d) && nins > ins_base) {
         uptr e = ins_at(nins - 1);
         if (x86_retarget_ok(ins_op(e)) && ins_rd(e) == XREG_BASE + d) {
             set_ins_rd(e, rd);
@@ -821,6 +978,30 @@ void x86_op(uptr o, i64 op) {                    // > 0xff is a two-byte 0x0F op
 }
 
 void x86_modrm_rr(uptr o, i64 reg, i64 rm) { buf_u8(o, 0xc0 | ((reg & 7) << 3) | (rm & 7)); }
+
+// M49 step E (P6): [base + index + disp] through a SIB byte, scale 1. The REX
+// prefix gains its X bit for an index above 7; an index is never rsp (it is a
+// depth, an allocated or a scratch register), and a base whose low bits are 101
+// (rbp, r13) takes a zero disp8, because mod 00 would mean "no base".
+void x86_rex_x(uptr o, i64 w, i64 r, i64 x, i64 b, i64 force) {
+    if (!w && !force && r < 8 && x < 8 && b < 8) return;
+    i64 v = 0x40;
+    if (w) v = v | 8;
+    if (r >= 8) v = v | 4;
+    if (x >= 8) v = v | 2;
+    if (b >= 8) v = v | 1;
+    buf_u8(o, v);
+}
+
+void x86_modrm_sib(uptr o, i64 reg, i64 base, i64 ix, i64 disp) {
+    i64 mod = 2;
+    if (disp == 0 && (base & 7) != 5) mod = 0;
+    else if (x86_fits8(disp))         mod = 1;
+    buf_u8(o, (mod << 6) | ((reg & 7) << 3) | 4);
+    buf_u8(o, ((ix & 7) << 3) | (base & 7));
+    if (mod == 1) buf_u8(o, disp & 0xff);
+    if (mod == 2) buf_u32(o, disp);
+}
 
 i64 x86_fits8(i64 v) { return v >= 0 - 128 && v <= 127; }
 
@@ -909,7 +1090,27 @@ void x86_put(uptr e, i64 pc, uptr lab, uptr o) {
             }
             return;
         }
+        if (f == XF_RI) {                        // step E: 83 /d ib or 81 /d id
+            x86_rex(o, 1, 0, rd, 0);
+            if (x86_fits8(im)) { buf_u8(o, 0x83); x86_modrm_rr(o, dig, rd); buf_u8(o, im & 0xff); }
+            else               { buf_u8(o, 0x81); x86_modrm_rr(o, dig, rd); buf_u32(o, im); }
+            return;
+        }
+        if (f == XF_SI) {                        // step E: C1 /d ib, and D1 /d for a
+            x86_rex(o, 1, 0, rd, 0);             // shift by one -- the shorter form every
+            if (im == 1) { buf_u8(o, 0xd1); x86_modrm_rr(o, dig, rd); return; }   // assembler picks
+            buf_u8(o, opc);
+            x86_modrm_rr(o, dig, rd);
+            buf_u8(o, im & 0xff);
+            return;
+        }
         if (pre) buf_u8(o, pre);
+        if ((f == XF_LD || f == XF_ST) && ins_rm(e)) {   // step E: rm is index + 1
+            x86_rex_x(o, w, rd, ins_rm(e) - 1, rn, rex);
+            x86_op(o, opc);
+            x86_modrm_sib(o, rd, rn, ins_rm(e) - 1, im);
+            return;
+        }
         i64 reg = rd;                            // XF_RD, XF_LD, XF_ST
         i64 rm  = rn;
         if (f == XF_RS) { reg = rn; rm = rd; }
@@ -970,6 +1171,16 @@ void xd_num(i64 v) {
     out_num(1, v);
 }
 
+// step E: `ix` is the index register plus one, 0 for none
+void xd_memi(i64 base, i64 ix, i64 off) {
+    out_str(1, "[");
+    xd_reg(base);
+    if (ix) { out_str(1, "+"); xd_reg(ix - 1); }
+    if (off >= 0) { out_str(1, "+"); out_num(1, off); }
+    else          { out_str(1, "-"); out_num(1, 0 - off); }
+    out_str(1, "]");
+}
+
 void xd_mem(i64 base, i64 off) {
     out_str(1, "[");
     xd_reg(base);
@@ -1021,10 +1232,12 @@ void x86_dump(uptr in) {
     if (f == XF_RG) { xd_head(m); xd_reg(rd);
                       if (op == X_SHL || op == X_SHR || op == X_SAR) out_str(1, ", cl");
                       out_str(1, "\n"); return; }
-    if (f == XF_LD) { xd_head(m); xd_reg(rd); out_str(1, ", "); xd_mem(rn, im);
+    if (f == XF_LD) { xd_head(m); xd_reg(rd); out_str(1, ", "); xd_memi(rn, ins_rm(in), im);
                       out_str(1, "\n"); return; }
-    if (f == XF_ST) { xd_head(m); xd_mem(rn, im); out_str(1, ", "); xd_reg(rd);
+    if (f == XF_ST) { xd_head(m); xd_memi(rn, ins_rm(in), im); out_str(1, ", "); xd_reg(rd);
                       out_str(1, "\n"); return; }
+    if (f == XF_RI || f == XF_SI) { xd_head(m); xd_reg(rd); out_str(1, ", "); xd_num(im);
+                                    out_str(1, "\n"); return; }
     if (f == XF_MG) { xd_head(m); xd_mem(rn, im); out_str(1, "\n"); return; }
     if (op == X_PUSH)   { xd_head(m); xd_reg(rd); out_str(1, "\n"); return; }
     if (op == X_MOVI)   { xd_head(m); xd_reg(rd); out_str(1, ", "); xd_num(im);
@@ -1086,6 +1299,7 @@ void machine_x86_64_init() {
     x86_task(MTASK_REG_SAVE,     &x86_reg_save);
     x86_task(MTASK_REG_RESTORE,  &x86_reg_restore);
     x86_task(MTASK_PARAM_REG,    &x86_param_reg);
+    x86_task(MTASK_REG_SCRATCH,  &x86_reg_scratch);
     machine("x86_64", m_x86_64);
 
     // M20: the Win64 machine is the SAME machine with one slot replaced. Every
@@ -1099,5 +1313,6 @@ void machine_x86_64_init() {
         t = t + 1;
     }
     st64(m_x86_64_win + MTASK_PROLOGUE * 8, &x86_prologue_win);
+    st64(m_x86_64_win + MTASK_REG_SCRATCH * 8, 0);   // step E: no scratch on Win64
     machine("x86_64-win", m_x86_64_win);
 }

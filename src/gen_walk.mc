@@ -106,7 +106,12 @@
 #define MTASK_REG_SAVE     34            // (r, off)              register r into the frame slot
 #define MTASK_REG_RESTORE  35            // (r, off)              and back out of it
 #define MTASK_PARAM_REG    36            // (ty, i, r)            argument i straight into r
-#define MTASK_COUNT        37
+// M49 step E, contract version 7: ONE appended slot, under the same null-slot
+// rule. How many CALLER-saved registers a function that makes no call may
+// allocate; their indices follow the callee-saved ones, the walker never saves
+// or restores them, and index count + j is integer argument register j.
+#define MTASK_REG_SCRATCH  37            // () -> n               scratch registers for a leaf
+#define MTASK_COUNT        38
 
 // M24 (M9): the task names --dump-machine prints, in MTASK_* order. They live
 // here because the vocabulary is the walker's; the dump itself is in main.mc,
@@ -118,7 +123,7 @@ uptr mtask_names[] = {
     "jz", "jnz", "label", "word", "ins_size", "encode", "dump", "reloc_kind",
     "reloc_off",
     "reg_count", "reg_load", "reg_store", "reg_save", "reg_restore",
-    "param_reg" };
+    "param_reg", "reg_scratch" };
 
 uptr mtask_name(i64 t) {
     if (t >= 0 && t < MTASK_COUNT) return ld64(mtask_names + t * 8);
@@ -782,7 +787,14 @@ i64 bin_op(i64 op, i64 sgn) {
 #define OPT_HKEY   3504               // the constant's value, or the global's index
 #define OPT_HSCORE 3760
 #define OPT_HREG   4016               // -1 = not allocated, else the register index
-#define OPT_SIZE   4272
+// M49 step E: the leaf flag and the selection ORDER, which the assignment pass
+// walks once more -- an entry is a local candidate's index, or OPT_HMARK plus a
+// hoist candidate's
+#define OPT_CALL   4272               // 1 = the body makes a call: not a leaf
+#define OPT_NTAKE  4280
+#define OPT_TAKE   4288               // 32 entries
+#define OPT_HMARK  1000
+#define OPT_SIZE   4544
 
 #define OPTH_CONST   0                // an N_INT that costs two or more instructions
 #define OPTH_GLOBAL  1                // adrp+add of a global's address
@@ -978,6 +990,11 @@ void opt_expr(i64 n) {
         // such a word may be using.
         i64 rk = res_kind(n);
         if (rk == RK_OPCODE) { st64(opt_rec() + OPT_BAD, 1); return; }
+        // step E: anything that may emit a `bl`/`blr` makes this function a
+        // non-leaf -- a call, a callp, and a module's intrinsic, whose handler
+        // this walker cannot see into. ld8..st64 are instructions.
+        if (rk == RK_FUNC || rk == RK_UINTRIN || (rk == RK_INTRIN && res_decl(n) == IN_CALLP))
+            st64(opt_rec() + OPT_CALL, 1);
         if (rk == RK_INTRIN && (res_decl(n) == IN_EMIT || res_decl(n) == IN_RELOC)) {
             st64(opt_rec() + OPT_BAD, 1);
             return;
@@ -1037,6 +1054,85 @@ void opt_stmt(i64 n) {
     // N_BREAK and N_CONTINUE name nothing
 }
 
+// M49 step E: the register each taken value gets, in three passes over the
+// selection order, and the number of CALLEE-saved registers used -- the only
+// ones gen_func saves and restores, contiguous from index 0.
+//
+//   1. a taken 8-byte parameter i < nsc of a function whose parameters are ALL
+//      integers keeps index ncs + i, which is the register it arrived in. "All
+//      integers" is what makes i the argument register on a derived machine
+//      too: <float>'s and <i128>'s own counters equal i exactly then.
+//   2. every other taken value, in selection order, takes the first free
+//      scratch index -- a parameter only one at or past the parameter count,
+//      because the prologue has not read the later argument registers yet; a
+//      local or a hoisted value any free one, since the body runs after the
+//      prologue has read them all --
+//   3. and only then the next callee-saved index.
+//
+// With nsc == 0 (a call somewhere, or a machine with no scratch slot) this is
+// exactly the old assignment: every value in selection order gets 0, 1, 2...
+i64 opt_assign(i64 f, i64 ncs, i64 nsc) {
+    uptr r = opt_rec();
+    i64 np = 0;
+    i64 allint = 1;
+    i64 p = nd_a(f);
+    loop {
+        if (p == 0) break;
+        i64 k = type_kind(nd_type(p));
+        if ((k != TK_INT && k != TK_SINT) || type_width(nd_type(p)) > 8) allint = 0;
+        np = np + 1;
+        p = nd_next(p);
+    }
+    i64 used = 0;                                // scratch indices taken, as a bit mask
+    if (nsc > 0 && allint) {
+        i64 i = 0;
+        p = nd_a(f);
+        loop {
+            if (p == 0 || i >= nsc) break;
+            i64 k = opt_find(p);
+            if (k >= 0 && ld64(r + OPT_SCORE + k * 8) < 0 && type_width(nd_type(p)) == 8) {
+                set_res_reg(p, ncs + i + 1);
+                used = used | (1 << i);
+            }
+            i = i + 1;
+            p = nd_next(p);
+        }
+    }
+    i64 cs = 0;
+    i64 t = 0;
+    loop {
+        if (t >= ld64(r + OPT_NTAKE)) break;
+        i64 e = ld64(r + OPT_TAKE + t * 8);
+        i64 isp = 0;
+        i64 nd = 0;
+        if (e < OPT_HMARK) {
+            nd = ld64(r + OPT_NODE + e * 8);
+            isp = nd_kind(nd) == N_PARAM;
+        }
+        if (nd == 0 || res_reg(nd) == 0) {        // not placed by pass 1
+            i64 j = 0;
+            if (isp) j = np;
+            loop {
+                if (j >= nsc) break;
+                if ((used & (1 << j)) == 0) break;
+                j = j + 1;
+            }
+            i64 reg = 0 - 1;
+            if (j < nsc)      { reg = ncs + j; used = used | (1 << j); }
+            else if (cs < ncs) { reg = cs; cs = cs + 1; }
+            // no register left: a parameter kept out of the scratch set by the
+            // prologue order can run the callee-saved ones dry, and then the
+            // value simply stays in memory (res_reg 0, OPT_HREG -1)
+            if (reg >= 0) {
+                if (nd) set_res_reg(nd, reg + 1);
+                else    st64(r + OPT_HREG + (e - OPT_HMARK) * 8, reg);
+            }
+        }
+        t = t + 1;
+    }
+    return cs;
+}
+
 // the whole pre-pass for one function. With walk_opt() == 0, walk_reg_count()
 // answers 0 and this returns after clearing the record: no node is looked at,
 // no slot is called, and gen_func's three new loops all have zero iterations --
@@ -1049,6 +1145,8 @@ void opt_scan(i64 f) {
     st64(r + OPT_DEPTH, 0);
     st64(r + OPT_NLOC, 0);
     st64(r + OPT_HN, 0);
+    st64(r + OPT_CALL, 0);
+    st64(r + OPT_NTAKE, 0);
     i64 nr = walk_reg_count();
     if (nr <= 0) return;
     if (nr > 16) nr = 16;                        // the width of the save table
@@ -1064,6 +1162,15 @@ void opt_scan(i64 f) {
     }
     opt_stmt(nd_b(f));
     if (ld64(r + OPT_BAD)) { st64(r + OPT_HN, 0); return; }
+    // step E: a leaf may also hand out the machine's scratch registers
+    i64 nsc = 0;
+    if (ld64(r + OPT_CALL) == 0) {
+        uptr sf = mach_opt(MTASK_REG_SCRATCH);
+        if (sf) nsc = callp(sf);
+        if (nsc > 16) nsc = 16;
+    }
+    i64 ncs = nr;
+    nr = ncs + nsc;
     i64 taken = 0;
     loop {
         if (taken >= nr) break;
@@ -1078,7 +1185,7 @@ void opt_scan(i64 f) {
         }
         if (best < 0) break;
         st64(r + OPT_SCORE + best * 8, 0 - 1);   // taken
-        set_res_reg(ld64(r + OPT_NODE + best * 8), taken + 1);
+        st64(r + OPT_TAKE + taken * 8, best);    // step E: assigned below
         taken = taken + 1;
     }
     // M49 step C: the loop-invariant values take the registers the locals left,
@@ -1097,10 +1204,11 @@ void opt_scan(i64 f) {
         }
         if (hb < 0) break;
         st64(r + OPT_HSCORE + hb * 8, 0 - 1);    // taken
-        st64(r + OPT_HREG + hb * 8, taken);
+        st64(r + OPT_TAKE + taken * 8, OPT_HMARK + hb);
         taken = taken + 1;
     }
-    st64(r + OPT_NREG, taken);
+    st64(r + OPT_NTAKE, taken);
+    st64(r + OPT_NREG, opt_assign(f, ncs, nsc));
 }
 
 // ---- expressions ----
@@ -1419,7 +1527,54 @@ void gen_assign(i64 n) {
     callp(mach(MTASK_GLOBAL_STORE), glb_type(g), 0, glb_sym(g));
 }
 
+// The label a `break N` or a `continue N` jumps to, after the checks and with the
+// messages gen_stmt has always used -- one helper, so a level out of range is the
+// same diagnostic whichever of the two lowerings meets it.
+i64 jump_label(i64 n) {
+    i64 lv = nd_val(n);
+    if (nd_kind(n) == N_BREAK) {                 // validate in i64: (int) would truncate
+        if (lv < 1 || lv > nloops) err_node(n, "break out of range");
+        return lbreak_at(nloops - lv);
+    }
+    if (lv == 0) lv = 1;                         // 0 = no level written, i.e. 1
+    // depth 0 keeps its own message, which predates the level and says the
+    // more useful thing when there is no loop at all
+    if (nloops == 0) err_node(n, "continue outside loop");
+    // lv < 1 is unreachable from the parser (it refuses 0 and there is no
+    // negative literal); it catches a node a module built by hand
+    if (lv < 1 || lv > nloops) err_node(n, "continue out of range");
+    return lcont_at(nloops - lv);
+}
+
+// M49 step E (E.1): the `then` of an `if` with no `else` that is nothing but a
+// `break` or a `continue` -- alone, or alone in a block -- or 0. That is every
+// `loop { if (c) break; ... }`, and every prelude `while`, whose expansion is
+// exactly that.
+i64 exit_jump(i64 n) {
+    if (nd_c(n)) return 0;
+    i64 s = nd_b(n);
+    if (nd_kind(s) == N_BLOCK) {
+        s = nd_a(s);
+        if (s == 0 || nd_next(s)) return 0;
+    }
+    if (nd_kind(s) == N_BREAK || nd_kind(s) == N_CONTINUE) return s;
+    return 0;
+}
+
 void gen_if(i64 n, i64 lepi) {
+    // E.1: one conditional branch to the loop's label instead of a branch over
+    // an unconditional one. Measured (docs/specs/M49.md § Step E.2): the plain
+    // lowering takes TWO branches per iteration of such a loop, and the M4 takes
+    // one a cycle. Gated on walk_reg_count() -- the optimizer is on AND the
+    // machine takes part -- so a null-slot machine (riscv64, AVR) lowers exactly
+    // what it always did on both roads.
+    i64 x = 0;
+    if (walk_reg_count() > 0) x = exit_jump(n);
+    if (x) {
+        gen_value(nd_a(n), 0);
+        callp(mach(MTASK_JNZ), 0, jump_label(x));
+        return;
+    }
     nlabels = nlabels + 1;
     i64 lelse = nlabels;
     gen_value(nd_a(n), 0);
@@ -1472,22 +1627,8 @@ void gen_stmt(i64 n, i64 lepi) {
     if (k == N_ASSIGN)   { gen_assign(n);      return; }
     if (k == N_IF)       { gen_if(n, lepi);    return; }
     if (k == N_LOOP)     { gen_loop(n, lepi);  return; }
-    if (k == N_BREAK) {
-        i64 lv = nd_val(n);                      // validate in i64: (int) would truncate
-        if (lv < 1 || lv > nloops) err_node(n, "break out of range");
-        callp(mach(MTASK_JUMP), lbreak_at(nloops - lv));
-        return;
-    }
-    if (k == N_CONTINUE) {
-        i64 lv = nd_val(n);                      // 0 = no level written, i.e. 1
-        if (lv == 0) lv = 1;
-        // depth 0 keeps its own message, which predates the level and says
-        // the more useful thing when there is no loop at all
-        if (nloops == 0) err_node(n, "continue outside loop");
-        // lv < 1 is unreachable from the parser (it refuses 0 and there is no
-        // negative literal); it catches a node a module built by hand
-        if (lv < 1 || lv > nloops) err_node(n, "continue out of range");
-        callp(mach(MTASK_JUMP), lcont_at(nloops - lv));
+    if (k == N_BREAK || k == N_CONTINUE) {
+        callp(mach(MTASK_JUMP), jump_label(n));
         return;
     }
     if (k == N_RETURN) {

@@ -131,10 +131,22 @@ void pr_jnz(i64 d, i64 l)              { pr_task(); pr_d(d); callp(pr_of(MTASK_J
 i64 pr_regs = 0;                      // MTASK_REG_* calls seen
 i64 pr_open = 0;                      // saves not yet matched by a restore
 
+// M49 step E (version 7): an index past the callee-saved ones names a scratch
+// register, which only a leaf gets and which is never saved or restored
+i64 pr_nscratch() {
+    uptr f = pr_of(MTASK_REG_SCRATCH);
+    if (f == 0) return 0;
+    return callp(f);
+}
+
 void pr_v5(i64 r) {
     pr_regs = pr_regs + 1;
     if (walk_opt() == 0) pr_bad("a version 5 slot on the plain road: register", r);
-    if (r < 0 || r >= callp(pr_of(MTASK_REG_COUNT))) pr_bad("allocatable register out of range:", r);
+    if (r < 0 || r >= callp(pr_of(MTASK_REG_COUNT)) + pr_nscratch()) pr_bad("allocatable register out of range:", r);
+}
+
+void pr_callee(i64 r) {
+    if (r >= callp(pr_of(MTASK_REG_COUNT))) pr_bad("a scratch register saved or restored:", r);
 }
 
 void pr_prologue() {
@@ -150,9 +162,9 @@ void pr_reg_load(i64 d, i64 r)          { pr_task(); pr_d(d); pr_v5(r);
                                           callp(pr_of(MTASK_REG_LOAD), d, r); }
 void pr_reg_store(i64 ty, i64 d, i64 r) { pr_task(); pr_d(d); pr_v5(r);
                                           callp(pr_of(MTASK_REG_STORE), ty, d, r); }
-void pr_reg_save(i64 r, i64 off)        { pr_v5(r); pr_open = pr_open + 1;
+void pr_reg_save(i64 r, i64 off)        { pr_v5(r); pr_callee(r); pr_open = pr_open + 1;
                                           callp(pr_of(MTASK_REG_SAVE), r, off); }
-void pr_reg_restore(i64 r, i64 off)     { pr_v5(r); pr_open = pr_open - 1;
+void pr_reg_restore(i64 r, i64 off)     { pr_v5(r); pr_callee(r); pr_open = pr_open - 1;
                                           callp(pr_of(MTASK_REG_RESTORE), r, off); }
 void pr_param_reg(i64 ty, i64 i, i64 r) { pr_v5(r);
                                           callp(pr_of(MTASK_PARAM_REG), ty, i, r); }
