@@ -293,7 +293,7 @@ L1:
 
 | registers | role |
 |---|---|
-| `x0..x7` | arguments in, `x0` the result out |
+| `x0..x7` | arguments in, `x0` the result out; with `--opt=1`, in a function that makes no call, also the allocator's first registers (M49 step E) |
 | `x8` | scratch, used only for the quotient of `%` (`REG_TMP`) |
 | `x9..x15` | expression depths 0..6 (`REG_BASE 9`, `REG_MAX 6`) |
 | `x16`, `x17` | spill scratch (`REG_S1`/`REG_S2`), and `x16` carries the pointer of `callp` |
@@ -318,6 +318,16 @@ VACUOUS until M49 step D2: its `awk` used `\y`, a GNU word boundary the `awk` on
 `alpine:3` both ignore, so the set of used registers was always empty and the check could not fail.
 It is a non-word character on both sides now, and the two save/restore patterns also had to learn
 that a slot at offset 0 prints `[sp]` with no `#`.)
+
+**With `--opt=1` since M49 step E, a function that makes no call uses `x0..x7` first.** They are
+the caller's to lose anyway, so a LEAF keeps its values there with no save: an 8-byte parameter of a
+function whose parameters are all integers stays in the register it arrived in, and a local takes a
+free one once the prologue has read the arguments. The claim at the head of this section still holds
+in the sense it was written for — the prologue never writes an argument register it has not yet
+READ; a narrow parameter that must be extended is moved to one past the last argument before it is.
+The per-function assertion gained a second half, over the same 1983 functions: a leaf saves a
+callee-saved register only when every one of `x0..x7` is already in use, and no function saves one
+it does not use (`scripts/check-surface.sh`: 493 leaves, 1 of which saves one).
 
 The one sentence that is **withdrawn for `--opt=1`** is the old permission to keep runtime state in
 `x19..x28` across generated code — a coroutine switch, a thread pointer. It still holds on the plain
@@ -405,7 +415,7 @@ and nothing would diagnose a violation.
 
 | registers | role |
 |---|---|
-| `rdi rsi rdx rcx r8 r9` | arguments in, `rax` the result out |
+| `rdi rsi rdx rcx r8 r9` | arguments in, `rax` the result out; with `--opt=1`, in a function that makes no call, `rdi` and `rsi` are also the allocator's first registers (M49 step E) |
 | `rax` | spill scratch (left/destination), the `callp` pointer, the quotient of `idiv`/`div` |
 | `rcx` | spill scratch (right), and the count of every shift |
 | `rdx` | the remainder of `idiv`/`div`; zeroed before an unsigned one |
@@ -428,7 +438,11 @@ change; the frame record stays `push rbp; mov rbp, rsp; sub rsp`, the epilogue s
 On the **plain road** none of the five is named at all, which `scripts/check-surface.sh` asserts for
 both machines over the whole of `src/mc.mc`, and with `--opt=1` it asserts per function that every
 one a body names is in the set stored after the prologue and in the set loaded before `leave`:
-1929 functions, 2860 allocated registers on each ABI.
+1983 functions, 2879 allocated registers on System V and 2976 on Win64. Since M49 step E a System V
+LEAF also uses `rdi` and `rsi` as its first registers -- the caller's to lose, and argument
+registers 0 and 1, so a parameter that arrived there stays there -- and the assertion's second half
+is that a leaf saves a callee-saved register only with both of them in use (493 leaves, 30 of which
+save one). Win64 has no such spare register and is unchanged.
 
 **A narrow result is extended the same way** (M45): `movsxd rd, rd` after a `call` whose callee is
 declared `i32` (any `TK_SINT`), `movzx`/`mov r32, r32` for `u8`/`u16`/`u32`, nothing at width 8;
@@ -491,7 +505,9 @@ change; the frame record stays `push rbp; mov rbp, rsp; sub rsp`, the epilogue s
 On the **plain road** none of the five is named at all, which `scripts/check-surface.sh` asserts for
 both machines over the whole of `src/mc.mc`, and with `--opt=1` it asserts per function that every
 one a body names is in the set stored after the prologue and in the set loaded before `leave`:
-1929 functions, 2860 allocated registers on each ABI.
+1983 functions, 2976 allocated registers. `rsi` and `rdi` stay unnamed: the Win64 machine leaves
+contract version 7's scratch slot empty, because every volatile register it has is already a depth
+or a scratch.
 
 **`r8` and `r9` are argument registers 3 and 4 and depth registers 0 and 1 at the same time, and
 that is safe.** The argument table is written in **ascending** index, and each depth register's own

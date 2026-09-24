@@ -321,3 +321,23 @@ between two consecutive runs) and is therefore a report with the reference's own
 beside it. `cell/README.md` § The committed history has the numbers.
 
 Like everything else under `bench/`, **not in `make check`** and not on a pull request.
+
+## E. The byte loop (`leaf/`)
+
+`leaf/leaf.mc` and `leaf/leaf.c` are M49 step E's microbenchmark
+([`docs/specs/M49.md`](../docs/specs/M49.md) § Step E): the three shapes the hot runtime loops of a
+string-heavy consumer have -- a byte sum (the reproducer of mc-php's `docs/plan.md` § 5, verbatim),
+`php_spn`'s bitmap scan and a schoolbook add of two digit buffers -- each a LEAF called over 4096
+bytes 200 000 times, plus a fourth phase calling all three on 16-byte inputs, where the cost is the
+call and not the loop. One argument selects a phase by its first byte (`s`, `p`, `d`, `h`); no
+argument runs all four and prints `89674600000 / 819100000 / 1099999 / 69785000000`, the
+cross-check between the two sources.
+
+```sh
+build/mc1 --exe -O bench/leaf/leaf.mc -o /tmp/leaf-mc
+clang -O2 bench/leaf/leaf.c -o /tmp/leaf-c
+clang -O2 -fno-vectorize -fno-slp-vectorize bench/leaf/leaf.c -o /tmp/leaf-c-scalar
+```
+
+`clang -O2` vectorises the byte sum and `mc` never will, which is why the scalar build is the
+second reference.

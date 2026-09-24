@@ -5,8 +5,9 @@
 a `Version N → M` paragraph like the ones below — `check-freeze` enforces both
 ([hooks.md](hooks.md) § 8).
 
-> **Contract version 6 -- the integer tasks, the depth type, deriving a machine, the KIND
-> obligation, the register allocator and the unsigned comparisons (M17, M24, M39, M45, M49).**
+> **Contract version 7 -- the integer tasks, the depth type, deriving a machine, the KIND
+> obligation, the register allocator, the unsigned comparisons and the scratch registers of a leaf
+> (M17, M24, M39, M45, M49).**
 > `src/gen_walk.mc` is the target-independent walker; `src/machine_arm64.mc` (M17 step A) and
 > `src/machine_x86_64.mc` (step B, and M20's Win64 half) are the three machines behind it in the
 > compiler -- `arm64`, `x86_64`, `x86_64-win` -- and `machine(name, tab)` in `src/hooks.mc` is
@@ -74,6 +75,18 @@ a `Version N → M` paragraph like the ones below — `check-freeze` enforces bo
 > `brlo`/`brsh` on AVR — and a machine that receives a code it does not know must **refuse**
 > (`unknown condition`) rather than encode the signed twin. All five machines in this tree map
 > them.
+>
+> **Version 6 → 7 (M49 step E) APPENDS ONE SLOT and changes no signature** — `MTASK_REG_SCRATCH`
+> (37), `i64 f()`, `MTASK_COUNT` 37 → 38 (§ 5). It answers how many CALLER-saved registers a
+> function that makes no call may allocate: their indices FOLLOW the callee-saved ones
+> (`count .. count + n - 1`), the walker never saves or restores them, and index `count + j` IS
+> integer argument register `j`, so a parameter can stay in the register it arrived in. The slot is
+> under the null-slot rule, so riscv64 and AVR answer 0 with no edit. The version's obligations are
+> two lines: **a machine one of whose non-call tasks emits a call must answer 0** (a leaf is a
+> property of the SOURCE, and such a call would clobber the scratch set), and **a machine that
+> overrides `MTASK_PARAM_REG` must map an index at or past its callee-saved count too** —
+> `lib/machine_arm64_float.mc`, `lib/i128.mc` and `lib/machine_x86_64_float.mc` ask the base
+> machine's map (`a64_allocreg`, `x86_allocreg_at`) instead of computing `REG_ALLOC + r`.
 
 ## Why the split exists
 
@@ -217,6 +230,22 @@ IS, is the machine's business and appears nowhere above this file.
 | `MTASK_REG_SAVE` | `void f(i64 r, i64 off)` | write register `r` into the frame slot at `off`, in the prologue, after the parameters |
 | `MTASK_REG_RESTORE` | `void f(i64 r, i64 off)` | read it back, before `MTASK_EPILOGUE`. **It must not touch the result register**: a `return` has already put the value there |
 | `MTASK_PARAM_REG` | `void f(i64 ty, i64 i, i64 r)` | argument `i` straight into register `r`, extended by the type's kind. Argument registers are READ and never written, exactly as in `MTASK_PARAM` |
+| `MTASK_REG_SCRATCH` (version 7) | `i64 f()` | how many CALLER-saved registers a function that makes NO CALL may allocate. Their indices follow the callee-saved ones, `count .. count + n - 1`; the walker never passes one to `MTASK_REG_SAVE`/`REG_RESTORE`; index `count + j` IS integer argument register `j`. **0 and a null slot read the same** |
+
+**What the walker does with the scratch slot (version 7).** A function is a LEAF when its body has
+no direct call, no `callp` and no intrinsic a module registered (whose handler may emit a call);
+`#opcode`/`emit()`/`reloc()` already keep a function out of allocation altogether. In a leaf the
+selection loop is unchanged -- highest score, first in declaration order on a tie, threshold 3 --
+with `count + n` registers to hand out, and the assignment then runs in three passes: a taken
+8-byte parameter `i < n` of a function whose parameters are ALL integers keeps index `count + i`,
+the register it arrived in, and nothing is moved; every other taken value gets the first free
+scratch index -- a parameter only one at or past the parameter count, because the prologue has not
+read the later argument registers yet -- and only then a callee-saved one. So a leaf whose values
+fit in the scratch set saves nothing, and the save area, the frame reserve and the two
+`MTASK_REG_SAVE`/`REG_RESTORE` loops are exactly what they were for everything else. "All
+integers" is what makes `i` the argument register on a derived machine too: `<float>`'s and
+`<i128>`'s own argument counters equal `i` exactly when no parameter before `i` is a float or a
+wide value.
 
 `MTASK_REG_LOAD` carries no type on purpose: a register holds the fully extended eight bytes,
 exactly as a spill slot does, so the extension is performed once at the store and never at a load.
@@ -300,6 +329,51 @@ encoded, dumped and in `lib/backend_arm64.mc` and simply had no emitter before. 
 turn the prelude's five-instruction `while` condition — `cmp; cset lt; cmp #0; cset eq; cbz` — into
 `cmp; b.lt` plus the loop's own unconditional branch.
 
+**Step E adds the scratch registers and three more folds** (`docs/specs/M49.md` § Step E).
+`a64_reg_scratch()` answers **8**: in a leaf, index `10 + j` is `x_j`, `a64_allocreg(r)` is the one
+map from an index to a register (`x19 + r` below 10, `x(r - 10)` above), and `a64_param_reg` emits
+nothing at all for a parameter whose index names its own argument register. `x8`, `x16`/`x17` and
+`x18` stay out: the first is the remainder's scratch, the next two the spill scratch, the last
+Apple's. `MTASK_RET` writing `x0` over a local kept there is harmless, because a `return` is
+followed by the jump to the epilogue and nothing reads a local after it.
+
+* **P5 — an immediate operand.** `a64_bin`/`a64_cmp`: when the last instruction is a LONE `movz`
+  into the right operand's own register -- a `gen_imm` chain ends in `movk`, so a lone `movz` is
+  the whole constant, 0..65535 -- it becomes `I_NOP` and the immediate form is emitted: `add`/`sub`
+  #0..4095 and `cmp` #0..4095 (`I_ADDI`/`I_SUBI`/`I_CMPI`), `and` with a `2^k - 1` mask
+  (`I_ANDI`), and **`lsl`/`lsr`/`asr` #0..63 — `I_LSLI`/`I_LSRI`/`I_ASRI`, the three NEW forms,
+  `UBFM`/`SBFM` under their alias names**. Not taken, on record: the shifted `add #k, lsl #12`, a
+  logical immediate for `orr`/`eor`, a multiply by a power of two -- none occurs in a loop the step
+  measured.
+* **P6 — addressing.** `a64_load`/`a64_store`: when the address was just produced into the
+  depth's own register by `add xd, xn, xm` or `add xd, xn, #k`, the add becomes `I_NOP` and the
+  access takes it over — **`I_MEMR`, the one NEW form family: `ldr*`/`str* rt, [xn, xm]`** at every
+  width, one opcode whose `imm` is the index of the access in the machine's memory table — or the
+  scaled unsigned-offset form every frame access has always used, when `k` is a multiple of the
+  width and fits. For a store the value was produced AFTER the address, so the add can only be
+  folded when the value emitted nothing (an alias) or was one lone `movz`, which reads no
+  register; the address depth itself must not be aliased, since an alias emitted nothing and the
+  instruction found there would belong to something else.
+* **P7.** `I_MOVZ` joins the store rewrite's whitelist -- a lone one is a whole constant -- so
+  `x = 0` is `movz x19, #0`, one instruction.
+
+And the walker's own half, which needs no machine code at all: **the exit branch.** An `if` with no
+`else` whose `then` is nothing but a `break N` or a `continue N` lowers as the condition and one
+`MTASK_JNZ` to the loop's label, instead of `MTASK_JZ` over an `MTASK_JUMP`; P1 then fuses it into
+one `b.<cond>`. Every `loop { if (c) break; ... }` -- which is what the prelude's `while` expands
+to -- took TWO taken branches per iteration before it, and the M4 takes one a cycle. It is gated on
+`walk_reg_count() > 0`, the optimizer on AND the machine taking part, so a null-slot machine lowers
+exactly what it always did.
+
+Measured (`docs/specs/M49.md` § Step E, Apple M4 in low-power mode, one sitting): the byte-loop
+microbenchmark `bench/leaf/` goes **`sum` 0.80 -> 0.40 s, `spn` 1.19 -> 0.60, `dadd` 1.51 -> 0.60
+and the call-bound short phase 3.31 -> 1.61** -- level with `clang -O2 -fno-vectorize` on the first
+two and 2.7x faster than clang on `dadd`; the M49 workload 1.03 -> 0.99 s against `clang -O2`'s
+0.79 (`primes` 0.37 -> 0.33); and mc-php's `examples/decimal`, built by an `mc-php` this compiler
+built, **0.99 -> 0.81 ms**, 4.1x -> 3.4x its C twin. The sweep of every distinct instruction of the
+optimized objects under `llvm-mc` -- 3875 on each AArch64 format, 2774 (System V) and 2629 (Win64)
+on x86-64 -- is 0 mismatches.
+
 ### What the x86-64 allocators do (step D2)
 
 `x86_reg_count()` answers **5** on BOTH machines: `rbx`, `r12`, `r13`, `r14`, `r15` — the five that
@@ -307,7 +381,11 @@ System V and Win64 agree are the callee's to preserve. `rdi` and `rsi` are calle
 argument registers 1 and 2 on System V, so a count that depended on which prologue last ran would be
 stale for the first function of a unit; two registers are not worth a second code path (D11), and
 the assertion in `scripts/check-surface.sh` is that `x86_64-win`'s optimized lowering of `src/mc.mc`
-does not NAME them at all. The register partition does not move: depths stay in `r8..r11` and
+does not NAME them at all. **Step E gives them back to System V where it is safe: in a LEAF**,
+`x86_reg_scratch()` answers 2 and index 5 is `rdi`, index 6 `rsi` — System V's integer argument
+registers 0 and 1, and the only volatile registers this machine does not already spend on a depth
+or a scratch. The Win64 table leaves the slot null: every one of its volatile registers is a depth
+or a scratch already, and `rdi`/`rsi` are the callee's there. The register partition does not move: depths stay in `r8..r11` and
 scratch stays `rax`/`rcx`/`rdx`. `r` is an index and `x86_allocreg_at(r)` is the map — arithmetic
 rather than a base, because the set is not contiguous.
 
@@ -325,7 +403,8 @@ The alias table is the same mechanism, in the same place (`xalias_at`, the secon
   `call r` 's `rd` is the target and `idiv`/`div` 's is the divisor. What is left is every form that
   only WRITES: the three `mov`s, the two `lea`s, the five register `movzx`/`movsx` and the seven
   loads — which is what a local's initialiser, a constant, a global read and a comparison's boolean
-  all end in. `x = x + 1` therefore costs one `mov` on x86-64 where it costs none on AArch64.
+  all end in. `x = x + 1` therefore costs one `mov` on x86-64 where it costs none on AArch64 --
+  until step E's P8, below.
 * **far more tasks have to materialise an aliased depth first**, for the same reason: `x86_own(d)`
   is `a64_own`'s counterpart and is called by `MTASK_BIN` (whose destination IS its left operand),
   `MTASK_UN`, `MTASK_BOOL` and `MTASK_CAST`.
@@ -339,6 +418,19 @@ followed by `movzx rd, rd` (setcc writes one byte, so the `movzx` is never separ
   `cc ^ 1` — x86 condition codes are defined in negation pairs (the low bit of `tttn`), so one xor
   inverts `e`/`ne`, `l`/`ge` and `le`/`g` alike.
 * **P2** — `x86_un` for `MUN_LNOT`: the same pair, condition flipped in place, nothing emitted.
+
+**Step E's folds, in x86's shape.** P5: a lone `mov r, imm` into the right operand's register that
+fits a sign-extended imm32 becomes the immediate form of `add`/`sub`/`and`/`or`/`xor`/`cmp` (`83 /d
+ib` or `81 /d id`, `X_ADDI`..`X_CMPI`) or of `shl`/`shr`/`sar` by 0..63 (`C1 /d ib`, and `D1 /d` for
+a shift by one -- the shorter form every assembler picks, which is what keeps the sweep an
+equality); those are the NEW forms. P6: `add rd, rr` or `add rd, imm` into the address depth's own
+register, optionally preceded by the `mov rd, rs` `x86_own` emits for an aliased left operand,
+folds into the load or store as `[base + index]` — a SIB byte with scale 1, the NEW addressing form
+-- or as `[base + k]`; the base is the `mov`'s source, or `rd`'s own value before the dropped add.
+Not the `mov` when the add is `add rd, rd` (the index IS the copy). P8, the two-operand half of the
+store rewrite: `mov rd, rx; op rd, y` followed by `MTASK_REG_STORE` into `rx` is `op rx, y` in
+place -- the depth register was only ever a copy of `rx` on its way back into it -- except when `op`
+reads the depth register as its SOURCE. So `i = i + 1` is `add rbx, 1`.
 
 **`jcc rel32` is NOT a new form**, which is a correction to `docs/specs/M49.md` § 4.7: `x86_jz` has
 always ended in `X_JCC`, so the descriptor row and the encoder were already there and already swept.

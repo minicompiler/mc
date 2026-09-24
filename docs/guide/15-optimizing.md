@@ -91,6 +91,27 @@ A string literal's address and a function's address are **not** hoisted. Both wo
 named by a symbol the compiler creates on first use, so hoisting one would move where literals land
 in the object for a gain nothing measured.
 
+**A loop exits with one branch.** `loop { if (i >= n) break; ... }` — which is also exactly what the
+prelude's `while` expands to — used to cost two taken branches every iteration: one over the
+`break`, one back to the top. With `-O` an `if` whose only statement is a `break` or a `continue`
+(at any level) is a single conditional branch to the loop's label, and the comparison and the branch
+fuse into one `b.<cond>`/`jcc`. On a byte loop that halves the time; it is the largest single
+effect `-O` has on loops like the ones below (`tests/mc/103-opt-exit.mc`).
+
+**A constant operand is an immediate, and an address sum folds into the access.** `i + 1`,
+`c >> 3`, `c & 7` and `n < 10` take their constant inside the instruction instead of building it in
+a register first, and `ld8(p + i)` or `ld64(s + 16)` is one load, `ldrb w9, [x0, x2]` or
+`ldr x9, [x0, #16]` (`movzx r8, byte [rdi + rbx]` on x86-64), instead of an add and then a load
+(`tests/mc/104-opt-imm.mc`).
+
+**A function that calls nothing keeps its values in the registers it may clobber.** A LEAF — no
+call, no `callp`, no intrinsic a module registered — hands out `x0..x7` on AArch64 and `rdi`/`rsi`
+on System V x86-64 before any callee-saved register, and those need no save: an 8-byte parameter of
+a function whose parameters are all integers simply stays in the register it arrived in. A small
+leaf therefore has no save area at all — the four `str`/`ldr` pairs the old reproducer showed in
+a function that calls nothing are gone (`tests/mc/105-opt-leaf.mc`). Win64 x86-64 has no such
+register to spare, so a Win64 leaf is what it was.
+
 ## What it does not do
 
 - **It does not change what your program does.** `scripts/check-opt.sh` compiles every program of
@@ -99,7 +120,8 @@ in the object for a gain nothing measured.
   with `-O` compiles `src/mc.mc` to **byte for byte** the object the plain one writes
   ([bootstrap.md](../bootstrap.md) § The optimized chain).
 - **It does not inline, propagate constants, unroll or vectorise.** None of those is in the
-  language's compiler today.
+  language's compiler today, and the step that could have added the first two measured them first
+  and left them out ([M49 § Step E](../specs/M49.md), E.4).
 - **It does not help a target whose machine does not offer it.** A machine says how many registers
   it lends the allocator (`MTASK_REG_COUNT`, [machine.md](../reference/machine.md) § 5), and a
   machine that says nothing — `examples/kernel`'s RISC-V 64 and `examples/avr`'s AVR fill the
@@ -145,6 +167,26 @@ Two rows do not move and both are expected. `fib`'s cost is the number of calls 
 quality of what happens between them — `clang -O2` wins there by turning one of the two recursive
 calls into a loop, which is not something this compiler does. `primes` keeps a 0.06 s gap that is
 `clang -O2`'s NEON vectorisation of the counting loop; nothing here vectorises.
+
+## Step E, measured
+
+The rows above are the allocator's. [M49 § Step E](../specs/M49.md) measured the exit branch, the
+immediates and the leaf registers on three benchmarks, in ONE sitting on the same Apple M4 — which
+was in low-power mode that day, so every absolute number is about 1.9x the table above; the ratios
+are what compare:
+
+| | `-O` before | `-O` after | `clang -O2` |
+|---|---|---|---|
+| `bench/mc/bench.mc`, the whole workload | 1.030 s (1.31x) | **0.992 s (1.26x)** | 0.788 s |
+| `bench/leaf` `sum` (a byte sum, 4096 bytes x 200 000) | 0.798 s | **0.404 s** | 0.079 s (0.403 without vectorising) |
+| `bench/leaf` `spn` (php's `strspn` loop) | 1.193 s | **0.596 s** | 0.579 s |
+| `bench/leaf` `dadd` (a digit-buffer add) | 1.511 s | **0.603 s** | 1.626 s |
+| `bench/leaf` short inputs (16 bytes, 40M calls of the three) | 3.307 s | **1.610 s** | 1.118 s |
+| mc-php's `examples/decimal` (`bench.php`, per run) | 0.992 ms | **0.812 ms** | its C twin: 0.240 ms |
+
+Removing one item at a time from the finished compiler says which item bought what: without the
+exit branch the short phase is 2.850 s and `decimal` 0.918 ms; without the immediates and
+addressing, 2.214 s and 0.889 ms; without the leaf registers, 1.663 s and 0.845 ms.
 
 ## Reading what it did
 
