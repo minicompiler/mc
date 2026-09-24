@@ -540,3 +540,68 @@ table, not just a value, and walking in order is also what fixes the dylib ordin
 
 `src/tomldump.mc` is a small driver that prints the table; `scripts/check-toml.sh` compares its
 output against `tests/toml/*.expect`, well-formed and malformed files alike.
+
+---
+
+## Reading the file from a module
+
+`src/toml.mc`'s read side is what a module stands on to drive itself from a project file of its
+own -- reported by a consumer whose taught compiler does exactly that: the names existed and
+worked, but were frozen nowhere (`docs/reference/hooks.md` § 8). These eight are now in the
+recorded surface, exactly like every name on this page:
+
+```c
+void toml_parse(uptr path);
+uptr toml_get(uptr path);
+i64  toml_int(uptr path, i64 dflt);
+i64  toml_count(uptr path);
+uptr toml_get_array(uptr path, i64 k);
+i64  toml_entries();
+uptr toml_path_at(i64 i);
+uptr toml_val_at(i64 i);
+```
+
+**`toml_parse(path)`** reads the file and replaces the table it holds -- a second call, on the
+same process, throws away whatever the first one parsed (this is what lets `mc build` re-parse a
+config for itself after a module's `user_init()` ran on the first pass). A malformed file is a
+`file:line:col: message` on stderr and exit 1, the same as `mc build` itself reports; there is no
+way to catch that from inside a module. A `[compiler]` product's own driver already parses the
+project file **before** calling `user_init()`, so a module reading that SAME file needs no second
+`toml_parse` call -- only a module reading a file of its own does.
+
+**`toml_get(path)`** returns the value of a scalar key as its raw text (TOML has no other value
+kind here: an integer, a float, a boolean and a string are all handed back as the characters that
+spelled them) or `0` when the key is not in the file. **`toml_int(path, dflt)`** is the integer
+form: `dflt` if the key is missing, otherwise the text run through `atoi` with no further
+validation -- a malformed number is not refused here, the way it would be by the driver's own
+stricter readers.
+
+**`toml_count(path)`** and **`toml_get_array(path, k)`** are the array pair: `count` is how many
+entries share that path (a `list = ["a", "b"]` array puts `count("list") == 2`), and
+`get_array(path, k)` is the `k`-th one (`0`-based), or `0` past the end.
+
+**`toml_entries()`**, **`toml_path_at(i)`** and **`toml_val_at(i)`** are the entry walk, for a
+table whose **keys** are data -- `[libs]`, `[externs]`, `[[permission]]`, anything shaped like
+`[deps]` where each row's name is chosen by whoever wrote the file, not by this compiler. `entries()`
+is the total row count of the WHOLE file (every table, not just one path); `path_at(i)`/`val_at(i)`
+read row `i`'s path and value. A `[[array of tables]]` puts its occurrence number **inside** the
+path itself (`server.0.host`, `server.1.host`, ...), which is why walking by index rather than by
+one fixed path is what a table with dynamic keys needs. The loop every reader in `src/` uses to
+pull the keys of one table out of that walk:
+
+```c
+i64 i = 0;
+while (i < toml_entries()) {
+    uptr k = opt_val(toml_path_at(i), "libs.");   // "libs.sqlite3" -> "sqlite3", else 0
+    if (k != 0) dylib_add(toml_val_at(i));         // toml_val_at(i) is the path's value
+    i = i + 1;
+}
+```
+
+`opt_val` and `dylib_add` in that loop are the driver's own and are **not** in the recorded
+surface: what a module copies is the shape -- walk `0 .. toml_entries() - 1`, test the path's
+prefix, read the value -- with a prefix test of its own.
+
+`toml_add`, the four `toml_err*` diagnostics, `toml_push`/`toml_pop` (the re-entrant parse a nested
+manifest needs), `toml_bp` and `toml_occurrences` stay internal: nothing outside `src/toml.mc`'s
+own callers has a documented reason to call them, and they are not in the recorded surface.

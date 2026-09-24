@@ -428,6 +428,14 @@ sym	syntax_stmt_find	1
 sym	syntax_stmt_fn_at	1
 sym	syntax_type	1
 sym	tok_add	2
+sym	toml_count	1
+sym	toml_entries	0
+sym	toml_get	1
+sym	toml_get_array	2
+sym	toml_int	2
+sym	toml_parse	1
+sym	toml_path_at	1
+sym	toml_val_at	1
 sym	top_add	1
 sym	type_alias	2
 sym	type_align	1

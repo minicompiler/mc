@@ -90,8 +90,8 @@ they always have.
 
 ## `surface.txt` — the public surface (M53 step A)
 
-`surface.txt` is not a hash: it is the **inventory** — 486 lines, `<kind><TAB><name>`, bytewise
-sorted, seven kinds (`sym` 274, `flag` 50, `toml` 36, `dir` 10, `bundle` 101, `lock` 14,
+`surface.txt` is not a hash: it is the **inventory** — 494 lines, `<kind><TAB><name>`, bytewise
+sorted, seven kinds (`sym` 282, `flag` 50, `toml` 36, `dir` 10, `bundle` 101, `lock` 14,
 `machine` 1). A `sym` line carries a third field, its **arity**: `sym<TAB>cmp_cond<TAB>1`, the
 number of parameters the definition in `src/` declares. Every line is extracted from the tree by
 `scripts/surface-extract.sh`, which is also what `scripts/check-docs.sh` asks its four coverage

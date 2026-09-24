@@ -1740,12 +1740,12 @@ Every name on this page — and every CLI flag, TOML key, directive, `<mc/*>` na
 registry-index key documented elsewhere in `docs/reference/` — is in the recorded public surface:
 [`../../tests/golden/surface.txt`](../../tests/golden/surface.txt), extracted by
 `scripts/surface-extract.sh` and compared on every `make check` by `check-freeze`
-([`../../tests/golden/README.md`](../../tests/golden/README.md)). Seven kinds, **486 entries**
+([`../../tests/golden/README.md`](../../tests/golden/README.md)). Seven kinds, **494 entries**
 today (the count moves only by `--record`, never by hand), none of them written by hand:
 
 | kind | is | count |
 |---|---|---|
-| `sym` | a function a module outside `src/` may call, **with its parameter count** | 274 |
+| `sym` | a function a module outside `src/` may call, **with its parameter count** | 282 |
 | `flag` | a command-line option `mc` accepts | 50 |
 | `toml` | a key `mc.toml` may carry | 36 |
 | `dir` | a `#directive` | 10 |
