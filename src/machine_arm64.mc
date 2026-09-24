@@ -621,10 +621,19 @@ void a64_load(i64 ty, i64 d) {
 // `add` is last only when the value emitted nothing (an alias), or second to
 // last when the value is one lone movz -- which reads no register. Anything
 // longer could read the address register and is left alone.
+//
+// The movz WRITES the value depth's register, and the add may have READ that
+// very register as its index -- `st8(p + (i + 1), 5)` computes i + 1 at depth
+// d + 1 and then puts 5 there -- so an add naming it is left where it is. (Found
+// by the optimized road's fixed point, and tests/mc/104-opt-imm.mc keeps it.)
 void a64_store(i64 ty, i64 d) {
     uptr a = 0;
     if (dalias_at(d + 1) >= 0)          a = a64_addr_add(d, 0);
-    else if (a64_lone_const(d + 1) >= 0) a = a64_addr_add(d, 1);
+    else if (a64_lone_const(d + 1) >= 0) {
+        a = a64_addr_add(d, 1);
+        i64 v = REG_BASE + d + 1;
+        if (a && (ins_rn(a) == v || (ins_op(a) == I_ADD && ins_rm(a) == v))) a = 0;
+    }
     if (a) {
         if (a64_fold_addr(a, mem_op(ty, 1), val_reg(d + 1, REG_S2))) return;
     }

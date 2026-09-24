@@ -14,7 +14,7 @@
 //   `self`    `x = x + x` and `i = i + 1` -- on x86-64 the in-place rewrite must
 //             not fold the first, whose source IS the copy.
 // expect-exit: 42
-// expect-stdout: 1 4094 4095 70000 70001 131071 95 255 172 22 1 2 0 1 1 0 | 7 7 7 7 6 6 1 1 1 1 1 1 | 150 32 7 1
+// expect-stdout: 1 4094 4095 70000 70001 131071 95 255 172 22 1 2 0 1 1 0 | 7 7 7 7 6 6 1 1 1 1 1 1 14 | 150 32 7 1
 #include <sys>
 #include <prelude>
 
@@ -69,6 +69,12 @@ void access(uptr p) {
     pr(ld32(p + k) == 0x55667788);
     pr(ld64(p + k + 8) == 0x0102030405060708);
     pr(ld16(p + i + 47) == 0x5566);
+    // a constant stored at an address whose index was COMPUTED: the add reads
+    // the depth register the constant is then written into, so the fold must
+    // not move the add past it (found by the optimized road's fixed point)
+    st8(p + (i + 1), 5);
+    st64(p + (i + 53), 9);
+    pr(ld8(p + 4) + ld64(p + 56));
     puts("| ");
 }
 

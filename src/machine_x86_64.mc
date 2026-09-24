@@ -624,17 +624,23 @@ void x86_cast(i64 ty, i64 d) {
 // constant one. The base is the mov's source when there is one, or rd itself --
 // its value before the add, which is still there, since the add is dropped.
 // Returns 1 when folded.
-i64 x86_fold_addr(i64 d, i64 back, i64 op, i64 rt) {
+//
+// `clob` is the register an instruction BETWEEN the add and the access writes
+// (a store's constant value, `back` 1), or -1: an add or a mov that READ it is
+// left where it is, since moving the read past the write would read the value.
+i64 x86_fold_addr(i64 d, i64 back, i64 op, i64 rt, i64 clob) {
     if (walk_opt() == 0 || xalias_at(d) >= 0 || !x86_in_reg(d) || nins - back <= ins_base) return 0;
     uptr a = ins_at(nins - 1 - back);
     i64 rd = XREG_BASE + d;
     i64 aop = ins_op(a);
     if (ins_rd(a) != rd || (aop != X_ADD && aop != X_ADDI)) return 0;
+    if (aop == X_ADD && ins_rn(a) == clob) return 0;
     i64 base = rd;
     if (nins - 2 - back >= ins_base) {
         uptr m = ins_at(nins - 2 - back);
         // not for `add rd, rd`: the index IS rd there, and it must keep the mov
-        if (ins_op(m) == X_MOV && ins_rd(m) == rd && !(aop == X_ADD && ins_rn(a) == rd)) {
+        if (ins_op(m) == X_MOV && ins_rd(m) == rd && ins_rn(m) != clob
+                && !(aop == X_ADD && ins_rn(a) == rd)) {
             base = ins_rn(m);
             set_ins_op(m, X_NOP);
         }
@@ -647,7 +653,7 @@ i64 x86_fold_addr(i64 d, i64 back, i64 op, i64 rt) {
 
 void x86_load(i64 ty, i64 d) {
     i64 rd = x86_dst_reg(d);
-    if (x86_fold_addr(d, 0, x86_mem_op(ty, 0), rd)) { x86_dst_done(d, rd); return; }
+    if (x86_fold_addr(d, 0, x86_mem_op(ty, 0), rd, 0 - 1)) { x86_dst_done(d, rd); return; }
     i64 rp = x86_val_reg(d, XREG_S1);
     em(x86_mem_op(ty, 0), rd, rp, 0);            // zero-extended by construction
     x86_dst_done(d, rd);
@@ -658,13 +664,14 @@ void x86_load(i64 ty, i64 d) {
 // it is one `mov r, imm`, which reads no register.
 void x86_store(i64 ty, i64 d) {
     i64 back = 0 - 1;
+    i64 clob = 0 - 1;
     i64 ok[1];
     if (xalias_at(d + 1) >= 0) back = 0;
     else {
         x86_lone_const(d + 1, ok);
-        if (ld64(ok)) back = 1;
+        if (ld64(ok)) { back = 1; clob = XREG_BASE + d + 1; }
     }
-    if (back >= 0 && x86_fold_addr(d, back, x86_mem_op(ty, 1), x86_val_reg(d + 1, XREG_S2))) return;
+    if (back >= 0 && x86_fold_addr(d, back, x86_mem_op(ty, 1), x86_val_reg(d + 1, XREG_S2), clob)) return;
     i64 rp = x86_val_reg(d, XREG_S1);
     i64 rv = x86_val_reg(d + 1, XREG_S2);
     em(x86_mem_op(ty, 1), rv, rp, 0);
