@@ -267,11 +267,11 @@ i64  x86_allocreg_at(i64 r) {
     return r + 11;                               // 1..4 -> r12..r15
 }
 
-// M49: every alias forgotten. Called at a LABEL -- a control-flow merge, where a
-// value carried in an alias could have arrived by another path -- and after every
-// MTASK_REG_STORE, the one place an allocatable register's contents change under
-// a live alias. Guarded by walk_opt() so the plain road never even walks the
-// array.
+// M49: every alias forgotten, after every MTASK_REG_STORE -- the one place an
+// allocatable register's contents change. Guarded by walk_opt() so the plain
+// road never even walks the array. NOT at a label: a depth below an && or ||
+// is live there with the same alias on every path in, and dropping it read r8
+// + d, which never held the value (the reasoning is a64_alias_reset's).
 void x86_alias_reset() {
     if (walk_opt() == 0) return;
     i64 d = 0;
@@ -709,7 +709,7 @@ void x86_jcond(i64 d, i64 l, i64 cc) {
 
 void x86_jz(i64 d, i64 l)  { if (!x86_fuse_branch(d, l, 0)) x86_jcond(d, l, XC_E); }
 void x86_jnz(i64 d, i64 l) { if (!x86_fuse_branch(d, l, 1)) x86_jcond(d, l, XC_NE); }
-void x86_label(i64 l)      { x86_alias_reset(); el(I_LABEL, l); }
+void x86_label(i64 l)      { el(I_LABEL, l); }   // keeps every alias: see x86_alias_reset
 
 // ---- M49: the six version 5 tasks -----------------------------------------
 // rbx, r12..r15 on BOTH ABIs, and the walker names them by index alone.

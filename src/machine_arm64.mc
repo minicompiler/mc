@@ -150,11 +150,19 @@ void set_dslot_at(i64 i, i64 v) { st64(dslot + i * 8, v); }
 i64  dalias_at(i64 i)     { return ld64(dslot + (MAXDEPTH + i) * 8); }
 void set_dalias_at(i64 i, i64 v) { st64(dslot + (MAXDEPTH + i) * 8, v); }
 
-// M49: every alias forgotten. Called at a LABEL -- a control-flow merge, where
-// a value carried in an alias could have arrived by another path -- and after
-// every MTASK_REG_STORE, which is the one place an allocatable register's
-// contents change under a live alias. Guarded by walk_opt() so the plain road
-// does not even walk the array.
+// M49: every alias forgotten, after every MTASK_REG_STORE -- the one place an
+// allocatable register's contents change. Guarded by walk_opt() so the plain
+// road does not even walk the array.
+//
+// NOT at a label. A label inside an expression is gen_logic's (&&, ||), and a
+// depth BELOW it -- an argument already evaluated, a left operand -- is still
+// live there and holds the same alias on every path in: x19..x28 are written
+// only by MTASK_REG_STORE, which is statement-level. Dropping that alias sent
+// the reader to x9 + d, which never held the value (`g(r, !x && !y)` passed the
+// loop bound as `r`). Every depth at or above the label's is re-produced on
+// each path before it is read, and every producer ends in dst_done, which
+// clears its own entry -- so a stale alias is never read and a label has
+// nothing to invalidate.
 void a64_alias_reset() {
     if (walk_opt() == 0) return;
     i64 d = 0;
@@ -626,7 +634,7 @@ i64 a64_fuse_branch(i64 d, i64 l, i64 take_true) {
 
 void a64_jz(i64 d, i64 l)    { if (!a64_fuse_branch(d, l, 0)) elr(I_CBZ, val_reg(d, REG_S1), l); }
 void a64_jnz(i64 d, i64 l)   { if (!a64_fuse_branch(d, l, 1)) elr(I_CBNZ, val_reg(d, REG_S1), l); }
-void a64_label(i64 l)        { a64_alias_reset(); el(I_LABEL, l); }
+void a64_label(i64 l)        { el(I_LABEL, l); }   // keeps every alias: see a64_alias_reset
 void a64_word(i64 w)         { ins_add(I_EMIT, 0, 0, 0, w, 0, 0); }
 
 // ---- M49: the six version 5 tasks ------------------------------------------
