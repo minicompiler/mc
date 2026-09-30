@@ -96,19 +96,24 @@ if [ "$mode" = "build" ]; then
     n=0
     for f in tests/wide/030-i128.mc tests/wide/031-f16.mc tests/wide/032-u128.mc \
              tests/wide/033-wide-abi.mc tests/wide/034-cast-narrow.mc \
-             tests/wide/035-coexist.mc; do
+             tests/wide/035-coexist.mc tests/wide/036-opt-alias-logic.mc; do
         [ -f "$f" ] || continue
-        name=$(basename "$f" .mc)
+        base=$(basename "$f" .mc)
         why=$(sed -n "s|^// skip-$bos: *||p" "$f" | head -1)
         [ -n "$why" ] || why=$(sed -n "s|^// skip-$barch: *||p" "$f" | head -1)
         if [ -n "$why" ]; then
-            echo "skip $name ($why)"; echo "$name — $why" >> "$split/skipped"; continue
+            echo "skip $base ($why)"; echo "$base — $why" >> "$split/skipped"; continue
         fi
+        # 036 is an optimizer test: it also travels as a second, --opt=1 object
+        roads="plain"; case "$base" in 036-*) roads="plain opt" ;; esac
+        for road in $roads; do
+        name="$base"; [ "$road" = opt ] && name="$base-opt"
         {
             echo '[project]'
             echo "entry = \"$root/$f\""
             echo "out   = \"$root/$split/$name.$ext\""
             echo 'kind  = "obj"'
+            [ "$road" = opt ] && echo 'opt   = 1'
             echo
             echo '[target]'
             echo "os   = \"$bos\""
@@ -124,6 +129,7 @@ if [ "$mode" = "build" ]; then
         echo "$name $lmode" >> "$split/manifest"
         echo "built $name"
         n=$((n + 1))
+        done
     done
     if [ "$fails" != 0 ]; then echo "check-wide --build-only: $fails failures"; exit 1; fi
     echo "check-wide --build-only: $n wide objects for $bos/$barch in $split"
@@ -355,6 +361,21 @@ else
     fi
 fi
 
+# the alias-at-a-label test (M49): an i128 && / || above an aliased integer
+# argument, on BOTH roads -- --opt=1 printed 3 3 before labels kept aliases
+for road in "" --opt=1; do
+    rm -f "$tmp/alias"
+    if ! msg=$(build/mc-i128 --exe $road tests/wide/036-opt-alias-logic.mc -o "$tmp/alias" 2>&1); then
+        echo "FAIL alias$road (compile: $msg)"; fails=$((fails + 1)); continue
+    fi
+    got=$("$tmp/alias" 2>/dev/null); rc=$?
+    if [ "$rc" = 0 ] && [ "$got" = "168 168" ]; then
+        echo "ok   alias${road:+ $road}: tests/wide/036-opt-alias-logic.mc (macos/aarch64, exit 0)"
+    else
+        echo "FAIL alias$road (exit $rc '$got', expected 0 '168 168')"; fails=$((fails + 1))
+    fi
+done
+
 x86_sweep tests/wide/030-i128.mc i128
 x86_sweep tests/wide/032-u128.mc u128
 x86_sweep tests/wide/033-wide-abi.mc i128
@@ -367,7 +388,7 @@ x86_sweep tests/wide/035-coexist.mc float-wide
 # container per architecture. Self-skips without docker/ld.lld/the sysroot.
 root=$(pwd)
 wide_linux() {                          # arch, docker platform, compiler, test, name, want-exit, want-out
-    warch="$1"; plat="$2"; comp="$3"; wsrc="$4"; wnm="$5"; wex="$6"; wout="$7"
+    warch="$1"; plat="$2"; comp="$3"; wsrc="$4"; wnm="$5"; wex="$6"; wout="$7"; wopt="$8"
     sysroot="$root/build/sysroot/linux-$warch"
     if ! have ld.lld; then echo "skip linux/$warch $wnm: ld.lld not in PATH"; return 0; fi
     if ! docker info > /dev/null 2>&1; then echo "skip linux/$warch $wnm: docker is not running"; return 0; fi
@@ -380,7 +401,9 @@ wide_linux() {                          # arch, docker platform, compiler, test,
     out="$root/build/wide-lin/$wnm-$warch"
     cfg="$root/build/wide-lin/$wnm-$warch.toml"
     {
-        echo '[project]'; echo "entry = \"$root/$wsrc\""; echo "out   = \"$out\""; echo
+        echo '[project]'; echo "entry = \"$root/$wsrc\""; echo "out   = \"$out\""
+        [ -n "$wopt" ] && echo 'opt   = 1'
+        echo
         echo '[target]'; echo 'os   = "linux"'; echo "arch = \"$warch\""; echo
         echo '[sysroot]'; echo "path = \"$sysroot\""; echo
         echo '[linker]'; echo 'cmd  = "ld.lld"'
@@ -407,6 +430,11 @@ if docker info > /dev/null 2>&1 && have ld.lld; then
     wide_linux x86_64  linux/amd64 i128 tests/wide/034-cast-narrow.mc cast 0 "1 1 1 1 1 1 1 1 1"
     wide_linux aarch64 linux/arm64 float-wide tests/wide/035-coexist.mc coexist 0 "15 1 0 7 4616189618054758400 1073741824"
     wide_linux x86_64  linux/amd64 float-wide tests/wide/035-coexist.mc coexist 0 "15 1 0 7 4616189618054758400 1073741824"
+    for a in "aarch64 linux/arm64" "x86_64 linux/amd64"; do
+        set -- $a
+        wide_linux $1 $2 i128 tests/wide/036-opt-alias-logic.mc alias 0 "168 168"
+        wide_linux $1 $2 i128 tests/wide/036-opt-alias-logic.mc alias-opt 0 "168 168" opt
+    done
 else
     echo "skip linux exec: need docker and ld.lld"
 fi
@@ -440,9 +468,11 @@ wide_windows() {                        # arch, lld machine, coff backend
     wp=0; wt=0
     for wsrc in tests/wide/030-i128.mc tests/wide/032-u128.mc \
                 tests/wide/033-wide-abi.mc tests/wide/034-cast-narrow.mc \
-                tests/wide/035-coexist.mc; do
-        wnm=$(basename "$wsrc" .mc); wt=$((wt + 1))
-        if ! msg=$("$(wide_compiler "$wsrc")" --backend=$be "$wsrc" -o "$out/$wnm.obj" 2>&1); then
+                tests/wide/035-coexist.mc tests/wide/036-opt-alias-logic.mc \
+                tests/wide/036-opt-alias-logic.mc:--opt=1; do
+        wopt=""; case "$wsrc" in *:*) wopt="${wsrc#*:}"; wsrc="${wsrc%%:*}" ;; esac
+        wnm=$(basename "$wsrc" .mc)${wopt:+-opt}; wt=$((wt + 1))
+        if ! msg=$("$(wide_compiler "$wsrc")" --backend=$be $wopt "$wsrc" -o "$out/$wnm.obj" 2>&1); then
             echo "FAIL windows/$warch $wnm (compile: $msg)"; fails=$((fails + 1)); continue
         fi
         if ! msg=$($(tool lld-link) -machine:$lmach -subsystem:console -entry:mc_start \

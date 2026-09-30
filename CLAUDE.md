@@ -8013,3 +8013,96 @@ agents (`.claude/agents/`): `stage0-dev` (C23), `mc-dev` (`.mc` code), `reviewer
   594 links`. `sh scripts/check-surface.sh build/mc0 build/mc1` -> 165 ok lines, 0 FAIL.
   `tests/golden/README.md` and `docs/reference/hooks.md` § 8's own count table brought from
   486/274 to 494/282.
+- A label keeps the allocator's aliases (0.16.x/1.0.x patch; `docs/reference/machine.md` § What
+  the arm64 allocator does): **a silent `-O` miscompile on both the arm64 and the x86-64
+  machines**, reported with a nine-line reproducer and reproduced on `main` 1dfa825 before a line
+  was written -- `s = s + g(r, !x && !y)` in a loop printed **168** plain and **3** with `-O` on
+  macos/aarch64 (**6** on linux/x86_64, run in Docker). `stage0/` untouched (2848/3000).
+  * **The mechanism.** With `--opt=1`, reading an allocated local is an ALIAS: `MTASK_REG_LOAD`
+    emits nothing and records "depth d is `x19..x28`/`rbx,r12..r15`". Both machines dropped every
+    alias at every `MTASK_LABEL`, and `gen_logic` (`&&`, `||`) is the one place a label sits
+    INSIDE an expression -- so a depth below it that was still live (an argument already
+    evaluated, a left operand) lost its alias and was read from its depth register, which never
+    held it: the call got `mov x0, x10` with `x10` = the loop bound, and `s` came back from `x9`.
+  * **The fix is the rule, not a materialisation.** A label drops NO alias: the alias registers
+    are written only by `MTASK_REG_STORE`, which is statement-level, so a live depth below a
+    label carries the same alias on every path in; every depth at or above it is produced again
+    on each path before it is read, and every producer ends in `dst_done`/`x86_dst_done`, which
+    clears its own entry, so a stale alias is never read. Checked, not assumed: every producer in
+    `src/machine_arm64.mc` ends in `dst_done` or `a64_own`, and every integer producer in
+    `lib/machine_arm64_float.mc`, `lib/machine_x86_64_float.mc`, `lib/i128.mc` and
+    `examples/avx/avx.mc` ends in the core `dst_done`/`x86_dst_done`; none of them overrides
+    `MTASK_LABEL`, so the one-line fix per machine covers the derived ones (the x86 float
+    machine's own internal `el(I_LABEL, ...)` lies inside one task and never went through the
+    reset). The reset after `MTASK_REG_STORE` stays. **2 code lines changed, one per machine**
+    (`a64_label`, `x86_label`), `src/` +20/-12 with the comments; zero new globals.
+    `?:` does not exist in the language (`a ? 2 : 3` is `unexpected character`), so `&&`/`||`
+    are the whole surface.
+  * **Only the bug sites move.** Pre (a `mc1` from `main`) against post, `--dump-asm` on `arm64`,
+    `x86_64` and `x86_64-win`, both roads: `src/mc.mc` **identical on all three machines with
+    `-O`** (the compiler never had the shape); 126 comparisons over `tests/mc`+`tests/lib`, 120
+    over `tests/float` (through `<float>` compilers built from each tree) and 30 over the i128
+    corpus -- the ONLY differences are the four new tests, only with `-O`.
+    `scripts/check-inert.sh build/mc1.pre build/mc1`: **33 objects identical on the plain road
+    and 33 with `--opt=1`** plus byte-identical `examples/api`, `lang`, `conc`, `desktop` and
+    `kernel`.
+  * **Tests, every one failing on `main` with `-O`**: `tests/mc/103-opt-alias-and.mc` (the
+    repro; 3 on arm64, 6 on x86-64), `tests/mc/104-opt-alias-or.mc` (`||` as a third argument
+    over two aliases, a logic nested as a right operand, a hoisted global's address below a
+    logic -- pre `-O`: `4 7` then SIGSEGV, exit 139, on both machines), `tests/float/
+    029-opt-alias-logic.mc` (float comparisons inside `&&`/`||` through `<float>`'s machines,
+    pre `-O` 3 3 / 6 6) and `tests/wide/036-opt-alias-logic.mc` (i128 comparisons, 3 3 / 6 6).
+    The first three are picked up on both roads and all five targets by the existing globs
+    (`check-opt`, `check-mc`, `test-linux`'s `tests/mc/1*`, `check-float`'s `-opt` objects);
+    `scripts/check-wide.sh` (+38/-8) gives 036 alone a second, `opt = 1` object in the
+    `--build-only` manifest the CI legs run, a both-roads macOS run, two Docker legs per
+    architecture and both roads in the Windows link.
+  * **The llvm-mc sweep** over the four new tests' `-O` objects on five formats: 103 80/80/80/82/84
+    and 104 115/115/115/111/112 distinct (mach-o arm64, elf aarch64, coff arm64, elf x86_64, coff
+    x86_64), 036 116/116/116/136/139, 029 95/95/95 on the arm64 formats -- 0 mismatches -- and on
+    x86_64 one: `setnp cl` emitted as `40 0f 9b c1`, a redundant REX prefix `llvm-mc` does not
+    produce. **Pre-existing and unrelated**: the pre compiler writes the same bytes on the PLAIN
+    road for the same source; it is `<float>`'s x86 `==` parity mask, equivalent encoding,
+    reported and not touched here. `check-float`'s own sweeps: 62 / 71 / 321 / 303, 0 mismatches.
+  -- `make bundle` re-run BEFORE bootstrapping (60 files, raw 1269477 -> LZ 576282, blob
+  577056 B). `make check` green end to end (**RC 0, zero FAIL**, run twice -- the first with
+  Docker Desktop wedged, so the Linux legs self-skipped, the second with it restarted and every
+  leg running): `budget` 2848/3000, `test` 32/32, `check-lex`/`check-ast`/`check-asm` 108/108,
+  `check-obj` **32/32 identical to the frozen seed**, `bootstrap` at BOTH fixed points
+  (`mc2.o == mc3.o` 1465808 B, `mc2o.o == mc3o.o` 1407280 B) with the cross-road identity and
+  **both `--dump-asm` diffs between `mc1` and `mc2` empty**, `check-surface` 32/32, **`check-opt`
+  79/79**, `test-exe` 34/34, `check-mc` 25/25, `check-standalone`, `check-parts`, `check-libroot`
+  11/11, `check-build` 59/59, `check-pkg` 200/200, `check-tool` 31/31, `check-stubs` 9/9,
+  `check-limits` 17/17 under 90%, `test-linux` **61/61** and `test-linux-x86_64` **57/57**, the four
+  `--exe` cells 64/64 + 64/64 + 60/60 + 60/60, `test-windows`/`test-windows-x86_64` cross-compiled
+  and linked + 24/24 PE, `check-examples`, `check-lang`, `check-conc`, `check-desktop`,
+  `check-float` (macos 20/20, linux/aarch64 40/40, linux/x86_64 40/40, 36/36 objects linked per
+  Windows leg), `check-wide` (036 ok on both roads on macOS and on linux/aarch64 and linux/x86_64,
+  7/7 wide objects linked per Windows leg), `check-kernel`, `check-avr`, `test-sandbox` 73 ok /
+  0 failed / 1 skipped, `check-docs` (282 symbols, 50 flags, 36 TOML keys, 10 directives,
+  52 samples, 594 links), `check-freeze` 494 entries unchanged, `site` 101 pages + `check-site` +
+  `check-site-linux` (byte for byte the macOS render on all four cells).
+  `make check-linux-host` **RC 0 over all four cells** (aarch64 musl 61/61 + `test-exe` 31/31,
+  aarch64 gnu 62/62, x86_64 musl 57/57 + 29/29, x86_64 gnu 58/58), each after its own plain AND
+  optimized fixed point (`mc2l.o` 1865408 / 1751912 B), its own cross-road identity, and the cross
+  proof (`mc2l --backend=macho src/mc.mc` byte for byte the macOS `build/mc2.o`).
+  **The ten goldens rewritten once**, each only after its own criterion: `mc2.sha256`
+  `adce91d4b189b6d4d0cb90c1b0e7ee473574c4407c3bb1241cd8dac2ee35fe48` and `mc2-opt.sha256`
+  `fa4741cd5e1db97e2c405de403e937529b1035ffa229ad9c152eb2aa7eca9331` (recorded by
+  `scripts/bootstrap.sh` after the two `cmp`s; the two `--dump-asm` diffs empty); the four Linux
+  ones deleted and re-recorded by `make check-linux-host` -- `mc2-linux-arm64`
+  `43710e83f14c2466dc87f4ed6201549717bbf19fcdf18a18df7acf7f0f370936`, `mc2-linux-arm64-opt`
+  `3f9f05b8db5c41f84c24c47de3515d74864fce64da1ce6d168be402c01d962fc`, `mc2-linux-x86_64`
+  `d151cf40062c43244e903d2f21c7e53ad1f9ca581a5f0c9d61ea837c6f63ecc2`, `mc2-linux-x86_64-opt`
+  `d7102a19444947a58ed6d384327af163b15e3aa9798fcc6cca68519b0fc7bb87`, each recorded in its musl
+  cell and re-verified by the gnu cell of the same architecture; the four Windows ones
+  cross-computed per `tests/golden/README.md` -- `mc2-windows-arm64`
+  `8fa241cac09e3901957cf018dc980b60f20ed131070eed9af8512525e8807824` (1501329 B),
+  `mc2-windows-arm64-opt` `d14752506dbeb3a0ddfa9325af51a0bcd1e2399fe3dac12d4fdc05033a667425`
+  (1442233 B), `mc2-windows-x86_64`
+  `072a2bf418713aa0889016c5753e9c52f6347ae5ef7c51e18acaca1730e1444d` (1557693 B),
+  `mc2-windows-x86_64-opt` `c2160908bb9fb21f7b79279b68d460943eb09f12e7b121007415770f59a23f88`
+  (1485045 B), the two plain ones also written byte for byte by `build/mc2`.
+  Docs: `docs/reference/machine.md` (the alias bullet: aliases are dropped after a store and NOT at
+  a label, why, the measured defect, and the rule for any machine with an alias table -- drop an
+  alias only where its register changes, or materialise it first; the x86 paragraph says the same).
