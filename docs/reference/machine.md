@@ -268,11 +268,25 @@ machine:
   entry (one line in `dst_done`, which every value-producing task already ends with). `save_live`
   and `restore_live` skip an aliased depth entirely: its value is in a register the callee is
   required to preserve, so the frame round trip around a call is dead work. Aliases are cleared
-  after every `MTASK_REG_STORE` — the one place an allocatable register changes — and **not** at an
-  `MTASK_LABEL`. A label inside an expression is `&&`/`||`'s, and a depth below it (an argument
-  already evaluated, a left operand) is still live there, holding the same alias on every path in,
-  since `x19..x28` are written only by statement-level stores. Every depth at or above the label's
-  is produced again on each path before it is read, and every producer ends in `dst_done`, which
+  after every `MTASK_REG_STORE` and **not** at an `MTASK_LABEL`.
+
+  Three tasks write an allocatable register, and each is safe for its own reason:
+
+  | writer | where the walker calls it | why no alias can be stale after it |
+  |---|---|---|
+  | `MTASK_REG_STORE` | a statement (`x = …`, an initialiser, a hoisted value at entry) | it clears the whole alias table itself |
+  | `MTASK_PARAM_REG` | right after `MTASK_PROLOGUE`, before the body | the prologue has just reset the table and only `MTASK_REG_SAVE` (which reads the register) runs between them, so no alias exists yet |
+  | `MTASK_REG_RESTORE` | after the epilogue label, before `MTASK_EPILOGUE` | `MTASK_RET` has already moved the result out, and nothing reads a depth afterwards |
+
+  **A new task that writes an allocatable register must either clear the alias entries it
+  invalidates, or be provably positioned where no alias can be stale** (no alias yet, or no depth
+  read afterwards), and say which.
+
+  A label inside an expression is `&&`/`||`'s, and a depth below it (an argument already
+  evaluated, a left operand) is still live there, holding the same alias on every path in: inside
+  a function body only `MTASK_REG_STORE` writes `x19..x28`, and it is statement-level. Every
+  depth at or above the label's is produced again on each path before it is read, and every
+  producer ends in `dst_done`, which
   clears its own entry, so a stale alias is never read and a label has nothing to invalidate.
   Until this was fixed, the label dropped the live alias and the reader went to `x9 + d`, which
   never held the value: `s = s + g(r, !x && !y)` passed the loop bound as `r` and restarted `s`
@@ -326,7 +340,8 @@ only the prologue's `sub rsp`, and a stack walker's view does not change.
 
 The alias table is the same mechanism, in the same place (`xalias_at`, the second half of the
 `xdslot` array), kept across a label for the same reason (it had the same defect, with the loop
-bound read from `r9`), with one difference that is the architecture and not a choice:
+bound read from `r9`), written by the same three tasks with the same positions, and with one
+difference that is the architecture and not a choice:
 
 * **the store rewrite is a much smaller whitelist.** x86 is two-operand, so `add rd, rn` means
   `rd = rd + rn`: retargeting its destination at the local's register would add to a register that
