@@ -954,33 +954,54 @@ Validation: `llvm-readobj --file-headers --sections --coff-imports` of an mc `.e
 `lld-link`'s output of the same program agrees on `Machine`, the section characteristics and the
 import directory; the whole self-contained subset runs on the CI runners, and the x86-64 half runs
 under `wine` in `docker --platform linux/amd64` on the development machine (arm64 PE execution is
-the runner's job). `.pdata`/`.xdata` stay the accepted M19/M20 gap, below.
+the runner's job). The PE writer emits `.pdata`/`.xdata` so the Win64 unwinder can walk mc frames
+(below); the object road does not.
 
-### No `.pdata`/`.xdata` (accepted M19 gap, M20 included)
+### `.pdata`/`.xdata` — the PE `--exe` writer emits it (x86-64); the object road does not
 
-Neither `coff-obj-arm64` nor `coff-obj-x86_64` writes unwind data. Windows on ARM64 has no frame-pointer-walking fallback: the
-OS unwinder (`RtlLookupFunctionEntry` / `RtlVirtualUnwind`) finds a function's frame shape through
-the exception directory, a `.pdata` array of `RUNTIME_FUNCTION` records pointing at `.xdata` unwind
-codes. `clang --target=aarch64-windows-msvc -c` of a non-leaf function emits both sections; mc emits
-neither, for any function — verified with `llvm-readobj --sections` on the two objects for the same
-source.
+Windows unwinding is table-driven: the OS unwinder (`RtlLookupFunctionEntry` /
+`RtlVirtualUnwind`) finds a function's frame shape through the exception data directory, a `.pdata`
+array of `RUNTIME_FUNCTION` records pointing at `.xdata` `UNWIND_INFO`. With no record, a function is
+treated as a **leaf** whose return address is still at `[rsp]` (x64) or in `x30` (arm64); a stack
+walk that reaches a non-leaf mc frame then reads a wrong return address and **halts**. Loading and
+normal execution never consult the table, so a program that only returns an exit code runs without
+it — but a thread, fiber, exception or debugger stack walk that goes *through* an mc frame does, and
+that is the path the mc-php consumer bisected to this writer.
 
-What that costs: a function of mc's has the standard `stp x29, x30, [sp, #-16]!` frame
-([§ 4](#4-the-abi-the-generated-code-guarantees)), and with no record for it the unwinder treats it as a leaf whose
-return address is still in `x30`. Nothing in the language raises or catches, `/nodefaultlib` links
-no C runtime, and a program that only returns an exit code never unwinds — which is why the whole
-`windows/aarch64` suite passes without it. It matters the moment something else unwinds *through* an
-mc frame: a hardware fault, a `RaiseException` from a Windows API called through `extern`, or a
-debugger's stack walk. Emitting it means one `RUNTIME_FUNCTION` per function plus an
-`IMAGE_REL_ARM64_ADDR32NB` relocation each, and either the packed form (which cannot describe mc's
-prologue when the frame is small enough that MSVC would fold the allocation into the `stp`) or the
-full unwind codes — a milestone of its own, not a field of this writer.
+The one-step PE writer **`pe-exe-x86_64`** (`src/backend_coff_exe.mc`) emits the exception directory.
+It is uniform because every mc function — generated *or* `#opcode` (the raw words are the function
+body; the standard frame still wraps them) — begins with `push rbp ; mov rbp, rsp [; sub rsp, N]`,
+and the M49 register allocator saves its callee-saved registers (`rbx`, `r12`..`r15`) to frame slots
+with `mov`, **not** with `push`. So the only prologue operations that move `rsp` or save a
+nonvolatile are the push and the mov, and one `UNWIND_INFO` describes every function:
 
-x64 Windows is the same gap for the same reason: its unwinding is table-driven too, with no
-frame-pointer fallback, and `clang --target=x86_64-windows-msvc -c` emits `.pdata` and `.xdata` for
-every non-leaf function. `coff-obj-x86_64` emits neither. What that costs and when it starts to
-matter is unchanged from the paragraph above; it is recorded here rather than opened as a second
-gap note.
+    Version 1, SizeOfProlog 4, FrameRegister RBP, FrameOffset 0
+      UWOP_SET_FPREG        @ prologue offset 4   (after `mov rbp, rsp`)
+      UWOP_PUSH_NONVOL RBP  @ prologue offset 1   (after `push rbp`)
+
+With the frame register established, the unwinder resets `rsp` to `rbp` regardless of `N` *or* of the
+dynamic `sub rsp` a call's shadow space adds in the body, so the exact frame size never enters the
+unwind codes — one `UNWIND_INFO` serves functions of every frame size, with or without a `sub rsp`.
+The synthesized entry stub has no frame pointer (`sub rsp, 0x28`), so it gets its own `UNWIND_INFO`
+with `UWOP_ALLOC_SMALL 0x28`. The `RUNTIME_FUNCTION` array is sorted ascending by `BeginAddress`
+(`RtlLookupFunctionEntry` binary-searches it); the exception data directory (index 3) points at it.
+
+Scope and limits, on record. (1) It restores `rbp` and finds the return address for every walk — a
+backtrace, exception dispatch, or a debugger passing *through* the frame all work — but it does
+**not** list `UWOP_SAVE_NONVOL` for the allocator's `rbx`/`r12..r15` saves, so an exception unwind
+does not restore those to the frame's saved values (a normal return does, in the epilogue). That is
+the minimal correct frame-pointer unwind; the full save codes are a refinement, not what the walk
+needs. (2) The **object** road, `coff-obj-arm64` / `coff-obj-x86_64`, still writes no unwind data:
+giving it to `lld-link` needs relocatable `.pdata` (an `IMAGE_REL_*_ADDR32NB` per record), a separate
+change. (3) `windows/aarch64` has no `--exe` (`pe-exe-arm64` is dormant), and an ARM64 PE uses a
+different, packed `.pdata` format — unchanged, deferred with the rest of that backend.
+
+Validation: `RtlCaptureStackBackTrace` through four non-leaf mc frames returns **1** before this
+(the walk halts at the first frame) and the full depth after, measured under `wine` in
+`docker --platform linux/amd64` — the regression gate `tests/windows/075-pe-unwind.mc`, run on the
+`windows-2025` CI leg through `scripts/test-windows-exe.sh`. `llvm-readobj --unwind` parses the
+`UNWIND_INFO`; over the whole windows-hosted `mc` (~2000 functions) every `RUNTIME_FUNCTION` is
+sorted, non-empty and non-overlapping.
 
 Two things `--exe` does that `.o` + `ld` does not: `&name` for a dylib `extern` works (it points
 the `adrp`/`add` at the symbol's stub), and the binary comes out `0755` and signed, ready to run.

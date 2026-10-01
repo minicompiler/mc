@@ -1322,10 +1322,12 @@ AMD64 half, `clang --target=x86_64-windows-msvc -c` — of equivalent C, with
 both pc-relative kinds `IMAGE_REL_AMD64_REL32` too, at instruction + 1 for a `call` and
 instruction + 3 for a `lea r, [rip+d32]`, with the field zero in place.
 
-One thing clang writes and this backend does not: `.pdata`/`.xdata`, the unwind data Windows needs
-to walk a frame — on x64 as much as on ARM64, since neither has a frame-pointer fallback. It is an
-accepted gap, with the consequences spelled out in
-[reference/objects.md](reference/objects.md) § No `.pdata`/`.xdata`.
+One thing clang writes and the COFF **object** writer does not: `.pdata`/`.xdata`, the unwind data
+Windows needs to walk a frame. The one-step PE **`--exe`** writer (`pe-exe-x86_64`) *does* emit it —
+a uniform frame-pointer `UNWIND_INFO` per function, so the Win64 unwinder can walk through an mc
+frame (a thread, fiber, exception or debugger stack walk); the object road, handed to `lld-link`,
+still does not. The rule and its limits are in
+[reference/objects.md](reference/objects.md) § `.pdata`/`.xdata`.
 
 ### No C runtime at all: `<sys_windows>`
 
