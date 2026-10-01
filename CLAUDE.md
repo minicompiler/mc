@@ -8106,3 +8106,94 @@ agents (`.claude/agents/`): `stage0-dev` (C23), `mc-dev` (`.mc` code), `reviewer
   Docs: `docs/reference/machine.md` (the alias bullet: aliases are dropped after a store and NOT at
   a label, why, the measured defect, and the rule for any machine with an alias table -- drop an
   alias only where its register changes, or materialise it first; the x86 paragraph says the same).
+- The `--exe` PE writer emits Win64 unwind data (`.pdata`/`.xdata`): a PE whose program embeds a
+  non-leaf function (a fiber swap saving xmm6-15) or more kernel32 imports failed to load / crashed
+  on real Windows while a trivial one loaded (reported by the mc-php consumer, bisected to the PE
+  writer, blocking its threads step). `stage0/` untouched (2848/3000); the whole code change is
+  **`src/backend_coff_exe.mc` +154/-1, ~90 of the added lines neither comment nor blank**, and
+  **zero new file-scope globals** (the state-record discipline -- every field is an offset into the
+  `pe` record; `check-limits` 17/17 under 90%, unchanged).
+  **Reproduced before the fix**, locally, under `wine` 11.0 in `docker --platform linux/amd64`
+  (no local Windows): the prime suspect -- absence of unwind info causing a *load* failure -- was
+  DISPROVEN (every toy PE, xmm-saving function and extra IOCP/VirtualProtect imports included,
+  LOADS and exits 42 under wine; lld-link's own EXE from mc's object also has `ExceptionTable 0x0`
+  and a fixed base, so `.pdata` was never the load differentiator). The real defect is the *walk*:
+  `RtlCaptureStackBackTrace` through four non-leaf mc frames returns **8** for a `clang`-built C
+  program (which carries `.pdata`) and **1** for mc's PE -- the Win64 unwinder
+  (`RtlLookupFunctionEntry`/`RtlVirtualUnwind`) treats every mc frame as a leaf, reads a wrong
+  return address and halts at the first mc frame. Loading never consults the table; a thread,
+  fiber, exception or debugger stack walk does, which is the path the consumer hit.
+  **Root cause**: `src/backend_coff_exe.mc` emitted no exception data directory (index 3) and no
+  `.pdata`/`.xdata` at all -- the M19/M20 "accepted gap" that was harmless until something unwound.
+  **The fix is uniform because mc's prologue is uniform.** Every mc function -- generated OR
+  `#opcode` (the raw words are the function BODY; the standard frame still wraps them, confirmed by
+  disassembly) -- begins `push rbp ; mov rbp, rsp [; sub rsp, N]`, and the M49 register allocator
+  saves its callee-saved registers (`rbx`, `r12..r15`) to frame slots with `mov`, NOT with `push`.
+  So the only prologue ops that move `rsp` or save a nonvolatile are the push and the mov, and ONE
+  `UNWIND_INFO` describes every function: `UWOP_SET_FPREG` (rbp) @ prologue offset 4 and
+  `UWOP_PUSH_NONVOL rbp` @ offset 1. With the frame register established the unwinder resets `rsp`
+  to `rbp` regardless of `N` or of the dynamic `sub rsp` a call's shadow space adds, so the exact
+  frame size never enters the codes -- one record serves functions of every size, with or without a
+  `sub rsp`, at every PC. The synthesized entry stub has no frame pointer (`sub rsp, 0x28`) and gets
+  its own `UNWIND_INFO` with `UWOP_ALLOC_SMALL 0x28`. `pe_collect_funcs` enumerates every
+  executable-section symbol (mc's own function test, `coff_sec_exec(sym_sect-1)`) as a
+  (section, begin, end) span, insertion-sorts by (section, value) -- which is ascending `BeginAddress`,
+  since non-zerofill sections are placed in index order -- dedups aliases, and appends the stub last;
+  `pe_put_pdata` writes the sorted `RUNTIME_FUNCTION` array (binary-searched by
+  `RtlLookupFunctionEntry`, so the sort is mandatory) followed by the two `UNWIND_INFO` blobs into a
+  new read-only `.pdata` image section, and the exception data directory points at the RF array.
+  On record: it restores `rbp` and finds the return address for every walk (backtrace, exception
+  dispatch, debugger pass-through) but does NOT list `UWOP_SAVE_NONVOL` for the allocator's register
+  saves (a normal return restores them in the epilogue; that is the minimal correct frame-pointer
+  unwind, not the full save codes); the COFF **object** road (`coff-obj-arm64`/`coff-obj-x86_64`)
+  still emits none (relocatable `.pdata` for `lld-link` is a separate change); `windows/aarch64` has
+  no `--exe` (`pe-exe-arm64` dormant, and ARM64 PE uses a different packed `.pdata` format).
+  **Gate**: `tests/windows/075-pe-unwind.mc` -- `RtlCaptureStackBackTrace` through four non-leaf mc
+  frames, exit 42 iff the walk reaches >= 4 frames, else the (too small) count. It lives in
+  `tests/windows/` so ONLY `scripts/test-windows-exe.sh` (the `pe-exe-x86_64` road) builds it;
+  `scripts/test-windows.sh` builds a fixed 070..074 list, so the object+lld road never sees it. It is
+  the `windows-2025` CI leg's to RUN; proved to FAIL on main (no exception directory, exit 1 under
+  wine) and PASS with the fix (exit 42), with a pre-fix compiler built by stashing the one file.
+  Validated with `llvm-readobj --unwind` (parses the `UNWIND_INFO`: `SET_FPREG RBP`, `PUSH_NONVOL
+  RBP`, stub `ALLOC_SMALL size=40`) and over the whole windows-hosted `mc` (~1968 functions:
+  every `RUNTIME_FUNCTION` sorted, non-empty, non-overlapping).
+  -- `make bundle` re-run before bootstrapping (60 files, blob 579940 B). `make check` green end to
+  end (**RC 0, zero errors**): `budget` 2848/3000, `check-obj` **32/32 identical to the frozen
+  seed** (and 32/32 arm64-surface vs macho -- the fix is inert for every object), `bootstrap` at
+  BOTH fixed points (`mc2.o == mc3.o` 1473288 B, `mc2o.o == mc3o.o`) with the cross-road identity
+  (`mc2o-plain.o == mc2.o`) and **both `--dump-asm` diffs between `mc1` and `mc2` empty** (plain and
+  `--opt=1`), `check-surface`, `check-opt`, `test-exe`, `check-standalone`, `check-parts`,
+  `check-libroot`, `check-build`, `check-pkg`, `check-tool`, `check-limits` **17/17 under 90%**,
+  `test-linux` 61/61 and `test-linux-x86_64` 57/57, the four `--exe` cells, **`test-windows-exe`
+  25/25 cross-compiled (075 among them, `pure`)**, `check-float`, `check-wide`, `check-kernel`,
+  `check-avr`, `test-sandbox` **73 ok / 0 failed / 1 skipped**, `check-docs`, `check-freeze`
+  (unchanged -- no public symbol added), `site` + `check-site` + `check-site-linux`.
+  `make check-linux-host` **RC 0 over all four cells** (aarch64 musl 61/61 and gnu 62/62, x86_64
+  musl 57/57 and gnu 58/58), each after its own plain AND optimized fixed point and with the cross
+  proof green.
+  `scripts/check-inert.sh <mc1 from main> build/mc1`: **33 objects identical on the plain road and
+  33 with `--opt=1`** (`tests/*.mc` and `src/mc.mc`) plus byte-identical artefacts for
+  `examples/api`, `lang`, `conc`, `desktop` and `kernel` -- the fix runs ONLY in the
+  `pe-exe-x86_64` writer, which no object comparison exercises, so no non-windows byte moves.
+  **All ten goldens rewritten once**, each only after its own criterion -- they move because
+  `src/mc.mc` grew by the writer's new functions, not because codegen changed (the empty
+  `--dump-asm` diffs prove codegen is identical): `mc2.sha256`
+  `6e60565e2a48415cf1ddff7efdb142d32510688c273e86611fffce4c3a20c9a6` and `mc2-opt.sha256`
+  `42f0693763bebe2730d2478893dcfdac28281ae681383051c2dcd33e7ddcbef6` (by `scripts/bootstrap.sh`);
+  the four Linux ones deleted and re-recorded by `make check-linux-host` -- `mc2-linux-arm64`
+  `c464d8c10f7d090738a7ac89c2d7ce9c341c91a9510d6086d5936062d012d44d`, `mc2-linux-arm64-opt`
+  `28d4f51994df746d79be54db41518c4fb26fc38453b08c176d594e34e0c2ad77`, `mc2-linux-x86_64`
+  `6e1b1e9949c2ffd16c29c1f17dcdc0cba031abbe12e007cc10115b74aae203d1`, `mc2-linux-x86_64-opt`
+  `3427b3c2b6a1a79f9d0040790dabceec239379be63a0f2ed379cf78ece95119c`; the four Windows ones
+  cross-computed on macOS per `tests/golden/README.md` -- `mc2-windows-arm64`
+  `0d07ed289ae2d1faae239848bb602e005cdc6b2ed72df44d14ca396465d9b144` (1509023 B),
+  `mc2-windows-arm64-opt`
+  `682ec3625a979b0f496efd1306d9368c1eed90ca1fafc01bdc9391bcd8b01545` (1449347 B),
+  `mc2-windows-x86_64`
+  `3caaaef57883c1a3a7aa53bcd7ef1a43883173e1fcee07745e0505991bd68f63` (1566343 B),
+  `mc2-windows-x86_64-opt`
+  `55fff45c51bab17e85004dca3b3dd3788843d13af7761b29173a704ae84a22e3` (1493159 B).
+  Docs: `docs/reference/objects.md` (§ `.pdata`/`.xdata` rewritten -- the PE writer emits it, the
+  uniform frame-pointer rule, the stub's ALLOC, the three scope limits, and the wine/readobj
+  validation), `docs/build.md` § Windows targets (the object road has the gap, the `--exe` road
+  does not).

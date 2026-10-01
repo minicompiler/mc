@@ -100,6 +100,7 @@
 
 // data directory indices
 #define PE_DIR_IMPORT   1
+#define PE_DIR_EXCEPTION 3                    // .pdata (RUNTIME_FUNCTION array)
 #define PE_DIR_IAT      12
 #define PE_NDIR         16
 
@@ -126,6 +127,7 @@
 #define PEK_PLT    2                         // the import thunks
 #define PEK_START  3                         // the synthesized entry
 #define PEK_IDATA  4                         // import directory + names + IAT
+#define PEK_PDATA  5                         // .pdata (RUNTIME_FUNCTION) + .xdata (UNWIND_INFO)
 
 // ---- the state record ----
 // scalars
@@ -165,7 +167,19 @@
 #define PES_IMPHN     248                    // offset of import k's hint/name
 #define PES_IMPIAT    256                    // offset of import k's IAT slot
 #define PES_IDATAB    264                    // a Buf, inline (BUF_SIZE = 24)
-#define PES_SIZE      288
+// the exception data (filled in pe_collect_funcs): one RUNTIME_FUNCTION per
+// function, each describing mc's uniform frame-pointer prologue so the Win64
+// stack unwinder can walk through an mc frame (RtlLookupFunctionEntry /
+// RtlVirtualUnwind). A function is stored by its (module section, value) span;
+// the final RVAs are computed at write time, after the layout places the
+// section. Section index -1 marks the synthesized entry stub.
+#define PES_NFUNC     288                    // RUNTIME_FUNCTION count (incl stub)
+#define PES_RFSEC     296                    // module section of RF k, or -1 = stub
+#define PES_RFVAL     304                    // begin offset of RF k within its section
+#define PES_RFENDV    312                    // end offset of RF k within its section
+#define PES_PDATARVA  320                    // RVA of the .pdata section
+#define PES_PDATASZ   328                    // full .pdata section size (RFs + UNWIND_INFO)
+#define PES_SIZE      336
 
 uptr pe;
 void pe_init() { pe = xalloc(PES_SIZE); mem_zero(pe, PES_SIZE); }
@@ -361,6 +375,136 @@ void pe_build_idata() {
     }
 }
 
+// ---- exception/unwind data (x86-64) ----
+// mc emits every function -- generated or #opcode -- with the same frame-pointer
+// prologue `push rbp ; mov rbp, rsp [; sub rsp, N]`, and the register allocator
+// (M49) saves its callee-saved registers to frame slots, not with push, so the
+// ONLY prologue operations that move rsp or a nonvolatile are the push and the
+// mov. A single UNWIND_INFO therefore describes every function: UWOP_SET_FPREG
+// (rbp) at prologue offset 4 and UWOP_PUSH_NONVOL rbp at offset 1. With the frame
+// register established, the unwinder resets rsp to rbp regardless of N or of the
+// dynamic `sub rsp` a call's shadow space adds, so the exact frame size never
+// enters the unwind codes. The synthesized entry stub has no frame pointer
+// (`sub rsp, 0x28`), so it gets its own UNWIND_INFO with UWOP_ALLOC_SMALL.
+// Without this directory the Win64 unwinder treats every mc frame as a leaf,
+// reads a wrong return address and the stack walk halts at the first mc frame --
+// which breaks RtlVirtualUnwind, exception dispatch and any fiber/thread path
+// that walks the stack (docs/reference/objects.md § 4c).
+
+// collect one RUNTIME_FUNCTION per function symbol (a symbol in an executable
+// section, exactly coff_sym_type's function test) as a (section, begin, end)
+// span, sorted ascending so RtlLookupFunctionEntry's binary search works. End is
+// the next distinct function in the same section, or the section's size. The
+// synthesized stub, if any, is appended last (its section has the highest RVA).
+void pe_collect_funcs() {
+    set_pe_g(PES_NFUNC, 0);
+    if (pe_g(PES_MACH) != IMAGE_FILE_MACHINE_AMD64) return;
+    uptr tsec = xalloc(8 * (nsymbols + 1));
+    uptr tval = xalloc(8 * (nsymbols + 1));
+    i64 m = 0;
+    i64 i = 0;
+    while (i < nsymbols) {
+        uptr s = sym_at(i);
+        i64 sect = sym_sect(s);
+        if (sect != 0 && coff_sec_exec(sect - 1)) {
+            set_ivec_at(tsec, m, sect - 1);
+            set_ivec_at(tval, m, sym_value(s));
+            m = m + 1;
+        }
+        i = i + 1;
+    }
+    // insertion sort by (section, value): near-sorted (symbols are created in
+    // layout order), so this is close to linear.
+    i = 1;
+    while (i < m) {
+        i64 cs = ivec_at(tsec, i);
+        i64 cv = ivec_at(tval, i);
+        i64 j = i - 1;
+        while (j >= 0) {
+            i64 ps = ivec_at(tsec, j);
+            i64 pv = ivec_at(tval, j);
+            if (ps < cs || (ps == cs && pv <= cv)) break;
+            set_ivec_at(tsec, j + 1, ps);
+            set_ivec_at(tval, j + 1, pv);
+            j = j - 1;
+        }
+        set_ivec_at(tsec, j + 1, cs);
+        set_ivec_at(tval, j + 1, cv);
+        i = i + 1;
+    }
+    set_pe_g(PES_RFSEC, xalloc(8 * (nsymbols + 2)));
+    set_pe_g(PES_RFVAL, xalloc(8 * (nsymbols + 2)));
+    set_pe_g(PES_RFENDV, xalloc(8 * (nsymbols + 2)));
+    i64 nf = 0;
+    i = 0;
+    while (i < m) {
+        i64 sec = ivec_at(tsec, i);
+        i64 val = ivec_at(tval, i);
+        if (i > 0 && ivec_at(tsec, i - 1) == sec && ivec_at(tval, i - 1) == val) {
+            i = i + 1; continue;              // an alias at the same address
+        }
+        i64 end = coff_sec_size(sec);
+        i64 j = i + 1;
+        while (j < m) {
+            if (ivec_at(tsec, j) != sec) break;
+            if (ivec_at(tval, j) != val) { end = ivec_at(tval, j); break; }
+            j = j + 1;
+        }
+        set_ivec_at(pe_g(PES_RFSEC), nf, sec);
+        set_ivec_at(pe_g(PES_RFVAL), nf, val);
+        set_ivec_at(pe_g(PES_RFENDV), nf, end);
+        nf = nf + 1;
+        i = i + 1;
+    }
+    if (pe_g(PES_SYNTH)) {                     // the synthesized entry stub
+        set_ivec_at(pe_g(PES_RFSEC), nf, 0 - 1);
+        set_ivec_at(pe_g(PES_RFVAL), nf, 0);
+        set_ivec_at(pe_g(PES_RFENDV), nf, pe_g(PES_STARTSZ));
+        nf = nf + 1;
+    }
+    set_pe_g(PES_NFUNC, nf);
+    set_pe_g(PES_PDATASZ, 12 * nf + 16);       // RF array + UI_FP (8) + UI_STUB (8)
+}
+
+// the .pdata (RUNTIME_FUNCTION array) followed by the two UNWIND_INFO records,
+// in the layout pe_collect_funcs sized. One UNWIND_INFO address directory the
+// exception data directory points at covers the RF array; the UNWIND_INFO blobs
+// sit after it and are reached by UnwindInfoAddress.
+void pe_put_pdata(uptr o) {
+    i64 nf = pe_g(PES_NFUNC);
+    i64 uifp   = 12 * nf;                      // offset of UI_FP within the section
+    i64 uistub = uifp + 8;                     // offset of UI_STUB
+    i64 i = 0;
+    while (i < nf) {
+        i64 sec = ivec_at(pe_g(PES_RFSEC), i);
+        i64 begin = 0;
+        i64 end = 0;
+        i64 uioff = uifp;
+        if (sec < 0) {
+            i64 img = pe_find_kind(PEK_START);
+            begin = ivec_at(pe_g(PES_RVA), img);
+            end = begin + pe_g(PES_STARTSZ);
+            uioff = uistub;
+        } else {
+            i64 secrva = ivec_at(pe_g(PES_RVA), ivec_at(pe_g(PES_OFSEC), sec));
+            begin = secrva + ivec_at(pe_g(PES_RFVAL), i);
+            end = secrva + ivec_at(pe_g(PES_RFENDV), i);
+        }
+        buf_u32(o, begin);
+        buf_u32(o, end);
+        buf_u32(o, pe_g(PES_PDATARVA) + uioff);
+        i = i + 1;
+    }
+    // UI_FP: version 1, SizeOfProlog 4, 2 codes, frame register rbp (5).
+    buf_u8(o, 0x01); buf_u8(o, 4); buf_u8(o, 2); buf_u8(o, 0x05);
+    buf_u8(o, 4); buf_u8(o, 0x03);             // UWOP_SET_FPREG      @ prolog off 4
+    buf_u8(o, 1); buf_u8(o, 0x50);             // UWOP_PUSH_NONVOL rbp @ prolog off 1
+    // UI_STUB: version 1, SizeOfProlog 4, 1 code, no frame register.
+    buf_u8(o, 0x01); buf_u8(o, 4); buf_u8(o, 1); buf_u8(o, 0x00);
+    buf_u8(o, 4); buf_u8(o, 0x42);             // UWOP_ALLOC_SMALL 0x28 (op 2, info 4)
+    buf_u8(o, 0); buf_u8(o, 0);                // pad UNWIND_INFO to a DWORD
+}
+
 // ---- the image section table ----
 void pe_add(i64 kind, i64 src, uptr name, i64 chr, i64 vsize, i64 zf) {
     i64 n = pe_g(PES_NPE);
@@ -426,6 +570,9 @@ void pe_plan_sections() {
     if (nundef > 0)
         pe_add(PEK_IDATA, 0 - 1, ".idata", PE_SCN_INIT | PE_SCN_READ | PE_SCN_WRITE,
                0, 0);                          // vsize patched after pe_plan_idata
+    if (pe_g(PES_NFUNC) > 0)
+        pe_add(PEK_PDATA, 0 - 1, ".pdata", PE_SCN_INIT | PE_SCN_READ,
+               pe_g(PES_PDATASZ), 0);
     i = 0;
     while (i < nsections) {
         if (coff_sec_zf(i))
@@ -465,6 +612,8 @@ void pe_layout() {
     if (p >= 0) set_pe_g(PES_PLTRVA, ivec_at(pe_g(PES_RVA), p));
     i = pe_find_kind(PEK_IDATA);
     if (i >= 0) set_pe_g(PES_IDATARVA, ivec_at(pe_g(PES_RVA), i));
+    i = pe_find_kind(PEK_PDATA);
+    if (i >= 0) set_pe_g(PES_PDATARVA, ivec_at(pe_g(PES_RVA), i));
 }
 
 // A defined symbol resolves to its section VA plus its value; an import
@@ -645,6 +794,8 @@ void pe_put_opt(uptr o) {
     while (i < PE_NDIR) {
         if (i == PE_DIR_IMPORT && nundef > 0)
             pe_put_dir(o, pe_g(PES_IDATARVA), PE_IMPORT_DESC * (pe_g(PES_NDLL) + 1));
+        else if (i == PE_DIR_EXCEPTION && pe_g(PES_NFUNC) > 0)
+            pe_put_dir(o, pe_g(PES_PDATARVA), 12 * pe_g(PES_NFUNC));
         else if (i == PE_DIR_IAT && nundef > 0)
             pe_put_dir(o, pe_g(PES_IATRVA), pe_g(PES_IATSZ));
         else
@@ -689,6 +840,7 @@ void pe_put_section(uptr o, i64 i) {
     else if (k == PEK_PLT)   pe_put_plt(o);
     else if (k == PEK_START) pe_put_start(o, PE_IMGBASE + ivec_at(pe_g(PES_RVA), i));
     else if (k == PEK_IDATA) buf_put(o, buf_p(pe_idatab()), buf_len(pe_idatab()));
+    else if (k == PEK_PDATA) pe_put_pdata(o);
 }
 
 // The entry: a program that defines `mc_start` keeps it (`#include
@@ -710,6 +862,7 @@ void pe_write(uptr path) {
     exe_collect_undef();
 
     pe_plan_dlls();
+    pe_collect_funcs();                        // the exception/unwind spans (x86-64)
     pe_plan_sections();
     // .idata's size is only known once the imports are grouped; size it, then
     // the layout can place every section.
