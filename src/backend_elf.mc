@@ -161,6 +161,7 @@ uptr elf_custom_name(i64 i) {
 uptr elf_sec_name(i64 i) {
     if (i == isec_text) return ".text";
     if (i == isec_cstr) return ".rodata";
+    if (i == isec_const) return ".rodata";
     if (i == isec_data) return ".data";
     if (i == isec_bss)  return ".bss";
     return elf_custom_name(i);
@@ -188,6 +189,7 @@ i64 elf_sec_type(i64 i) {
 i64 elf_sec_flags(i64 i) {
     if (elf_sec_exec(i)) return SHF_ALLOC | SHF_EXECINSTR;
     if (i == isec_cstr)  return SHF_ALLOC;
+    if (i == isec_const) return SHF_ALLOC;
     return SHF_ALLOC | SHF_WRITE;
 }
 

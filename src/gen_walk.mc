@@ -273,6 +273,7 @@ i64 strcap = 0;
 i64 nstrs = 0;
 i64 isec_text = 0;                    // -1 = section not created
 i64 isec_cstr = 0;
+i64 isec_const = 0;                   // __const, S_REGULAR: a string const with an embedded NUL
 i64 isec_data = 0;
 i64 isec_bss  = 0;
 uptr secmap;                          // parser's #section i -> real section
@@ -632,6 +633,19 @@ uptr str_name(i64 n) {
     return s;
 }
 
+// 1 if the len bytes contain a NUL. A string literal never does (M5.5 forbids
+// \0), so this is 0 for everything mc the language produces; a taught compiler
+// building an N_STR node directly can carry one.
+i64 str_has_nul(uptr bytes, i64 len) {
+    i64 i = 0;
+    loop {
+        if (i >= len) break;
+        if (ld8(bytes + i) == 0) return 1;
+        i = i + 1;
+    }
+    return 0;
+}
+
 // deduplicates by content (linear search); N follows the order of first occurrence
 i64 str_sym(uptr bytes, i64 len) {
     i64 i = 0;
@@ -642,11 +656,17 @@ i64 str_sym(uptr bytes, i64 len) {
         i = i + 1;
     }
     strs = grow(T_STRINGS, strs, nstrs, &strcap, STR_SIZE);
-    uptr b = sec_data(sec_at(isec_cstr));
+    // A NUL-bearing constant goes to __const (S_REGULAR): ld splits an
+    // S_CSTRING_LITERALS section at every NUL, truncating it. NUL-free literals
+    // stay in __cstring to keep the dedup/coalesce benefit. Mach-O only -- the
+    // ELF/COFF writers map both to .rodata/.rdata, which never coalesce.
+    i64 sec = isec_cstr;
+    if (str_has_nul(bytes, len)) sec = isec_const;
+    uptr b = sec_data(sec_at(sec));
     i64 off = buf_len(b);
     buf_put(b, bytes, len);
-    buf_u8(b, 0);                                // __cstring keeps each literal NUL-terminated
-    i64 sym = sym_new(str_name(nstrs), isec_cstr + 1, off, 0);
+    buf_u8(b, 0);                                // each literal stays NUL-terminated
+    i64 sym = sym_new(str_name(nstrs), sec + 1, off, 0);
     uptr e = ste_at(nstrs);
     set_ste_bytes(e, bytes);
     set_ste_len(e, len);
@@ -1734,6 +1754,7 @@ void gen_globals(i64 unit) {
 // that the #section ones, in order of first appearance in the source
 void gen_sections(i64 unit) {
     i64 want_str = 0;
+    i64 want_const = 0;
     i64 want_data = 0;
     i64 want_bss = 0;
     // reloc()'s string names a symbol and is not a literal: marking it via op removes
@@ -1750,7 +1771,10 @@ void gen_sections(i64 unit) {
     i = 1;
     loop {
         if (i >= nnodes) break;
-        if (nd_kind(i) == N_STR && nd_op(i) == 0) want_str = 1;
+        if (nd_kind(i) == N_STR && nd_op(i) == 0) {
+            if (str_has_nul(nd_name(i), nd_val(i))) want_const = 1;
+            else                                    want_str = 1;
+        }
         i = i + 1;
     }
     i64 g = unit;
@@ -1764,9 +1788,11 @@ void gen_sections(i64 unit) {
     }
     isec_text = sec_new("__TEXT", "__text", TEXT_FLAGS, 2);
     isec_cstr = -1;
+    isec_const = -1;
     isec_data = -1;
     isec_bss  = -1;
-    if (want_str)  isec_cstr = sec_new("__TEXT", "__cstring", S_CSTRING_LITERALS, 0);
+    if (want_str)   isec_cstr  = sec_new("__TEXT", "__cstring", S_CSTRING_LITERALS, 0);
+    if (want_const) isec_const = sec_new("__TEXT", "__const", S_REGULAR, 0);
     if (want_data) isec_data = sec_new("__DATA", "__data", S_REGULAR, 4);
     if (want_bss)  isec_bss  = sec_new("__DATA", "__bss", S_ZEROFILL, 4);
     secmap = xalloc(8 * (sec_pending() + 1));  // one slot per #section, exactly

@@ -1,0 +1,25 @@
+# nulstr.toml -- a taught compiler (nulstr.mc) whose entry carries a constant
+# with an EMBEDDED NUL, built OBJECT + external `ld`. This is the road that used
+# to truncate the constant at the NUL: __cstring is S_CSTRING_LITERALS, which ld
+# splits on NUL. The fix emits a NUL-bearing constant into __const/S_REGULAR.
+# `-dead_strip` is what makes the truncation deterministic on modern ld: it
+# removes the orphan atom ld carves out past the NUL.
+#
+# `ld` and {sdk} are link.toml's; no [libs] -- the program calls no extern.
+[project]
+entry = "nulstr-app.mc"
+out   = "build/app-nulstr"
+kind  = "exe"
+
+[target]
+os   = "macos"
+arch = "aarch64"
+
+[compiler]
+out     = "build/mc-nulstr"
+modules = ["nulstr.mc"]
+
+[linker]
+cmd  = "ld"
+args = ["-arch", "arm64", "-platform_version", "macos", "13.0", "13.0",
+        "-syslibroot", "{sdk}", "-lSystem", "-dead_strip", "-o", "{out}", "{obj}"]
