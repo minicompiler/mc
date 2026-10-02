@@ -536,6 +536,7 @@ i64 pe_sec_char(i64 i) {
     if (coff_sec_exec(i)) return PE_SCN_CODE | PE_SCN_EXECUTE | PE_SCN_READ;
     if (coff_sec_zf(i))   return PE_SCN_UNINIT | PE_SCN_READ | PE_SCN_WRITE;
     if (i == isec_cstr)   return PE_SCN_INIT | PE_SCN_READ;
+    if (i == isec_const)  return PE_SCN_INIT | PE_SCN_READ;
     return PE_SCN_INIT | PE_SCN_READ | PE_SCN_WRITE;
 }
 

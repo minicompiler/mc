@@ -227,6 +227,30 @@ else
     echo "  $got"
 fi
 
+# ---- a constant with an embedded NUL survives object + ld (macho) ----
+# nulstr.mc teaches a `nulstr` word that builds an N_STR with the bytes
+# "N\0survive!". On the OBJECT + external-ld road __cstring is
+# S_CSTRING_LITERALS, which ld splits on NUL, so every byte past offset 1 was
+# lost -- nulstr-app returns a code naming the first lost byte, 42 if all survive.
+# The fix routes a NUL-bearing constant to __const/S_REGULAR. The --exe control
+# never had the bug (macho-exe copies the section verbatim).
+total=$((total + 1))
+if ! "$mc" build "$dir" --config "$dir/nulstr.toml" > "$tmp/o" 2>&1; then
+    fail "nulstr.toml" "$(cat "$tmp/o")"
+else
+    sed 's|^|  |' "$tmp/o"
+    want_exit=42; want_out=""
+    run_check "$dir/build/app-nulstr" "nulstr.toml -> embedded NUL survives object + ld"
+fi
+
+total=$((total + 1))
+if ! "$dir/build/mc-nulstr" --exe "$dir/nulstr-app.mc" -o "$tmp/app-nulstr-exe" > "$tmp/o" 2>&1; then
+    fail "nulstr --exe" "$(cat "$tmp/o")"
+else
+    want_exit=42; want_out=""
+    run_check "$tmp/app-nulstr-exe" "nulstr --exe -> embedded NUL correct (control)"
+fi
+
 # ---- post-M41: `--exe` resolves the HOST's exe slot, and a 0 there is refused ----
 # The third entry point into the same registry, and the reason it belongs in
 # this script: `mc build` (above), `mc sysroot stub` (below) and the single-file

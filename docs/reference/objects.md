@@ -568,6 +568,27 @@ in a fixed order at lowering time rather than in parse order:
 The four sections the core itself uses are `__TEXT,__text` (flags `0x80000400`),
 `__TEXT,__cstring` (`S_CSTRING_LITERALS`), `__DATA,__data` and `__DATA,__bss` (`S_ZEROFILL`).
 
+### A string constant with an embedded NUL goes to `__const`
+
+`S_CSTRING_LITERALS` is the one section type the external linker treats as a set
+of NUL-terminated atoms: on macOS `ld` splits it at every NUL to deduplicate and
+dead-strip C strings, so a constant that *contains* a NUL is truncated at the
+first one by the time the object is linked (reproducible with `ld -dead_strip`).
+mc the language forbids `\0` inside a string literal (M5.5) precisely for this
+reason, so plain-mc objects are never affected; but a **taught** compiler can
+build an `N_STR` node directly, with arbitrary bytes.
+
+So `str_sym` (`src/gen_walk.mc`) looks at the bytes: a NUL-free literal stays in
+`__TEXT,__cstring` (`S_CSTRING_LITERALS`), keeping the dedup and coalescing
+benefit; a literal that contains a NUL goes to a fifth section,
+`__TEXT,__const` (`S_REGULAR`, flags `0x0`), which `ld` copies verbatim.
+`gen_sections` creates `__const` only when such a constant exists, so every
+NUL-free object — including mc's own self-build — is byte-for-byte unchanged.
+This is **Mach-O only**: the ELF (`.rodata`, `SHF_ALLOC`) and COFF/PE (`.rdata`,
+read-only) writers map `__const` to the same read-only section they map
+`__cstring` to, and neither format coalesces on NUL. The `--exe`/`macho-exe`
+writer was always correct — it copies `__cstring` verbatim — and is unchanged.
+
 ---
 
 ## 6. Symbols

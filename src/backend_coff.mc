@@ -129,6 +129,7 @@ uptr coff_custom_name(i64 i) {
 uptr coff_sec_name(i64 i) {
     if (i == isec_text) return ".text";
     if (i == isec_cstr) return ".rdata";
+    if (i == isec_const) return ".rdata";
     if (i == isec_data) return ".data";
     if (i == isec_bss)  return ".bss";
     return coff_custom_name(i);
@@ -151,6 +152,7 @@ i64 coff_sec_char(i64 i) {
     if (coff_sec_exec(i)) return c | SCN_CNT_CODE | SCN_MEM_EXECUTE | SCN_MEM_READ;
     if (coff_sec_zf(i))   return c | SCN_CNT_UNINIT | SCN_MEM_READ | SCN_MEM_WRITE;
     if (i == isec_cstr)   return c | SCN_CNT_INIT | SCN_MEM_READ;
+    if (i == isec_const)  return c | SCN_CNT_INIT | SCN_MEM_READ;
     return c | SCN_CNT_INIT | SCN_MEM_READ | SCN_MEM_WRITE;
 }
 
